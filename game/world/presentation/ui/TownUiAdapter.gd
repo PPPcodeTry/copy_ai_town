@@ -5617,7 +5617,7 @@ func _external_ui_service_missing_view_model(scope: String) -> Dictionary:
 			"_configuration_error",
 			"RESIDENT_EDITOR_SERVICE_NOT_BOUND",
 		)
-		return service.call("get_view_model") as Dictionary
+		return service.get_view_model() as Dictionary
 	if scope == "resident_model_assignment":
 		return _resident_model_assignment_service_missing_view_model()
 	var error_code := "%s_SERVICE_NOT_BOUND" % scope.to_upper()
