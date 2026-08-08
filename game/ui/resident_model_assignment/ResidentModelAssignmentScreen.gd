@@ -583,7 +583,7 @@ func _on_provider_auto_refresh_timeout() -> void:
 		return
 	_provider_auto_refresh_attempts += 1
 	_provider_auto_refresh_dispatching = true
-	_request_action("refresh", {}, "refresh")
+	_request_action("refresh", {}, _current_focus_id_for_refresh())
 	_provider_auto_refresh_dispatching = false
 	_update_provider_auto_refresh()
 
@@ -592,6 +592,40 @@ func _request_manual_provider_refresh() -> void:
 	_provider_auto_refresh_attempts = 0
 	_provider_auto_refresh_exhausted = false
 	_request_action("refresh", {}, "refresh")
+
+
+func _current_focus_id_for_refresh() -> String:
+	if not is_inside_tree():
+		return ""
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if not is_instance_valid(focus_owner):
+		return ""
+	if is_instance_valid(_composite_desktop) and _composite_desktop.is_ancestor_of(focus_owner):
+		# The approved desktop surface updates controls in place, so leaving the
+		# pending id empty keeps its current focus without an unnecessary jump.
+		return ""
+	for fixed: Array in [
+		["back", _back_button],
+		["mode", _mode_button],
+		["refresh", _refresh_button],
+		["assign", _assign_button],
+		["apply", _apply_button],
+	]:
+		if focus_owner == fixed[1]:
+			return String(fixed[0])
+	for resident_id: Variant in _resident_buttons:
+		if focus_owner == _resident_buttons[resident_id]:
+			return "resident:%s" % String(resident_id)
+	for provider_id: Variant in _provider_buttons:
+		if focus_owner == _provider_buttons[provider_id]:
+			return "provider:%s" % String(provider_id)
+	for model_id: Variant in _model_buttons:
+		if focus_owner == _model_buttons[model_id]:
+			return "model:%s" % String(model_id)
+	for filter_id: Variant in _filter_buttons:
+		if focus_owner == _filter_buttons[filter_id]:
+			return "filter:%s" % String(filter_id)
+	return ""
 
 
 func _presentation_view_model() -> Dictionary:

@@ -276,6 +276,7 @@ func _build_interface() -> void:
 
 
 func _render() -> void:
+	var focus_identity := _capture_focus_identity()
 	var data := _view_model.get("data", {}) as Dictionary
 	var overwrite_selection := _is_overwrite_selection_mode()
 	var in_session := bool(data.get("inSession", false))
@@ -317,6 +318,37 @@ func _render() -> void:
 			else "选择其他小镇不会改变当前存档。"
 		)
 	)
+	_restore_focus_identity(focus_identity)
+
+
+func _capture_focus_identity() -> String:
+	if not is_inside_tree():
+		return ""
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner == _back_button:
+		return "back"
+	if (
+		is_instance_valid(focus_owner)
+		and is_instance_valid(_slot_layer)
+		and _slot_layer.is_ancestor_of(focus_owner)
+	):
+		return String(focus_owner.name)
+	return ""
+
+
+func _restore_focus_identity(focus_identity: String) -> void:
+	if focus_identity == "back":
+		_back_button.call_deferred("grab_focus")
+		return
+	if not focus_identity.is_empty():
+		var target := _slot_layer.find_child(
+			focus_identity,
+			false,
+			false,
+		) as Button
+		if target != null and not target.disabled:
+			target.call_deferred("grab_focus")
+			return
 	_focus_first_available()
 
 

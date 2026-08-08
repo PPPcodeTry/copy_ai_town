@@ -113,6 +113,7 @@ var _composition_kind := "flow"
 var _layout_queued := false
 var _internal_text_update := false
 var _pending_draft_text := ""
+var _draft_update_pending := false
 var _pending_action_intent := ""
 var _last_focus_identity := ""
 var _last_feedback_identity := ""
@@ -208,6 +209,8 @@ func bind_town_ui_adapter(adapter: Node) -> void:
 	_render_data.clear()
 	_last_confirmed_data.clear()
 	_current_revision = -1
+	_pending_draft_text = ""
+	_draft_update_pending = false
 	_pending_action_intent = ""
 	if _adapter != null and _adapter.has_signal("view_model_changed"):
 		var callback := Callable(self, "_on_view_model_changed")
@@ -242,6 +245,16 @@ func apply_view_model(view_model: Dictionary) -> bool:
 
 	var operation_status := UiViewModel.operation_status(view_model)
 	var incoming_data := UiViewModel.data(view_model)
+	var incoming_composer := incoming_data.get("composer", {}) as Dictionary
+	if (
+		_draft_update_pending
+		and (
+			not bool(incoming_composer.get("open", false))
+			or String(incoming_composer.get("draftText", ""))
+			== _pending_draft_text
+		)
+	):
+		_draft_update_pending = false
 	if (
 		operation_status in [&"rejected", &"error"]
 		and not _last_confirmed_data.is_empty()
@@ -1310,9 +1323,13 @@ func _render_surface(
 		)
 	)
 	_internal_text_update = true
-	var draft_text := str(composer.get("draftText", ""))
+	var draft_text := (
+		_pending_draft_text
+		if _draft_update_pending and composer_open
+		else str(composer.get("draftText", ""))
+	)
 	if editor.text != draft_text:
-		editor.text = draft_text
+		_set_editor_text_preserving_caret(editor, draft_text)
 	editor.editable = editor_enabled
 	editor.placeholder_text = (
 		"把想告诉全镇的事情写在这里……"
@@ -1614,7 +1631,26 @@ func _on_editor_text_changed(editor: TextEdit) -> void:
 	if _internal_text_update or not editor.is_visible_in_tree():
 		return
 	_pending_draft_text = editor.text
+	_draft_update_pending = true
 	_draft_timer.start()
+
+
+func _set_editor_text_preserving_caret(
+	editor: TextEdit,
+	text_value: String,
+) -> void:
+	var caret_line := editor.get_caret_line()
+	var caret_column := editor.get_caret_column()
+	editor.text = text_value
+	var restored_line := clampi(
+		caret_line,
+		0,
+		maxi(editor.get_line_count() - 1, 0),
+	)
+	editor.set_caret_line(restored_line)
+	editor.set_caret_column(
+		mini(caret_column, editor.get_line(restored_line).length())
+	)
 
 
 func _flush_draft_intent() -> void:
@@ -1868,6 +1904,8 @@ func _set_contract_failure(message: String) -> void:
 	_render_data.clear()
 	_last_confirmed_data.clear()
 	_current_revision = -1
+	_pending_draft_text = ""
+	_draft_update_pending = false
 	if is_node_ready():
 		_render()
 
