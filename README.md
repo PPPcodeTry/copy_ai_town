@@ -1,0 +1,101 @@
+<h1 align="center">AI Town</h1>
+
+<p align="center">
+  一个由 LLM 驱动居民生活的像素小镇模拟游戏
+</p>
+
+<p align="center">
+  <img alt="Godot 4.7" src="https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white">
+  <img alt="GDScript" src="https://img.shields.io/badge/GDScript-100%25-478CBF">
+  <img alt="Development status" src="https://img.shields.io/badge/status-active_development-f3a64a">
+</p>
+
+![AI Town 小镇全景](assets/readme/town-overview.jpg)
+
+AI Town 是一款使用 Godot 4.7 开发的单机生活模拟游戏。小镇居民由 LLM 驱动，他们会结合自己的性格、职业、关系、记忆、所在地和正在发生的事情，决定接下来去哪里、做什么、和谁交谈。
+
+玩家可以从俯瞰视角观察小镇，也可以化身进入其中，与居民交流、发布公告或改变天气。玩家带来的影响会成为真实发生的事情，进入居民的经历，并在之后的生活中继续产生变化。
+
+## 小镇里的生活
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="assets/readme/resident-conversation.jpg" alt="居民在室内自然交谈">
+      <p align="center"><sub>居民根据当下处境、关系和正在做的事自然交谈</sub></p>
+    </td>
+    <td width="50%">
+      <img src="assets/readme/workshop-task.jpg" alt="居民在工作坊完成工作">
+      <p align="center"><sub>工作由真实地点、设备、步骤和结果共同构成</sub></p>
+    </td>
+  </tr>
+</table>
+
+![居民经过小镇市集](assets/readme/market-life.jpg)
+
+居民不是等待玩家触发的对白角色。他们会在住处、工作地点和公共空间之间活动，处理工作、休息、交往、承诺和没有完成的事情。工作现场和共同任务也会成为真实的话题与搭话动机，交流内容由人物、关系、当前工作和已知事实共同决定。
+
+## 发生过的事会留下来
+
+![AI Town 世界日志](assets/readme/world-log.jpg)
+
+世界日志记录小镇中已经确认的事件、活动和对话。玩家可以按居民、类型和日期查看事情怎样发生，也可以继续追踪一段正在进行的交流。
+
+每名居民还会独立维护自己的经历、关系和未完成事项。同一件事可以被不同居民以不同方式理解，但客观经过始终由世界系统确认。重要经历会在之后遇到相关人物、地点和事情时重新影响决定。
+
+## 核心体验
+
+- **自主生活**：居民根据自己的处境作出决定，不沿固定日程或对白树机械行动。
+- **自然交流**：对话承接人物性格、关系、记忆、当前工作和现场事实。
+- **持续记忆**：经历、关系、承诺和未完成事项会跨越多次行动，并随存档恢复。
+- **真实世界结果**：移动、工作、交谈和物品操作都由世界系统检查并返回实际结果。
+- **熟人社会**：居民彼此认识，但私人关系从本局真正发生的经历中逐步形成。
+- **玩家介入**：玩家可以亲自交谈、发布公告、发送照片或改变天气，再观察影响如何传播。
+
+## 当前实现
+
+仓库当前覆盖小镇运行、室内外移动、居民 Agent、职业与工作链、居民对话、玩家化身、记忆与关系、世界日志、天气、存档以及主要游戏界面。项目仍在持续开发，现阶段重点是让居民在工作、生活和关系变化中保持自然交流，并让行为结果、记忆与界面呈现形成完整闭环。
+
+## 获取与运行
+
+当前仓库提供源码。可直接下载的桌面版本将在准备完成后发布到 GitHub Releases。
+
+### 环境要求
+
+- Godot 4.7 稳定版
+- 可用的 LLM Provider 与 API Key
+- 支持 Godot 4.7 的桌面系统
+
+### 从源码启动
+
+```bash
+git clone https://github.com/mewamew/my_ai_town.git
+cd my_ai_town
+```
+
+使用 Godot 打开 `game/project.godot`，运行项目后在模型设置页配置 LLM Provider。模型密钥只应通过游戏内设置保存，不要写入仓库。
+
+### 基本操作
+
+- `WASD` 或方向键：移动玩家化身
+- `E`：与附近目标互动
+
+## 项目结构
+
+```text
+assets/        README 使用的展示资源
+game/          Godot 工程根目录
+game/agent/    居民决策、提示词、记忆和模型接入
+game/world/    世界数据、运行规则、地图与表现层
+game/ui/       启动流程、HUD 和各类游戏界面
+game/tests/    合同测试、集成测试与运行验收
+tools/         地图与角色素材制作工具
+```
+
+## 参与开发
+
+欢迎通过 Issue 反馈问题，或通过 Pull Request 提交改进。提交代码时请附上与改动范围相匹配的验证结果。
+
+## 授权说明
+
+第三方字体、音效和其他资源沿用各自目录中记录的许可证。项目代码与自有素材的统一许可证仍在整理；根许可证发布前，请不要把整个仓库视为已经获得统一再分发授权。

@@ -1,0 +1,161 @@
+{
+  "registryId": "ui.provider-settings.component-registry.v2",
+  "sourceAtlasId": "ui.provider-settings.component-atlas.candidate-v1",
+  "rulesRevision": "ui.visible-border-single-owner",
+  "assets": [
+    {
+      "assetId": "ui.provider-settings.page-shell.v1",
+      "componentType": "page_shell_composite",
+      "ownerLevel": "page_shell",
+      "runtimeUsage": "page_local_only",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/page_shell/provider_settings_page_shell_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.page-shell.dynamic-cards.v2",
+      "componentType": "page_shell_composite_dynamic_slots",
+      "ownerLevel": "page_shell",
+      "runtimeUsage": "composite_desktop_background",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/page_shell/provider_settings_page_dynamic_cards_v2.png"
+    },
+    {
+      "assetId": "ui.provider-settings.provider-card.selected.v1",
+      "componentType": "provider_semantic_card",
+      "ownerLevel": "content_slot",
+      "runtimeUsage": "page_local_only",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/provider_cards/provider_card_selected_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.provider-card.auth-error.v1",
+      "componentType": "provider_semantic_card",
+      "ownerLevel": "content_slot",
+      "runtimeUsage": "page_local_only",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/provider_cards/provider_card_auth_error_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.provider-card.network-error.v1",
+      "componentType": "provider_semantic_card",
+      "ownerLevel": "content_slot",
+      "runtimeUsage": "page_local_only",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/provider_cards/provider_card_network_error_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.provider-card.disabled.v1",
+      "componentType": "provider_semantic_card",
+      "ownerLevel": "content_slot",
+      "runtimeUsage": "page_local_only",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/provider_cards/provider_card_disabled_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.pagination.left.v1",
+      "componentType": "pagination_control",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "texture_rect_mirrored_for_next",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/controls/pagination/pagination_left_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.status-strip.success.v1",
+      "componentType": "status_strip_composite_with_internal_slot",
+      "ownerLevel": "section_frame",
+      "runtimeUsage": "audit_only_not_bound",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/status_strips/status_success_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.status-strip.warning.v1",
+      "componentType": "status_strip_composite_with_internal_slot",
+      "ownerLevel": "section_frame",
+      "runtimeUsage": "audit_only_not_bound",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/status_strips/status_warning_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.status-strip.error.v1",
+      "componentType": "status_strip_composite_with_internal_slot",
+      "ownerLevel": "section_frame",
+      "runtimeUsage": "audit_only_not_bound",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/composite/status_strips/status_error_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.section-frame.v1",
+      "componentType": "base_ninepatch",
+      "ownerLevel": "section_frame",
+      "runtimeUsage": "stylebox_texture",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/base_ninepatch/section_frame/section_frame_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.content-slot.v1",
+      "componentType": "base_ninepatch",
+      "ownerLevel": "content_slot",
+      "runtimeUsage": "stylebox_texture",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/base_ninepatch/content_slot/content_slot_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.button.normal.v1",
+      "componentType": "base_ninepatch_state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "stylebox_texture",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/base_ninepatch/buttons/button_normal_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.button.hover.v1",
+      "componentType": "base_ninepatch_state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "stylebox_texture",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/base_ninepatch/buttons/button_hover_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.button.pressed.v1",
+      "componentType": "base_ninepatch_state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "stylebox_texture",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/base_ninepatch/buttons/button_pressed_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.button.disabled.v1",
+      "componentType": "base_ninepatch_state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "stylebox_texture",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/base_ninepatch/buttons/button_disabled_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.toggle.off.v1",
+      "componentType": "operation-control-state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "texture_rect",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/controls/toggles/provider_toggle_off_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.toggle.on.v1",
+      "componentType": "operation-control-state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "texture_rect",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/controls/toggles/provider_toggle_on_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.medallion.success.v1",
+      "componentType": "icon",
+      "ownerLevel": "content_slot",
+      "runtimeUsage": "texture_rect",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/icons/provider_medallions/provider_medallion_success_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.medallion.auth.v1",
+      "componentType": "icon",
+      "ownerLevel": "content_slot",
+      "runtimeUsage": "texture_rect",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/icons/provider_medallions/provider_medallion_auth_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.medallion.network.v1",
+      "componentType": "icon",
+      "ownerLevel": "content_slot",
+      "runtimeUsage": "texture_rect",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/icons/provider_medallions/provider_medallion_network_v1.png"
+    },
+    {
+      "assetId": "ui.provider-settings.header.clock-hands.v1",
+      "componentType": "decorative_clock_hands",
+      "ownerLevel": "page_shell",
+      "runtimeUsage": "texture_rect",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/icons/header/provider_clock_hands_v1.png"
+    }
+  ]
+}
