@@ -9,6 +9,9 @@ const INNER_OBSERVATION_OVERLAY := preload(
 )
 const BULLETIN_PANEL := preload("res://ui/bulletin_board/BulletinBoardPanel.gd")
 const RESIDENT_MENU := preload("res://ui/resident_action_menu/ResidentActionMenu.gd")
+const RESIDENT_DETAIL_SCREEN := preload(
+	"res://ui/resident_detail/ResidentDetailScreen.tscn"
+)
 const INDOOR_OVERLAY := preload("res://ui/indoor_overlay/IndoorOverlay.gd")
 const WORLD_LOG_STORE := preload(
 	"res://world/runtime/log/TownWorldLogStore.gd"
@@ -243,6 +246,7 @@ class FakeWorld:
 			"name": resident_name,
 			"attributes": {
 				"name": resident_name,
+				"appearance": "resident_wardrobe_v1:look_01",
 				"desire": "把找到的资料读完",
 			},
 			"socialState": {},
@@ -439,7 +443,7 @@ class FakeGateway:
 					"label": "持续在意",
 				},
 				"relationship_progress": [{
-					"residentId": "resident-tang-xiao-man",
+					"residentId": "resident_tang_xiaoman_01",
 					"displayName": "唐小满",
 					"conversationCount": 2,
 					"confirmedTurnCount": 6,
@@ -693,6 +697,49 @@ func _run() -> void:
 		"tab": "status",
 	})
 	var resident_detail := service.get_view_model("resident_detail")
+	var resident_projection := (
+		(resident_detail.get("data", {}) as Dictionary).get(
+			"resident",
+			{},
+		) as Dictionary
+	)
+	_expect_equal(
+		resident_projection.get("portrait"),
+		(
+			"res://assets/characters/resident_2d_rig_v1/wardrobe_v1/"
+			+ "classic_sets/runtime_portraits/lin_lan_front.png"
+		),
+		"resident detail projects the current wardrobe portrait",
+	)
+	_expect_equal(
+		resident_projection.get("portraitFrameMode"),
+		"full_texture",
+		"resident detail keeps the complete wardrobe portrait",
+	)
+	var resident_detail_screen := (
+		RESIDENT_DETAIL_SCREEN.instantiate() as ResidentDetailScreen
+	)
+	resident_detail_screen.set_layout_profile_size_override(
+		Vector2(1920, 1080),
+	)
+	root.add_child(resident_detail_screen)
+	await process_frame
+	_expect(
+		resident_detail_screen.apply_view_model(resident_detail),
+		"resident detail screen accepts the portrait projection",
+	)
+	await process_frame
+	var resident_portrait := resident_detail_screen.get_node_or_null(
+		"ResidentPortrait",
+	) as TextureRect
+	_expect(
+		resident_portrait != null
+		and resident_portrait.visible
+		and resident_portrait.texture != null,
+		"resident detail screen renders the left portrait",
+	)
+	resident_detail_screen.queue_free()
+	await process_frame
 	var resident_content := (
 		(resident_detail.get("data", {}) as Dictionary).get(
 			"content",
@@ -807,6 +854,16 @@ func _run() -> void:
 		"tabId": "relationships",
 	})
 	resident_detail = service.get_view_model("resident_detail")
+	_expect_equal(
+		(
+			(resident_detail.get("data", {}) as Dictionary).get(
+				"resident",
+				{},
+			) as Dictionary
+		).get("portrait"),
+		resident_projection.get("portrait"),
+		"relationship tab preserves the resident portrait",
+	)
 	resident_content = (
 		(resident_detail.get("data", {}) as Dictionary).get(
 			"content",
@@ -827,6 +884,14 @@ func _run() -> void:
 			) as Dictionary).get("level"),
 			3,
 			"relationship row consumes evidence-based interaction depth",
+		)
+		_expect_equal(
+			(relationship_items[0] as Dictionary).get("portraitRef"),
+			(
+				"res://assets/characters/resident_2d_rig_v1/wardrobe_v1/"
+				+ "classic_sets/runtime_portraits/tang_xiaoman_front.png"
+			),
+			"relationship row projects the related resident portrait",
 		)
 	var relationship_actions := resident_detail.get("actions", {}) as Dictionary
 	_expect_equal(
@@ -872,6 +937,16 @@ func _run() -> void:
 		"tabId": "memories",
 	})
 	resident_detail = service.get_view_model("resident_detail")
+	_expect_equal(
+		(
+			(resident_detail.get("data", {}) as Dictionary).get(
+				"resident",
+				{},
+			) as Dictionary
+		).get("portrait"),
+		resident_projection.get("portrait"),
+		"memory tab preserves the resident portrait",
+	)
 	resident_content = (
 		(resident_detail.get("data", {}) as Dictionary).get(
 			"content",
@@ -1189,6 +1264,15 @@ func _run() -> void:
 		1,
 		"indoor resident target comes from the current World place",
 	)
+	var indoor_resident_targets := (
+		indoor_data.get("residentTargets", []) as Array
+	)
+	if indoor_resident_targets.size() == 1:
+		_expect_equal(
+			(indoor_resident_targets[0] as Dictionary).get("portraitPath"),
+			resident_projection.get("portrait"),
+			"indoor resident target projects its current portrait",
+		)
 	_expect_equal(
 		(indoor_data.get("propTargets", []) as Array).size(),
 		0,
@@ -1354,7 +1438,11 @@ func _run() -> void:
 
 	service.unbind()
 	runtime.free()
+	var audio_controller := root.get_node_or_null("TownAudioController")
+	if audio_controller != null and audio_controller.has_method("prepare_shutdown"):
+		audio_controller.call("prepare_shutdown")
 	await process_frame
+	await create_timer(0.2).timeout
 	_finish()
 
 

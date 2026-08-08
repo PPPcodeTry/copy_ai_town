@@ -1439,13 +1439,17 @@ func _build_avatar_view_model(operation: Dictionary, error: Dictionary) -> Dicti
 				avatar_position,
 			)
 		var screen_anchor := get_town_hud_resident_head_anchor(resident_id)
+		var portrait_texture := _resident_portrait_texture(resident_id)
 		nearby_targets.append({
 			"residentId": resident_id,
 			"residentName": resident_name,
 			"name": resident_name,
 			"targetId": _resident_target_id(resident_id),
-			"portraitRef": "",
-			"portraitStatus": "unavailable",
+			"portraitTexture": portrait_texture,
+			"portraitRef": _resident_portrait_ref(resident_id),
+			"portraitStatus": (
+				"ready" if portrait_texture != null else "unavailable"
+			),
 			"portraitFallbackText": _resident_portrait_fallback(resident_name),
 			"screenAnchor": screen_anchor,
 			"canTalk": can_talk,
