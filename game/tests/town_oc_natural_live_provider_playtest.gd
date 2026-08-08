@@ -66,6 +66,22 @@ func _run() -> void:
 			"modelId": "deepseek-v4-flash",
 			"providerConfigs": {"deepseek": {"api_key": env_key}},
 		}
+	var provider_override := OS.get_environment(
+		"AI_TOWN_OC_PROVIDER"
+	).strip_edges()
+	var model_override := OS.get_environment(
+		"AI_TOWN_OC_MODEL"
+	).strip_edges()
+	if provider_override.is_empty() != model_override.is_empty():
+		printerr(
+			"TOWN_OCCUPATION_NATURAL_LIVE_UNAVAILABLE: "
+			+ "AI_TOWN_OC_PROVIDER 与 AI_TOWN_OC_MODEL 必须同时设置"
+		)
+		quit(2)
+		return
+	if not provider_override.is_empty():
+		saved["providerId"] = provider_override
+		saved["modelId"] = model_override
 	if (
 		saved.get("ok") != true
 		or String(saved.get("providerId", "")).is_empty()
@@ -249,9 +265,13 @@ func _run() -> void:
 		return
 
 	var calls := 0
+	var min_model_calls := MIN_MODEL_CALLS
+	var min_calls_override := int(OS.get_environment("AI_TOWN_OC_MIN_CALLS"))
+	if min_calls_override >= identities.size():
+		min_model_calls = mini(min_calls_override, MIN_MODEL_CALLS)
 	var max_model_calls := MAX_MODEL_CALLS
 	var max_calls_override := int(OS.get_environment("AI_TOWN_OC_MAX_CALLS"))
-	if max_calls_override >= MIN_MODEL_CALLS:
+	if max_calls_override >= min_model_calls:
 		max_model_calls = mini(max_calls_override, MAX_MODEL_CALLS)
 	var timed_out := false
 	var conversation_observed := false
@@ -271,7 +291,7 @@ func _run() -> void:
 		if not active_conversations.is_empty():
 			conversation_observed = true
 		if (
-			calls >= MIN_MODEL_CALLS
+			calls >= min_model_calls
 			and int((world.call("get_time") as Dictionary).get(
 				"hour",
 				0,

@@ -49,6 +49,7 @@
   "game/tests/agent/provider/offline/kimi_provider_protocol_test.gd": "自动测试",
   "game/tests/agent/provider/offline/model_provider_catalog_test.gd": "自动测试",
   "game/tests/agent/provider/offline/openai_compatible_provider_robustness_test.gd": "自动测试",
+  "game/tests/agent/provider/offline/provider_health_probe_budget_test.gd": "自动测试",
   "game/tests/agent/provider/offline/provider_live_validation_data_test.gd": "自动测试",
   "game/tests/agent/provider/offline/volcengine_ark_provider_protocol_test.gd": "自动测试",
   "game/tests/agent/provider/offline/xiaomi_mimo_provider_protocol_test.gd": "自动测试",

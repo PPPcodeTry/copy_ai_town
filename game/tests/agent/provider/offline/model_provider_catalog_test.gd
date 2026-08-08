@@ -56,8 +56,8 @@ func _initialize() -> void:
 	)
 	_expect_equal(
 		_model_ids(catalog, "kimi"),
-		["kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k3"],
-		"Kimi exposes K2.5 through K3",
+		["kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code-highspeed", "kimi-k3"],
+		"Kimi keeps only the faster K2.7 variant alongside K2.5, K2.6, and K3",
 	)
 	_expect_equal(
 		_model_ids(catalog, "zhipu-glm"),
