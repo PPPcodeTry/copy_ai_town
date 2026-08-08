@@ -9,6 +9,7 @@ signal action_blocked(intent: String, reason: String)
 const UI_SIGNALS := preload(
 	"res://ui/common/AiTownUiSignals.gd"
 )
+const UiNodeRetirement := preload("res://ui/common/AiTownUiNodeRetirement.gd")
 const UiViewModel := preload("res://ui/common/AiTownUiViewModel.gd")
 const PageTheme := preload(
 	"res://ui/custom_resident_creator/CustomResidentCreatorTheme.gd"
@@ -101,6 +102,7 @@ const INFO_INK := Color("4f7790")
 var _adapter: Object
 var _view_model: Dictionary = {}
 var _render_data: Dictionary = {}
+var _local_text_drafts: Dictionary = {}
 var _revision := -1
 var _contract_error := ""
 var _rendering := false
@@ -127,6 +129,7 @@ var _workplace_option: Button
 var _interest_option: Button
 var _owned_place_option: Button
 var _interest_custom_edit: LineEdit
+var _interest_custom_draft := ""
 var _dropdown_overlay: Control
 var _dropdown_backdrop: Control
 var _dropdown_panel: TextureRect
@@ -244,6 +247,8 @@ func bind_town_ui_adapter(adapter: Object) -> void:
 	_adapter = adapter
 	_view_model.clear()
 	_render_data.clear()
+	_local_text_drafts.clear()
+	_interest_custom_draft = ""
 	_revision = -1
 	_contract_error = ""
 	if _adapter != null and _adapter.has_signal("view_model_changed"):
@@ -267,6 +272,8 @@ func unbind_town_ui_adapter() -> void:
 	_adapter = null
 	_view_model.clear()
 	_render_data.clear()
+	_local_text_drafts.clear()
+	_interest_custom_draft = ""
 	_revision = -1
 	_contract_error = ""
 	if is_node_ready():
@@ -786,6 +793,7 @@ func _build_identity() -> void:
 	_name_edit.text_submitted.connect(
 		func(_value: String) -> void: _commit_text_field("name", _name_edit.text)
 	)
+	_name_edit.text_changed.connect(_on_line_edit_text_changed.bind("name"))
 	_name_edit.focus_exited.connect(
 		func() -> void: _commit_text_field("name", _name_edit.text)
 	)
@@ -815,6 +823,7 @@ func _build_identity() -> void:
 	_age_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_age_edit.max_length = 3
 	_age_edit.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER
+	_age_edit.text_changed.connect(_on_line_edit_text_changed.bind("age"))
 	_age_edit.text_submitted.connect(func(_value: String) -> void: _commit_age_text())
 	_age_edit.focus_exited.connect(_commit_age_text)
 	_apply_input_skin(_age_edit, "age_value")
@@ -858,6 +867,7 @@ func _build_character_core() -> void:
 		edit.placeholder_text = String(row[2])
 		edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 		edit.scroll_fit_content_height = false
+		edit.text_changed.connect(_on_text_edit_text_changed.bind(field, edit))
 		edit.focus_exited.connect(_commit_core_field.bind(field, edit))
 		_apply_input_skin(edit, "core_field")
 		_canvas.add_child(edit)
@@ -1104,11 +1114,27 @@ func _render() -> void:
 		and bool(_render_data.get("formalReady", false))
 	)
 	var draft := _render_data.get("draft", {}) as Dictionary
-	_name_edit.text = String(draft.get("name", ""))
-	_age_edit.text = str(int(draft.get("age", 27)))
-	_desire_edit.text = String(draft.get("desire", ""))
-	_personality_edit.text = String(draft.get("personality", ""))
-	_speech_edit.text = String(draft.get("speech", ""))
+	_reconcile_local_text_drafts(draft)
+	_set_line_edit_text_preserving_caret(
+		_name_edit,
+		_local_or_confirmed_text("name", String(draft.get("name", ""))),
+	)
+	_set_line_edit_text_preserving_caret(
+		_age_edit,
+		_local_or_confirmed_text("age", str(int(draft.get("age", 27)))),
+	)
+	_set_text_edit_text_preserving_caret(
+		_desire_edit,
+		_local_or_confirmed_text("desire", String(draft.get("desire", ""))),
+	)
+	_set_text_edit_text_preserving_caret(
+		_personality_edit,
+		_local_or_confirmed_text("personality", String(draft.get("personality", ""))),
+	)
+	_set_text_edit_text_preserving_caret(
+		_speech_edit,
+		_local_or_confirmed_text("speech", String(draft.get("speech", ""))),
+	)
 	var options := _render_data.get("options", {}) as Dictionary
 	_populate_option(
 		_gender_option,
@@ -1145,6 +1171,67 @@ func _render() -> void:
 	_render_validation()
 	_render_actions(available)
 	_rendering = false
+
+
+func _on_line_edit_text_changed(value: String, field: String) -> void:
+	if _rendering:
+		return
+	_local_text_drafts[field] = value
+
+
+func _on_text_edit_text_changed(field: String, edit: TextEdit) -> void:
+	if _rendering or not is_instance_valid(edit):
+		return
+	_local_text_drafts[field] = edit.text
+
+
+func _reconcile_local_text_drafts(draft: Dictionary) -> void:
+	for field_value: Variant in _local_text_drafts.keys():
+		var field := String(field_value)
+		var local_value := String(_local_text_drafts.get(field, ""))
+		var confirmed_value := (
+			str(int(draft.get("age", 27)))
+			if field == "age"
+			else String(draft.get(field, ""))
+		)
+		if (
+			local_value == confirmed_value
+			or (field != "age" and local_value.strip_edges() == confirmed_value)
+		):
+			_local_text_drafts.erase(field)
+
+
+func _local_or_confirmed_text(field: String, confirmed_value: String) -> String:
+	return String(_local_text_drafts.get(field, confirmed_value))
+
+
+func _set_line_edit_text_preserving_caret(edit: LineEdit, value: String) -> void:
+	if edit.text == value:
+		return
+	var caret_column := edit.get_caret_column()
+	var had_selection := edit.has_selection()
+	var selection_from := edit.get_selection_from_column() if had_selection else 0
+	var selection_to := edit.get_selection_to_column() if had_selection else 0
+	edit.text = value
+	edit.set_caret_column(clampi(caret_column, 0, value.length()))
+	if had_selection:
+		edit.select(
+			clampi(selection_from, 0, value.length()),
+			clampi(selection_to, 0, value.length()),
+		)
+
+
+func _set_text_edit_text_preserving_caret(edit: TextEdit, value: String) -> void:
+	if edit.text == value:
+		return
+	var caret_line := edit.get_caret_line()
+	var caret_column := edit.get_caret_column()
+	edit.text = value
+	var restored_line := clampi(caret_line, 0, maxi(edit.get_line_count() - 1, 0))
+	edit.set_caret_line(restored_line)
+	edit.set_caret_column(
+		mini(caret_column, edit.get_line(restored_line).length()),
+	)
 
 
 func _render_preview() -> void:
@@ -1455,15 +1542,22 @@ func _commit_age_text() -> void:
 	var current := int((_render_data.get("draft", {}) as Dictionary).get("age", 27))
 	var value := clampi(parsed, 1, 120)
 	if value != current:
+		_local_text_drafts["age"] = str(value)
+		_set_line_edit_text_preserving_caret(_age_edit, str(value))
 		_request_update({"age": value})
 	else:
-		_age_edit.text = str(current)
+		_local_text_drafts.erase("age")
+		_set_line_edit_text_preserving_caret(_age_edit, str(current))
 
 
 func _commit_text_field(field: String, value: String) -> void:
 	var current := String((_render_data.get("draft", {}) as Dictionary).get(field, ""))
-	if value.strip_edges() != current:
-		_request_update({field: value})
+	var normalized := value.strip_edges()
+	if normalized != current:
+		_local_text_drafts[field] = normalized
+		_request_update({field: normalized})
+	else:
+		_local_text_drafts.erase(field)
 
 
 func _commit_core_field(field: String, edit: TextEdit) -> void:
@@ -1621,12 +1715,14 @@ func _close_dropdown_popup(restore_focus: bool) -> void:
 
 
 func _rebuild_dropdown_items() -> void:
-	for child: Node in _dropdown_list.get_children():
-		child.queue_free()
+	var focus_state := _capture_dropdown_focus_state()
+	UiNodeRetirement.retire_children(_dropdown_list)
+	_interest_custom_edit = null
 	if _dropdown_active_option == null:
 		return
 	if _dropdown_active_field == "interests":
 		_rebuild_interest_dropdown_items()
+		_restore_dropdown_focus_after_rebuild.call_deferred(focus_state)
 		return
 	var values := _dropdown_active_option.get_meta("dropdown_values", []) as Array
 	var selected_id := String(_dropdown_active_option.get_meta("selected_id", ""))
@@ -1662,6 +1758,80 @@ func _rebuild_dropdown_items() -> void:
 		separator.visible = index < values.size() - 1
 		row.add_child(separator)
 	_refresh_dropdown_scrollbar.call_deferred()
+	_restore_dropdown_focus_after_rebuild.call_deferred(focus_state)
+
+
+func _capture_dropdown_focus_state() -> Dictionary:
+	if not is_inside_tree() or not is_instance_valid(_dropdown_list):
+		return {}
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if not is_instance_valid(focus_owner) or not _dropdown_list.is_ancestor_of(focus_owner):
+		return {}
+	if focus_owner == _interest_custom_edit:
+		_interest_custom_draft = _interest_custom_edit.text
+		var input_state := {
+			"kind": "custom_interest_input",
+			"caretColumn": _interest_custom_edit.get_caret_column(),
+			"hasSelection": _interest_custom_edit.has_selection(),
+		}
+		if _interest_custom_edit.has_selection():
+			input_state["selectionFrom"] = _interest_custom_edit.get_selection_from_column()
+			input_state["selectionTo"] = _interest_custom_edit.get_selection_to_column()
+		return input_state
+	if focus_owner is Button:
+		var button := focus_owner as Button
+		return {
+			"kind": "button",
+			"name": String(button.name),
+			"itemId": String(button.get_meta("dropdown_item_id", "")),
+			"customLabel": String(button.get_meta("custom_interest_label", "")),
+		}
+	return {}
+
+
+func _restore_dropdown_focus_after_rebuild(focus_state: Dictionary) -> void:
+	if focus_state.is_empty() or not _dropdown_overlay.visible:
+		return
+	if String(focus_state.get("kind", "")) == "custom_interest_input":
+		if not is_instance_valid(_interest_custom_edit):
+			return
+		_interest_custom_edit.grab_focus()
+		_interest_custom_edit.set_caret_column(clampi(
+			int(focus_state.get("caretColumn", _interest_custom_edit.text.length())),
+			0,
+			_interest_custom_edit.text.length(),
+		))
+		if bool(focus_state.get("hasSelection", false)):
+			_interest_custom_edit.select(
+				clampi(
+					int(focus_state.get("selectionFrom", 0)),
+					0,
+					_interest_custom_edit.text.length(),
+				),
+				clampi(
+					int(focus_state.get("selectionTo", 0)),
+					0,
+					_interest_custom_edit.text.length(),
+				),
+			)
+		return
+	var expected_name := String(focus_state.get("name", ""))
+	var expected_item_id := String(focus_state.get("itemId", ""))
+	var expected_custom_label := String(focus_state.get("customLabel", ""))
+	for child: Node in _dropdown_list.find_children("*", "Button", true, false):
+		var button := child as Button
+		if (
+			(not expected_item_id.is_empty()
+				and String(button.get_meta("dropdown_item_id", "")) == expected_item_id)
+			or (not expected_custom_label.is_empty()
+				and String(button.get_meta("custom_interest_label", "")) == expected_custom_label)
+			or (expected_item_id.is_empty()
+				and expected_custom_label.is_empty()
+				and String(button.name) == expected_name)
+		):
+			if not button.disabled:
+				button.grab_focus()
+			return
 
 
 func _rebuild_interest_dropdown_items() -> void:
@@ -1689,6 +1859,10 @@ func _rebuild_interest_dropdown_items() -> void:
 	_interest_custom_edit.add_theme_color_override("font_color", INK)
 	_interest_custom_edit.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
 	_interest_custom_edit.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	_interest_custom_edit.text = _interest_custom_draft
+	_interest_custom_edit.text_changed.connect(func(value: String) -> void:
+		_interest_custom_draft = value
+	)
 	_interest_custom_edit.text_submitted.connect(
 		func(_value: String) -> void: _add_custom_interest(),
 	)
@@ -1731,6 +1905,7 @@ func _rebuild_interest_dropdown_items() -> void:
 		row.size = DROPDOWN_POPUP_ITEM_SIZE
 		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		row.set_meta("dropdown_selected", true)
+		row.set_meta("custom_interest_label", label)
 		_apply_dropdown_popup_item_skin(row, true)
 		row.pressed.connect(_remove_custom_interest.bind(label))
 		_dropdown_list.add_child(row)
@@ -1754,9 +1929,14 @@ func _add_custom_interest() -> void:
 	if label.is_empty():
 		return
 	var draft := _render_data.get("draft", {}) as Dictionary
+	var selected := draft.get("interests", []) as Array
 	var custom := (draft.get("customInterests", []) as Array).duplicate()
+	var maximum := int(_interest_option.get_meta("maximum", 3))
+	if selected.size() + custom.size() >= maximum:
+		return
 	if not custom.has(label):
 		custom.append(label)
+	_interest_custom_draft = ""
 	_request_update({"customInterests": custom})
 
 

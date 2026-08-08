@@ -701,11 +701,7 @@ func _build_base_url_section(
 		"base_url_input",
 		"ui.provider-settings.composite.base-url-input.v1"
 	)
-	base_url_edit.text = (
-		_draft_base_url
-		if not _draft_base_url.is_empty()
-		else str(provider.get("baseUrl", ""))
-	)
+	base_url_edit.text = _draft_base_url
 	base_url_edit.placeholder_text = "留空使用官方默认地址"
 	base_url_edit.text_changed.connect(func(value: String) -> void:
 		ui_action.emit(&"ui.draft_base_url", {"value": value})
