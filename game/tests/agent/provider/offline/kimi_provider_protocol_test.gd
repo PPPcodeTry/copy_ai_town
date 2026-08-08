@@ -14,6 +14,7 @@ func _initialize() -> void:
 	if provider_script != null:
 		_test_k3_request(provider_script)
 		_test_k2_6_request(provider_script)
+		_test_k2_7_highspeed_request(provider_script)
 		_test_k2_6_thinking_override(provider_script)
 		_test_configuration(provider_script)
 		_test_unknown_model_never_reaches_transport(provider_script)
@@ -52,7 +53,7 @@ func _test_k3_request(provider_script: Script) -> void:
 		var body := request.get("body", {}) as Dictionary
 		_expect_equal(request.get("url"), "https://api.moonshot.cn/v1/chat/completions", "K3 uses the China endpoint")
 		_expect_equal(body.get("model"), "kimi-k3", "K3 uses its official model id")
-		_expect_equal(body.get("reasoning_effort"), "max", "K3 uses its supported reasoning effort")
+		_expect_equal(body.get("reasoning_effort"), "low", "K3 uses the lowest supported reasoning effort")
 		_expect_equal(body.get("max_completion_tokens"), 32768, "K3 uses its model-specific output field")
 		_expect(not body.has("max_tokens"), "K3 omits the legacy max_tokens field")
 		_expect(not body.has("thinking"), "K3 omits the K2 thinking field")
@@ -108,6 +109,28 @@ func _test_k2_6_thinking_override(provider_script: Script) -> void:
 	_expect_equal(transport.requests.size(), 1, "K2.6 thinking override sends one request")
 	if transport.requests.size() == 1:
 		_expect_equal(transport.requests[0].get("body", {}).get("thinking"), {"type": "enabled"}, "K2.6 accepts an explicit enabled thinking mode")
+
+
+func _test_k2_7_highspeed_request(provider_script: Script) -> void:
+	var decision := _decision("kimi-k2-7-highspeed")
+	var transport := FakeTransport.new()
+	transport.response = _http_response(200, {
+		"choices": [{"finish_reason": "stop", "message": {"content": JSON.stringify(decision)}}],
+	})
+	var provider: RefCounted = provider_script.new(null, transport, {
+		"api_key": "temporary-kimi-key",
+		"model": "kimi-k2.7-code-highspeed",
+	})
+	var collector := ResultCollector.new()
+	provider.call("request_decision", _model_input("kimi-k2-7-highspeed"), collector.collect)
+	_expect_equal(collector.values, [{"ok": true, "decision": decision}], "K2.7 Highspeed remains usable")
+	_expect_equal(transport.requests.size(), 1, "K2.7 Highspeed sends one request")
+	if transport.requests.size() == 1:
+		var body := transport.requests[0].get("body", {}) as Dictionary
+		_expect_equal(body.get("model"), "kimi-k2.7-code-highspeed", "K2.7 keeps only the Highspeed model id")
+		_expect_equal(body.get("max_tokens"), 32768, "K2.7 Highspeed keeps the compatible token field")
+		_expect(not body.has("thinking"), "K2.7 Highspeed relies on its required thinking default")
+		_expect(not body.has("reasoning_effort"), "K2.7 Highspeed omits the K3 reasoning option")
 
 
 func _test_configuration(provider_script: Script) -> void:

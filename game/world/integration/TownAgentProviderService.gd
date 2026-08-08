@@ -9,6 +9,7 @@ const CATALOG := preload("res://agent/model/ModelProviderCatalog.gd")
 const CAPABILITY_MODES: Array[String] = ["development", "formal"]
 const FAKE_PROVIDER_ID := "fake"
 const MAX_SAFE_INTEGER := 9007199254740991
+const HEALTH_PROBE_MAX_TOKENS := 256
 const PUBLIC_USAGE_FIELDS: Array[String] = [
 	"prompt_tokens",
 	"completion_tokens",
@@ -745,7 +746,7 @@ func _health_probe_request() -> Dictionary:
 				"content": "Return exactly {\"ok\":true}.",
 			},
 		],
-		"max_tokens": 16,
+		"max_tokens": HEALTH_PROBE_MAX_TOKENS,
 	}
 
 
