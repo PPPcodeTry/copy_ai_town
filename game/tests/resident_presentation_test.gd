@@ -4516,6 +4516,13 @@ func _scenario_environment_presentation() -> void:
 		)
 		_expect(snow_particles != null, "authored snowfall particles exist")
 		if snow_particles != null:
+			_expect_equal(
+				snow_particles.amount,
+				ENVIRONMENT_RENDERER.snow_particle_budget_for_rendering_method(
+					RenderingServer.get_current_rendering_method(),
+				),
+				"snow uses the renderer-specific particle budget",
+			)
 			_expect(
 				not snow_particles.local_coords,
 				"snow remains in world space when the camera moves",

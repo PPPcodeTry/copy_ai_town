@@ -5,15 +5,15 @@ const RESULT_SHAPES := preload(
 	"res://world/contract/TownWorldResultShapes.gd"
 )
 const STARTUP_SCENE_PATH := "res://ui/startup/StartupScreen.tscn"
-const LOAD_GAME_SCENE := preload(
-	"res://ui/startup/StartupLoadGameScreen.tscn"
-)
-const WORLD_INTRO_SCENE := preload("res://ui/world_intro/WorldIntroScreen.tscn")
+const LOAD_GAME_SCENE_PATH := "res://ui/startup/StartupLoadGameScreen.tscn"
+const WORLD_INTRO_SCENE_PATH := "res://ui/world_intro/WorldIntroScreen.tscn"
 const RESIDENT_SELECTION_SCENE_PATH := "res://ui/resident_selection/ResidentSelectionScreen.tscn"
-const TOWN_RUNTIME_SCENE := preload("res://world/presentation/town_runtime/TownRuntime.tscn")
-const AVATAR_MODE_HUD_SCENE := preload("res://ui/avatar_mode/runtime/AvatarModeHud.tscn")
-const PAUSE_MENU_HOST_SCENE := preload("res://ui/pause_menu/PauseMenuNavigationHost.tscn")
-const TOWN_UI_RUNTIME_HOST := preload(
+const TOWN_RUNTIME_SCENE_PATH := (
+	"res://world/presentation/town_runtime/TownRuntime.tscn"
+)
+const AVATAR_MODE_HUD_SCENE_PATH := "res://ui/avatar_mode/runtime/AvatarModeHud.tscn"
+const PAUSE_MENU_HOST_SCENE_PATH := "res://ui/pause_menu/PauseMenuNavigationHost.tscn"
+const TOWN_UI_RUNTIME_HOST_SCRIPT_PATH := (
 	"res://world/presentation/ui/TownUiRuntimeHost.gd"
 )
 const SESSION_UI_SERVICE := preload(
@@ -49,13 +49,13 @@ const UI_VIEW_MODEL := preload(
 const UI_NODE_RETIREMENT := preload(
 	"res://ui/common/AiTownUiNodeRetirement.gd"
 )
-const PROVIDER_SETTINGS_SCENE := preload(
+const PROVIDER_SETTINGS_SCENE_PATH := (
 	"res://ui/provider_settings/ProviderSettingsScreen.tscn"
 )
-const NEW_GAME_OVERWRITE_SCENE := preload(
+const NEW_GAME_OVERWRITE_SCENE_PATH := (
 	"res://ui/new_game_overwrite/NewGameOverwriteScreen.tscn"
 )
-const AUDIO_DISPLAY_SETTINGS_SCENE := preload(
+const AUDIO_DISPLAY_SETTINGS_SCENE_PATH := (
 	"res://ui/settings/AudioDisplaySettingsScreen.tscn"
 )
 const CUSTOM_RESIDENT_CREATOR_SCENE_PATH := (
@@ -70,7 +70,7 @@ const CUSTOM_RESIDENT_CANDIDATE_POOL := preload(
 const CUSTOM_RESIDENT_LIBRARY := preload(
 	"res://world/presentation/session/TownCustomResidentLibrary.gd"
 )
-const RESIDENT_MODEL_ASSIGNMENT_SCENE := preload(
+const RESIDENT_MODEL_ASSIGNMENT_SCENE_PATH := (
 	"res://ui/resident_model_assignment/ResidentModelAssignmentScreen.tscn"
 )
 const RESIDENT_MODEL_ASSIGNMENT_SERVICE := preload(
@@ -154,6 +154,7 @@ var _provider_service: RefCounted
 var _gateway: Node
 var _pending_runtime: Node
 var _town_runtime: Node
+var _town_runtime_scene: PackedScene
 var _town_ui_canvas_layer: CanvasLayer
 var _avatar_hud: Control
 var _pause_host: Control
@@ -229,12 +230,15 @@ func _ready() -> void:
 	get_tree().auto_accept_quit = false
 	set_process(true)
 	set_process_input(true)
+	print("AI_TOWN_RENDERER method=%s driver=%s" % [
+		RenderingServer.get_current_rendering_method(),
+		RenderingServer.get_current_rendering_driver_name(),
+	])
 	_overwrite_compensator.configure(_record_compensation_last_result)
 	_play_cover_music()
 	_audio_display_settings_service = AUDIO_DISPLAY_SETTINGS_SERVICE.new()
 	_audio_display_settings_service.name = "TownAudioDisplaySettingsService"
 	add_child(_audio_display_settings_service)
-	_ensure_town_entry_loading_overlay()
 	_initialize_startup_settings_services()
 	_apply_window_mode_marker()
 	_formal_runtime_audit_requested = not OS.get_environment(
@@ -252,6 +256,28 @@ func _process(_delta: float) -> void:
 	_bind_current_scene()
 	if _formal_runtime_audit_requested:
 		_write_formal_runtime_audit_if_requested.call_deferred()
+
+
+func _instantiate_town_runtime() -> Node:
+	if _town_runtime_scene == null:
+		_town_runtime_scene = load(TOWN_RUNTIME_SCENE_PATH) as PackedScene
+	if _town_runtime_scene == null:
+		return null
+	return _town_runtime_scene.instantiate()
+
+
+func _instantiate_control_scene(scene_path: String) -> Control:
+	var packed := load(scene_path) as PackedScene
+	if packed == null:
+		return null
+	return packed.instantiate() as Control
+
+
+func _instantiate_control_script(script_path: String) -> Control:
+	var script := load(script_path) as Script
+	if script == null:
+		return null
+	return script.new() as Control
 
 
 func _ensure_town_entry_loading_overlay() -> void:
@@ -1046,12 +1072,12 @@ func _open_startup_settings(route: StringName) -> void:
 			"设置页面暂时打不开，请稍后再试。",
 		)
 		return
-	var scene: PackedScene = (
-		PROVIDER_SETTINGS_SCENE
+	var scene_path := (
+		PROVIDER_SETTINGS_SCENE_PATH
 		if route == &"provider_settings"
-		else AUDIO_DISPLAY_SETTINGS_SCENE
+		else AUDIO_DISPLAY_SETTINGS_SCENE_PATH
 	)
-	var page := scene.instantiate() as Control
+	var page := _instantiate_control_scene(scene_path)
 	if page == null:
 		_record_route_open_failure(
 			"STARTUP_SETTINGS_ROUTE_FAILED",
@@ -1088,7 +1114,7 @@ func _open_startup_load_game(
 			"读取存档页面暂时打不开，请稍后再试。",
 		)
 		return
-	var page := LOAD_GAME_SCENE.instantiate() as Control
+	var page := _instantiate_control_scene(LOAD_GAME_SCENE_PATH)
 	if page == null:
 		_record_route_open_failure(
 			"STARTUP_LOAD_GAME_ROUTE_FAILED",
@@ -1252,7 +1278,7 @@ func _open_save_handling(
 			"存档确认页面暂时打不开，请稍后再试。",
 		)
 		return
-	var page := NEW_GAME_OVERWRITE_SCENE.instantiate() as Control
+	var page := _instantiate_control_scene(NEW_GAME_OVERWRITE_SCENE_PATH)
 	if page == null:
 		_record_route_open_failure(
 			"STARTUP_OVERWRITE_ROUTE_FAILED",
@@ -1633,7 +1659,7 @@ func _bind_world_intro(screen: Control) -> void:
 func _enter_world_intro(generation: int) -> void:
 	if generation != _flow_generation:
 		return
-	var intro := WORLD_INTRO_SCENE.instantiate() as Control
+	var intro := _instantiate_control_scene(WORLD_INTRO_SCENE_PATH)
 	if intro == null:
 		var route_failure := _record_route_open_failure(
 			"GAME_FLOW_WORLD_INTRO_ROUTE_FAILED",
@@ -2552,7 +2578,7 @@ func _open_resident_model_assignment(draft: Dictionary) -> void:
 		_last_result = visible_result
 		selection.call("_show_notice", visible_result["playerMessage"])
 		return
-	var page := RESIDENT_MODEL_ASSIGNMENT_SCENE.instantiate() as Control
+	var page := _instantiate_control_scene(RESIDENT_MODEL_ASSIGNMENT_SCENE_PATH)
 	if page == null:
 		_record_route_open_failure(
 			"RESIDENT_MODEL_ASSIGNMENT_ROUTE_FAILED",
@@ -3107,7 +3133,10 @@ func _bind_town_runtime(runtime: Node) -> void:
 		return
 	_town_ui_canvas_layer = _ensure_formal_ui_canvas_layer(runtime)
 	if _town_ui_canvas_layer.get_node_or_null("TownUiRuntimeHost") == null:
-		_town_ui_host = TOWN_UI_RUNTIME_HOST.new() as Control
+		_town_ui_host = _instantiate_control_script(TOWN_UI_RUNTIME_HOST_SCRIPT_PATH)
+		if _town_ui_host == null:
+			_last_result = _failure("TOWN_UI_RUNTIME_HOST_LOAD_FAILED", false)
+			return
 		_town_ui_host.name = "TownUiRuntimeHost"
 		_town_ui_host.z_index = 20
 		var town_ui_binding := _town_ui_host.call(
@@ -3160,7 +3189,10 @@ func _bind_town_runtime(runtime: Node) -> void:
 			_town_ui_host.call("current_route") as StringName,
 		)
 	if _town_ui_canvas_layer.get_node_or_null("AvatarModeHud") == null:
-		_avatar_hud = AVATAR_MODE_HUD_SCENE.instantiate() as Control
+		_avatar_hud = _instantiate_control_scene(AVATAR_MODE_HUD_SCENE_PATH)
+		if _avatar_hud == null:
+			_last_result = _failure("AVATAR_MODE_HUD_LOAD_FAILED", false)
+			return
 		_avatar_hud.name = "AvatarModeHud"
 		_avatar_hud.z_index = 10
 		var avatar_issues := _avatar_hud.call(
@@ -3197,7 +3229,10 @@ func _bind_town_runtime(runtime: Node) -> void:
 			Callable(self, "_on_avatar_hud_intent_requested"),
 		)
 	if _town_ui_canvas_layer.get_node_or_null("PauseMenuNavigationHost") == null:
-		_pause_host = PAUSE_MENU_HOST_SCENE.instantiate() as Control
+		_pause_host = _instantiate_control_scene(PAUSE_MENU_HOST_SCENE_PATH)
+		if _pause_host == null:
+			_last_result = _failure("PAUSE_MENU_HOST_LOAD_FAILED", false)
+			return
 		_pause_host.name = "PauseMenuNavigationHost"
 		_pause_host.z_index = 30
 		_pause_host.hide()
@@ -3558,7 +3593,12 @@ func _start_internal_new_game(draft: Dictionary) -> void:
 		_set_resident_selection_result(provider_configuration)
 		return
 	_gateway = GATEWAY.new()
-	_pending_runtime = TOWN_RUNTIME_SCENE.instantiate()
+	_pending_runtime = _instantiate_town_runtime()
+	if _pending_runtime == null:
+		_set_resident_selection_result(
+			_failure("TOWN_RUNTIME_SCENE_UNAVAILABLE", false),
+		)
+		return
 	_advance_town_entry_loading(0.52, "正在连接小镇居民…")
 	var identity := "%d-%d" % [Time.get_unix_time_from_system(), _flow_generation]
 	var begin_result := _bootstrap.begin_new_game_from_catalog(normalized_draft,
@@ -3640,7 +3680,12 @@ func _start_formal_new_game(draft: Dictionary) -> void:
 	_bootstrap = BOOTSTRAP.new()
 	_provider_service = _startup_provider_service
 	_gateway = GATEWAY.new()
-	_pending_runtime = TOWN_RUNTIME_SCENE.instantiate()
+	_pending_runtime = _instantiate_town_runtime()
+	if _pending_runtime == null:
+		_publish_resident_model_assignment_startup_failure(
+			_failure("TOWN_RUNTIME_SCENE_UNAVAILABLE", false),
+		)
+		return
 	_advance_town_entry_loading(0.52, "正在连接小镇居民…")
 	var identity := "%d-%d" % [Time.get_unix_time_from_system(), _flow_generation]
 	var slot_id := String(
@@ -3940,7 +3985,12 @@ func _on_formal_continue_provider_health_completed(
 		_publish_startup_result(gateway_result)
 		_gateway = null
 		return
-	var runtime := TOWN_RUNTIME_SCENE.instantiate()
+	var runtime := _instantiate_town_runtime()
+	if runtime == null:
+		_publish_startup_result(
+			_failure("TOWN_RUNTIME_SCENE_UNAVAILABLE", false),
+		)
+		return
 	var gateway_injection := runtime.call(
 		"configure_agent_gateway",
 		_gateway,
