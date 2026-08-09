@@ -1995,6 +1995,11 @@ func _scenario_ui_runtime_host_navigation() -> void:
 			true,
 			false,
 		) as BaseButton
+		var workplace_option := profile_editor_page.find_child(
+			"WorkplaceOption",
+			true,
+			false,
+		) as BaseButton
 		var wardrobe_preview := profile_editor_page.find_child(
 			"ResidentWardrobeV1Preview",
 			true,
@@ -2011,6 +2016,14 @@ func _scenario_ui_runtime_host_navigation() -> void:
 			"resident profile editor preloads the selected resident home",
 		)
 		_expect(
+			home_option != null and not home_option.disabled,
+			"resident profile editor allows selecting a home",
+		)
+		_expect(
+			workplace_option != null and not workplace_option.disabled,
+			"resident profile editor allows selecting a workplace",
+		)
+		_expect(
 			wardrobe_preview != null
 			and wardrobe_preview.visible
 			and wardrobe_preview.texture != null,
@@ -2019,6 +2032,80 @@ func _scenario_ui_runtime_host_navigation() -> void:
 		var editor_view_model := (
 			_adapter.custom_resident_creator_service.call("get_view_model")
 			as Dictionary
+		)
+		var editor_data := editor_view_model.get("data", {}) as Dictionary
+		var invalid_home := _adapter.custom_resident_creator_service.call(
+			"dispatch",
+			"resident_profile_editor.update_fields",
+			{
+				"revision": int(editor_view_model.get("revision", 0)),
+				"draftId": String(editor_data.get("draftId", "")),
+				"fields": {"ownedPlaceId": "不存在的住宅"},
+			},
+		) as Dictionary
+		_expect(
+			not bool(invalid_home.get("ok", false))
+			and String(invalid_home.get("errorCode", ""))
+				== "RESIDENT_PROFILE_HOME_UNKNOWN",
+			"resident profile editor rejects an unavailable home",
+		)
+		if home_option != null and not home_option.disabled:
+			home_option.emit_signal("pressed")
+			await process_frame
+			var first_home_option := profile_editor_page.find_child(
+				"DropdownItem_0",
+				true,
+				false,
+			) as BaseButton
+			_expect(
+				first_home_option != null and not first_home_option.disabled,
+				"resident profile editor exposes an available home choice",
+			)
+			if first_home_option != null and not first_home_option.disabled:
+				first_home_option.emit_signal("pressed")
+				await process_frame
+		var current_after_home := (
+			_adapter.custom_resident_creator_service.call("get_view_model")
+			as Dictionary
+		)
+		_expect_equal(
+			(
+				(current_after_home.get("data", {}) as Dictionary).get(
+					"draft",
+					{},
+				) as Dictionary
+			).get("ownedPlaceId"),
+			"北街一号住宅",
+			"resident profile editor stores the selected home in the draft",
+		)
+		if workplace_option != null and not workplace_option.disabled:
+			workplace_option.emit_signal("pressed")
+			await process_frame
+			var first_workplace_option := profile_editor_page.find_child(
+				"DropdownItem_0",
+				true,
+				false,
+			) as BaseButton
+			_expect(
+				first_workplace_option != null and not first_workplace_option.disabled,
+				"resident profile editor exposes an available workplace choice",
+			)
+			if first_workplace_option != null and not first_workplace_option.disabled:
+				first_workplace_option.emit_signal("pressed")
+				await process_frame
+		var current_after_workplace := (
+			_adapter.custom_resident_creator_service.call("get_view_model")
+			as Dictionary
+		)
+		_expect_equal(
+			(
+				(current_after_workplace.get("data", {}) as Dictionary).get(
+					"draft",
+					{},
+				) as Dictionary
+			).get("workplaceId"),
+			"花房咖啡馆",
+			"resident profile editor stores the selected workplace in the draft",
 		)
 		var resolved_appearance := (
 			(editor_view_model.get("data", {}) as Dictionary).get(
@@ -2222,6 +2309,27 @@ func _scenario_ui_runtime_host_navigation() -> void:
 			"resident-lin",
 			"profile save preserves the selected resident",
 		)
+		var saved_overview := _adapter.get_view_model("resident_overview") as Dictionary
+		var saved_residents := (
+			(saved_overview.get("data", {}) as Dictionary).get("residents", []) as Array
+		)
+		for resident_value: Variant in saved_residents:
+			if (
+				resident_value is Dictionary
+				and String((resident_value as Dictionary).get("residentId", ""))
+					== "resident-lin"
+			):
+				_expect_equal(
+					(resident_value as Dictionary).get("homeLabel"),
+					"北街一号住宅",
+					"profile save persists the selected home in the production entry",
+				)
+				_expect_equal(
+					(resident_value as Dictionary).get("workplaceLabel"),
+					"花房咖啡馆",
+					"profile save persists the selected workplace in the production entry",
+				)
+				break
 	_expect_dispatch("resident_overview.update_profile", {
 		"residentId": "resident-lin",
 	})

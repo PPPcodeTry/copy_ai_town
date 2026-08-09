@@ -348,6 +348,7 @@ func runtime_gate_snapshot() -> Dictionary:
 		_open_wardrobe_button,
 		_occupation_option,
 		_workplace_option,
+		_owned_place_option,
 		_interest_option,
 		_cancel_button,
 		_create_button,
@@ -901,19 +902,12 @@ func _build_work() -> void:
 		_owned_place_option.text_overrun_behavior = (
 			TextServer.OVERRUN_TRIM_ELLIPSIS
 		)
-		_owned_place_option.focus_mode = Control.FOCUS_NONE
-		_owned_place_option.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_owned_place_option.add_theme_font_size_override("font_size", 19)
-		_owned_place_option.add_theme_color_override("font_color", INK)
-		_owned_place_option.add_theme_color_override("font_disabled_color", INK)
-		for state: String in [
-			"normal", "hover", "pressed", "focus", "disabled",
-		]:
-			_owned_place_option.add_theme_stylebox_override(
-				state,
-				StyleBoxEmpty.new(),
-			)
-		_owned_place_option.tooltip_text = "住所由居民槽位保存。"
+		_owned_place_option.toggle_mode = true
+		_apply_dropdown_skin(_owned_place_option)
+		_owned_place_option.pressed.connect(
+			_toggle_dropdown_popup.bind("ownedPlaceId", _owned_place_option),
+		)
+		_owned_place_option.tooltip_text = "可以选择本局可用住宅；保存后更新居民住所。"
 		_canvas.add_child(_owned_place_option)
 	var rows := [
 		["OccupationOption", "职业", "occupationId", 659.0],
@@ -944,7 +938,7 @@ func _build_work() -> void:
 			"workplaceId":
 				_workplace_option = option
 				option.tooltip_text = (
-					"职业地点由职业规则自动填写，不能在这里单独选择。"
+					"更换职业会先填入默认职业地点，也可以在这里单独选择。"
 				)
 			"interests":
 				_interest_option = option
@@ -1150,10 +1144,6 @@ func _render() -> void:
 		_workplace_option,
 		options.get("workplaces", []) as Array,
 		String(draft.get("workplaceId", "")),
-	)
-	_workplace_option.text = _workplace_summary(
-		options.get("occupations", []) as Array,
-		String(draft.get("occupationId", "")),
 	)
 	_populate_interest_option(
 		options.get("interests", []) as Array,
@@ -1409,11 +1399,14 @@ func _render_actions(available: bool) -> void:
 		and _field_editable("customInterests")
 	)
 	if _owned_place_option != null:
-		_owned_place_option.disabled = true
+		_owned_place_option.disabled = not (
+			update_enabled and _field_editable("ownedPlaceId")
+		)
 	if not update_enabled and _dropdown_overlay.visible:
 		_close_dropdown_popup(false)
 	_refresh_dropdown_arrow(_occupation_option)
 	_refresh_dropdown_arrow(_workplace_option)
+	_refresh_dropdown_arrow(_owned_place_option)
 	_refresh_dropdown_arrow(_interest_option)
 	_set_primary_loading(_create_button, loading)
 	var retryable := (
@@ -1634,36 +1627,6 @@ func _populate_interest_option(
 		and _dropdown_overlay.visible
 	):
 		_rebuild_dropdown_items()
-
-
-func _workplace_summary(
-	occupation_options: Array,
-	occupation_id: String,
-) -> String:
-	for value: Variant in occupation_options:
-		if (
-			value is Dictionary
-			and String((value as Dictionary).get("id", ""))
-				== occupation_id
-		):
-			var occupation := value as Dictionary
-			var primary := String(
-				occupation.get("primaryWorkplaceLabel", "—"),
-			)
-			var related := PackedStringArray()
-			for related_value: Variant in occupation.get(
-				"relatedWorkplaceLabels",
-				[],
-			) as Array:
-				related.append(String(related_value))
-			return (
-				"主要：%s；关联：%s"
-				% [
-					primary,
-					"、".join(related) if not related.is_empty() else "按任务目标",
-				]
-			)
-	return "—"
 
 
 func _toggle_dropdown_popup(field: String, option: Button) -> void:
@@ -2418,6 +2381,7 @@ func _exact_asset_contracts() -> Array[Dictionary]:
 		_open_wardrobe_button,
 		_occupation_option,
 		_workplace_option,
+		_owned_place_option,
 		_interest_option,
 		_cancel_button,
 		_create_button,
