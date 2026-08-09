@@ -1775,7 +1775,11 @@ func _layout_time_hud(safe: Rect2) -> void:
 		weather_button.size = WEATHER_CONTROL_BUTTON_RECT.size * uniform_scale
 	_place(
 		"time_controls",
-		shell_origin + TIME_CONTROL_REFERENCE_RECT.position * uniform_scale,
+		_hud_right_anchored_position(
+			safe,
+			TIME_CONTROL_REFERENCE_RECT,
+			uniform_scale,
+		),
 		TIME_CONTROL_REFERENCE_RECT.size * uniform_scale,
 	)
 	var control_panel := _component_nodes["time_controls"] as Control
@@ -1809,6 +1813,23 @@ func _hud_reference_origin(safe: Rect2, uniform_scale: float) -> Vector2:
 	return safe.position + (
 		safe.size - HUD_REFERENCE_SIZE * uniform_scale
 	) * 0.5
+
+
+func _hud_right_anchored_position(
+	safe: Rect2,
+	reference_rect: Rect2,
+	uniform_scale: float,
+) -> Vector2:
+	var aspect := safe.size.x / maxf(1.0, safe.size.y)
+	if aspect < HUD_REFERENCE_ASPECT:
+		return safe.position + reference_rect.position * uniform_scale
+	var right_inset := (
+		HUD_REFERENCE_SIZE.x - reference_rect.end.x
+	) * uniform_scale
+	return Vector2(
+		safe.end.x - right_inset - reference_rect.size.x * uniform_scale,
+		safe.position.y + reference_rect.position.y * uniform_scale,
+	)
 
 
 func _layout_resident_prompt(safe: Rect2) -> void:

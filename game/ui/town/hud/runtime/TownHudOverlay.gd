@@ -759,8 +759,12 @@ func _apply_runtime_skin_layout() -> void:
 			size.y / uniform_scale,
 		)
 	else:
-		outer.position = (size - HUD_REFERENCE_SIZE * uniform_scale) * 0.5
-		outer.size = HUD_REFERENCE_SIZE
+		uniform_scale = size.y / HUD_REFERENCE_SIZE.y
+		outer.position = Vector2.ZERO
+		outer.size = Vector2(
+			size.x / uniform_scale,
+			HUD_REFERENCE_SIZE.y,
+		)
 	outer.scale = Vector2.ONE * uniform_scale
 
 
@@ -912,10 +916,16 @@ func _time_control_panel_visual_rect() -> Rect2:
 			TIME_CONTROL_PANEL_SOURCE_RECT.position * uniform_scale,
 			TIME_CONTROL_PANEL_SOURCE_RECT.size * uniform_scale,
 		)
-	var shell_size := HUD_REFERENCE_SIZE * uniform_scale
-	var shell_origin := (size - shell_size) * 0.5
+	var right_inset := (
+		HUD_REFERENCE_SIZE.x - TIME_CONTROL_PANEL_SOURCE_RECT.end.x
+	) * uniform_scale
 	return Rect2(
-		shell_origin + TIME_CONTROL_PANEL_SOURCE_RECT.position * uniform_scale,
+		Vector2(
+			size.x
+			- right_inset
+			- TIME_CONTROL_PANEL_SOURCE_RECT.size.x * uniform_scale,
+			TIME_CONTROL_PANEL_SOURCE_RECT.position.y * uniform_scale,
+		),
 		TIME_CONTROL_PANEL_SOURCE_RECT.size * uniform_scale,
 	)
 

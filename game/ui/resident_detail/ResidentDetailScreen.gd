@@ -6,6 +6,9 @@ const UI_SIGNALS := preload(
 	"res://ui/common/AiTownUiSignals.gd"
 )
 const UiNodeRetirement := preload("res://ui/common/AiTownUiNodeRetirement.gd")
+const RESPONSIVE_VIEWPORT := preload(
+	"res://ui/common/ResponsiveViewportPolicy.gd"
+)
 
 
 signal intent_requested(intent: StringName, payload: Dictionary)
@@ -352,6 +355,8 @@ var _occupation_rect := Rect2()
 var _sprite_rect := Rect2()
 var _tab_rects: Array[Rect2] = []
 var _tab_text_rects: Array[Rect2] = []
+var _wide_layout_scale := Vector2.ONE
+var _wide_layout_origin := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -1503,8 +1508,8 @@ func _layout_memory_operation_panel() -> void:
 		return
 	_memory_operation_root.position = Vector2.ZERO
 	_memory_operation_root.size = size
-	var sx := size.x / DESIGN_SIZE.x
-	var sy := size.y / DESIGN_SIZE.y
+	var sx := _wide_layout_scale.x
+	var sy := _wide_layout_scale.y
 	var controls := {
 		"title": _memory_operation_title,
 		"selectedHeading": _memory_operation_selected_heading,
@@ -2678,11 +2683,7 @@ func _apply_responsive_layout() -> void:
 	_safe_rect = _compute_safe_rect(viewport_size)
 	_background.position = Vector2.ZERO
 	_background.size = viewport_size
-	_background.stretch_mode = (
-		TextureRect.STRETCH_SCALE
-		if _layout_profile == LayoutProfile.WIDE
-		else TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	)
+	_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	if _layout_profile == LayoutProfile.WIDE:
 		_apply_wide_geometry(viewport_size)
 	else:
@@ -2695,8 +2696,15 @@ func _apply_responsive_layout() -> void:
 
 
 func _apply_wide_geometry(viewport_size: Vector2) -> void:
-	var sx := viewport_size.x / DESIGN_SIZE.x
-	var sy := viewport_size.y / DESIGN_SIZE.y
+	var design_frame := RESPONSIVE_VIEWPORT.centered_design_rect(
+		viewport_size,
+		DESIGN_SIZE,
+	)
+	var uniform_scale := design_frame.size.x / DESIGN_SIZE.x
+	_wide_layout_scale = Vector2.ONE * uniform_scale
+	_wide_layout_origin = design_frame.position
+	var sx := uniform_scale
+	var sy := uniform_scale
 	var selected_tab := str(_render_data.get("selectedTab", "status"))
 	var is_section_page := selected_tab in ["relationships", "memories"]
 	var is_memory_operation := _memory_operation_visible
@@ -2757,6 +2765,11 @@ func _apply_wide_geometry(viewport_size: Vector2) -> void:
 
 
 func _apply_reflow_geometry(viewport_size: Vector2) -> void:
+	_wide_layout_scale = Vector2(
+		viewport_size.x / DESIGN_SIZE.x,
+		viewport_size.y / DESIGN_SIZE.y,
+	)
+	_wide_layout_origin = Vector2.ZERO
 	var safe := _safe_rect
 	_section_action_rect = Rect2()
 	_section_filter_rects.clear()
@@ -2936,14 +2949,15 @@ func _apply_static_rects() -> void:
 
 func _status_slots(row_rect: Rect2) -> Dictionary:
 	if _layout_profile == LayoutProfile.WIDE:
-		var sx := size.x / DESIGN_SIZE.x
-		var sy := size.y / DESIGN_SIZE.y
+		var sx := _wide_layout_scale.x
+		var sy := _wide_layout_scale.y
+		var origin_x := _wide_layout_origin.x
 		return {
-			"label": Rect2(Vector2(760.0 * sx, row_rect.position.y), Vector2(82.0 * sx, row_rect.size.y)),
-			"summary": Rect2(Vector2(850.0 * sx, row_rect.position.y), Vector2(300.0 * sx, row_rect.size.y)),
-			"meterLabel": Rect2(Vector2(1170.0 * sx, row_rect.position.y), Vector2(82.0 * sx, row_rect.size.y)),
-			"meterValue": Rect2(Vector2(1260.0 * sx, row_rect.position.y), Vector2(92.0 * sx, row_rect.size.y)),
-			"track": Rect2(Vector2(1371.0 * sx, row_rect.position.y + roundf((row_rect.size.y - 94.0 * sy) * 0.5)), Vector2(420.0 * sx, 94.0 * sy)),
+			"label": Rect2(Vector2(origin_x + 760.0 * sx, row_rect.position.y), Vector2(82.0 * sx, row_rect.size.y)),
+			"summary": Rect2(Vector2(origin_x + 850.0 * sx, row_rect.position.y), Vector2(300.0 * sx, row_rect.size.y)),
+			"meterLabel": Rect2(Vector2(origin_x + 1170.0 * sx, row_rect.position.y), Vector2(82.0 * sx, row_rect.size.y)),
+			"meterValue": Rect2(Vector2(origin_x + 1260.0 * sx, row_rect.position.y), Vector2(92.0 * sx, row_rect.size.y)),
+			"track": Rect2(Vector2(origin_x + 1371.0 * sx, row_rect.position.y + roundf((row_rect.size.y - 94.0 * sy) * 0.5)), Vector2(420.0 * sx, 94.0 * sy)),
 		}
 	if _layout_profile == LayoutProfile.COMPACT_PORTRAIT:
 		var top_height := row_rect.size.y * 0.46
@@ -2969,14 +2983,17 @@ func _status_slots(row_rect: Rect2) -> Dictionary:
 
 func _map_rect(rect: Rect2, sx: float, sy: float) -> Rect2:
 	return Rect2(
-		(rect.position * Vector2(sx, sy)).round(),
+		(
+			_wide_layout_origin
+			+ rect.position * Vector2(sx, sy)
+		).round(),
 		(rect.size * Vector2(sx, sy)).round()
 	)
 
 
 func _select_layout_profile(profile_size: Vector2) -> LayoutProfile:
 	var aspect := profile_size.x / maxf(profile_size.y, 1.0)
-	if profile_size.x >= 1500.0 and aspect >= 1.45:
+	if profile_size.x >= 1500.0 and profile_size.y >= 840.0:
 		return LayoutProfile.WIDE
 	if profile_size.x >= 1000.0 and aspect >= 1.2:
 		return LayoutProfile.STANDARD

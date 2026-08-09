@@ -2,7 +2,7 @@ class_name TownHudTypographyContract
 extends RefCounted
 
 
-const REVISION := "ui.town.hud.typography-layout.observer-v4-runtime-v3-16x10"
+const REVISION := "ui.town.hud.typography-layout.observer-v4-runtime-v4-desktop-aspects"
 const FORMAL_READY := true
 const REFERENCE_SIZE := Vector2(1672.0, 941.0)
 const FONT_NATIVE_SIZE := 16
@@ -428,12 +428,35 @@ static func _append_observer_v4_targets(
 		"time_speed_3": Rect2(1568, 621, 68, 68),
 		"avatar_toggle": Rect2(775, 831, 126, 96),
 	}
+	var left_anchored := [
+		"nav_residents",
+		"nav_places",
+		"nav_relationships",
+		"nav_log",
+		"nav_bulletin",
+		"nav_settings",
+	]
+	var right_anchored := [
+		"camera_fit",
+		"camera_zoom_in",
+		"camera_zoom_out",
+		"time_pause",
+		"time_speed_1",
+		"time_speed_2",
+		"time_speed_3",
+	]
 	for id: String in reference_targets:
 		var reference_rect := reference_targets[id] as Rect2
-		var resolved_rect := (
-			_bottom_anchored_rect(safe, reference_rect)
-			if id == "avatar_toggle"
-			else _v4_rect(safe, reference_rect)
+		var horizontal_anchor := &"center"
+		if id in left_anchored:
+			horizontal_anchor = &"left"
+		elif id in right_anchored:
+			horizontal_anchor = &"right"
+		var resolved_rect := _anchored_reference_rect(
+			safe,
+			reference_rect,
+			horizontal_anchor,
+			id == "avatar_toggle",
 		)
 		targets.append(_target(
 			id,
@@ -445,35 +468,51 @@ static func _append_observer_v4_targets(
 
 
 static func _v4_rect(safe: Rect2, reference_rect: Rect2) -> Rect2:
-	if safe.size.x / safe.size.y < REFERENCE_SIZE.x / REFERENCE_SIZE.y:
-		var uniform_scale := safe.size.x / REFERENCE_SIZE.x
-		return Rect2(
-			safe.position + reference_rect.position * uniform_scale,
-			reference_rect.size * uniform_scale,
-		)
-	var scale := Vector2(
-		safe.size.x / REFERENCE_SIZE.x,
-		safe.size.y / REFERENCE_SIZE.y
-	)
-	return Rect2(
-		safe.position + reference_rect.position * scale,
-		reference_rect.size * scale
+	return _anchored_reference_rect(
+		safe,
+		reference_rect,
+		&"center",
 	)
 
 
-static func _bottom_anchored_rect(safe: Rect2, reference_rect: Rect2) -> Rect2:
-	if safe.size.x / safe.size.y >= REFERENCE_SIZE.x / REFERENCE_SIZE.y:
-		return _v4_rect(safe, reference_rect)
-	var uniform_scale := safe.size.x / REFERENCE_SIZE.x
+static func _anchored_reference_rect(
+	safe: Rect2,
+	reference_rect: Rect2,
+	horizontal_anchor: StringName,
+	anchor_bottom: bool = false,
+) -> Rect2:
+	var reference_aspect := REFERENCE_SIZE.x / REFERENCE_SIZE.y
+	var aspect := safe.size.x / maxf(1.0, safe.size.y)
+	var uniform_scale := (
+		safe.size.x / REFERENCE_SIZE.x
+		if aspect < reference_aspect
+		else safe.size.y / REFERENCE_SIZE.y
+	)
 	var scaled_size := reference_rect.size * uniform_scale
-	var bottom_inset := (
-		REFERENCE_SIZE.y - reference_rect.end.y
-	) * uniform_scale
+	var resolved_x := safe.position.x + reference_rect.position.x * uniform_scale
+	if aspect >= reference_aspect:
+		match horizontal_anchor:
+			&"left":
+				resolved_x = safe.position.x + reference_rect.position.x * uniform_scale
+			&"right":
+				var right_inset := (
+					REFERENCE_SIZE.x - reference_rect.end.x
+				) * uniform_scale
+				resolved_x = safe.end.x - right_inset - scaled_size.x
+			_:
+				var center_offset := (
+					reference_rect.get_center().x
+					- REFERENCE_SIZE.x * 0.5
+				) * uniform_scale
+				resolved_x = safe.get_center().x + center_offset - scaled_size.x * 0.5
+	var resolved_y := safe.position.y + reference_rect.position.y * uniform_scale
+	if anchor_bottom:
+		var bottom_inset := (
+			REFERENCE_SIZE.y - reference_rect.end.y
+		) * uniform_scale
+		resolved_y = safe.end.y - bottom_inset - scaled_size.y
 	return Rect2(
-		Vector2(
-			safe.position.x + reference_rect.position.x * uniform_scale,
-			safe.end.y - bottom_inset - scaled_size.y,
-		),
+		Vector2(resolved_x, resolved_y),
 		scaled_size,
 	)
 static func _touch_rect(rect: Rect2, safe: Rect2) -> Rect2:

@@ -1992,21 +1992,7 @@ func _apply_responsive_layout() -> void:
 		maxf(1.0, viewport_size.x - left - right),
 		maxf(1.0, viewport_size.y - top - bottom)
 	)
-	if (
-		available.x >= 1720.0
-		and available.y >= 980.0
-		and aspect >= 1.5
-	):
-		_layout_profile = "wide"
-	elif available.x >= 960.0 and available.y >= 640.0:
-		_layout_profile = "standard"
-	elif (
-		(available.x >= 720.0 and aspect >= 1.2)
-		or available.y < 640.0
-	):
-		_layout_profile = "compact_landscape"
-	else:
-		_layout_profile = "portrait"
+	_layout_profile = _layout_profile_for_available(available, aspect)
 
 	_wide_root.position = Vector2(
 		floorf((viewport_size.x - APPROVED_SOURCE_SIZE.x) * 0.5),
@@ -2067,6 +2053,22 @@ func _apply_responsive_layout() -> void:
 	)
 	_layout_feedback(viewport_size, left, top, right, bottom)
 	_render()
+
+
+func _layout_profile_for_available(
+	available: Vector2,
+	aspect: float,
+) -> String:
+	if available.x >= 1720.0 and available.y >= 980.0:
+		return "wide"
+	if available.x >= 960.0 and available.y >= 640.0:
+		return "standard"
+	if (
+		(available.x >= 720.0 and aspect >= 1.2)
+		or available.y < 640.0
+	):
+		return "compact_landscape"
+	return "portrait"
 
 
 func _apply_flow_geometry(

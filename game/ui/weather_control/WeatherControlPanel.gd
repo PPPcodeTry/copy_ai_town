@@ -689,11 +689,9 @@ func _layout() -> void:
 			- maxf(16.0, float(safe_inset_bottom))
 		)
 	)
-	var aspect := available.size.x / maxf(1.0, available.size.y)
 	if (
 		available.size.x >= 1560.0
 		and available.size.y >= 1000.0
-		and aspect > 1.25
 	):
 		_layout_mode = "desktop_composite"
 	else:

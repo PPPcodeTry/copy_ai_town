@@ -7,6 +7,7 @@ signal ui_scale_changed(percent: int)
 
 
 const STORE := preload("res://world/presentation/ui/TownAudioDisplaySettingsStore.gd")
+const RESPONSIVE_VIEWPORT := preload("res://ui/common/ResponsiveViewportPolicy.gd")
 const SCOPE := "audio_display_settings"
 const SOURCE := "runtime"
 const CAPABILITY_MODE := "formal"
@@ -16,8 +17,8 @@ const WINDOWED_GEOMETRY_RETRY_MSEC := 2_000
 const DISPLAY_SIZE_TOLERANCE_PX := 4
 const SCREEN_COVERAGE_TOLERANCE_PX := 16
 const EXTERNAL_FULLSCREEN_EXIT_GRACE_MSEC := 500
-const DEFAULT_WINDOWED_SIZE := Vector2i(1920, 1080)
-const MINIMUM_WINDOW_SIZE := Vector2i(1280, 720)
+const DEFAULT_WINDOWED_SIZE := RESPONSIVE_VIEWPORT.DESIGN_SIZE
+const MINIMUM_WINDOW_SIZE := RESPONSIVE_VIEWPORT.MINIMUM_WINDOW_SIZE
 const FULLSCREEN_WINDOW_MODES := [
 	DisplayServer.WINDOW_MODE_FULLSCREEN,
 	DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN,
@@ -94,7 +95,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	set_process(true)
 	_initialize_runtime_state()
-	_enforce_minimum_window_size()
+	_enforce_window_constraints()
 
 
 func _process(_delta: float) -> void:
@@ -695,7 +696,7 @@ func _synchronize_external_fullscreen_state() -> void:
 		)
 		if restored_size.x > 0 and restored_size.y > 0:
 			_windowed_size = restored_size
-			_set_logical_canvas_size(restored_size)
+			_set_logical_canvas_size(DEFAULT_WINDOWED_SIZE)
 		if String(
 			(_confirmed.get("display", {}) as Dictionary).get(
 				"windowModeId", "windowed"
@@ -1310,8 +1311,8 @@ func _set_physical_window_size(size: Vector2i) -> void:
 	if _display_backend == null:
 		var window := _root_window()
 		if window != null:
+			window.content_scale_size = DEFAULT_WINDOWED_SIZE
 			window.size = size
-			window.content_scale_size = size
 	_display_window_set_size(size)
 
 
@@ -1323,14 +1324,15 @@ func _set_logical_canvas_size(size: Vector2i) -> void:
 		window.content_scale_size = size
 
 
-func _enforce_minimum_window_size() -> void:
-	if (
-		_display_backend != null
-		or _display_server_name().to_lower() != "windows"
-	):
-		return
+func _enforce_window_constraints() -> void:
 	var window := _root_window()
-	if window != null:
+	if window == null:
+		return
+	window.unresizable = true
+	if (
+		_display_backend == null
+		and _display_server_name().to_lower() == "windows"
+	):
 		window.min_size = MINIMUM_WINDOW_SIZE
 
 
