@@ -27,6 +27,10 @@ const DESKTOP_SHELL_TEXTURE_PATH := (
 	"res://assets/ui/pause_menu/final/composite/"
 	+ "pause_menu_commercial_root_v2.png"
 )
+const RESIDENT_REBIND_CORNER_TEXTURE_PATH := (
+	"res://assets/ui/resident_admission/runtime/"
+	+ "resident_rebind_left_extension.png"
+)
 const DESKTOP_SHELL_SIZE := Vector2(1672.0, 941.0)
 const DESKTOP_MIN_VIEWPORT := Vector2(1760.0, 980.0)
 const APPROVED_DESKTOP_MAX_SCALE := 1.0
@@ -40,6 +44,7 @@ const ENTRY_ACTION_KEYS := {
 	"return_game": "returnGame",
 	"save_game": "saveGame",
 	"load_game": "openLoadGame",
+	"resident_models": "openResidentModels",
 	"game_settings": "openGameSettings",
 }
 const OPERATION_LABELS := {
@@ -86,6 +91,9 @@ var _local_operation: Dictionary = {}
 var _desktop_root: Control
 var _desktop_entry_buttons: Dictionary = {}
 var _desktop_focus_chain: Array[Button] = []
+var _desktop_resident_models_visual: TextureRect
+var _desktop_resident_models_button: Button
+var _desktop_resident_models_label: Label
 var _desktop_title_label: Label
 var _desktop_subtitle_label: Label
 var _desktop_summary_label: Label
@@ -590,6 +598,7 @@ func _build_desktop_composition() -> void:
 		button.pressed.connect(_on_entry_pressed.bind(entry_id))
 		_desktop_root.add_child(button)
 		_desktop_entry_buttons[entry_id] = button
+	_build_desktop_resident_models_corner()
 
 	_desktop_summary_label = _place_desktop_label(
 		"",
@@ -729,6 +738,75 @@ func _build_desktop_composition() -> void:
 	)
 	quit_text.name = "DesktopQuitText"
 	quit_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+
+
+func _build_desktop_resident_models_corner() -> void:
+	var texture := ResourceLoader.load(
+		RESIDENT_REBIND_CORNER_TEXTURE_PATH,
+		"Texture2D",
+	) as Texture2D
+	if texture == null:
+		push_error(
+			"居民改绑角标资产加载失败：%s"
+			% RESIDENT_REBIND_CORNER_TEXTURE_PATH
+		)
+		return
+	var rect := Rect2(41, 122, 311, 145)
+	_desktop_resident_models_visual = TextureRect.new()
+	_desktop_resident_models_visual.name = "ResidentModelsCornerVisual"
+	_desktop_resident_models_visual.position = rect.position
+	_desktop_resident_models_visual.size = rect.size
+	_desktop_resident_models_visual.texture = texture
+	_desktop_resident_models_visual.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_desktop_resident_models_visual.stretch_mode = TextureRect.STRETCH_SCALE
+	_desktop_resident_models_visual.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_desktop_resident_models_visual.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_desktop_root.add_child(_desktop_resident_models_visual)
+
+	_desktop_resident_models_label = _make_label("居民改绑", 24, COLOR_INK)
+	_desktop_resident_models_label.position = Vector2(55, 178)
+	_desktop_resident_models_label.size = Vector2(190, 70)
+	_desktop_resident_models_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_desktop_resident_models_label.clip_text = true
+	_desktop_resident_models_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_desktop_root.add_child(_desktop_resident_models_label)
+	_desktop_resident_models_label.name = "ResidentModelsCornerLabel"
+	_desktop_resident_models_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_desktop_resident_models_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	_desktop_resident_models_button = Button.new()
+	_desktop_resident_models_button.name = "ResidentModelsCornerButton"
+	_desktop_resident_models_button.position = rect.position
+	_desktop_resident_models_button.size = rect.size
+	_desktop_resident_models_button.focus_mode = Control.FOCUS_ALL
+	_desktop_resident_models_button.tooltip_text = "重新分配当前小镇居民使用的模型"
+	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
+		_desktop_resident_models_button.add_theme_stylebox_override(
+			state,
+			StyleBoxEmpty.new(),
+		)
+	_desktop_resident_models_button.add_theme_color_override(
+		"font_color",
+		Color.TRANSPARENT,
+	)
+	_desktop_resident_models_button.pressed.connect(
+		_on_entry_pressed.bind("resident_models"),
+	)
+	_desktop_resident_models_button.mouse_entered.connect(
+		func() -> void:
+			if not _desktop_resident_models_button.disabled:
+				_desktop_resident_models_visual.modulate = Color("fff0c9")
+	)
+	_desktop_resident_models_button.mouse_exited.connect(
+		func() -> void:
+			_desktop_resident_models_visual.modulate = (
+				Color("928a78")
+				if _desktop_resident_models_button.disabled
+				else Color.WHITE
+			)
+	)
+	_desktop_root.add_child(_desktop_resident_models_button)
+	_desktop_resident_models_button.move_to_front()
 
 
 func _build_summary_column() -> void:
@@ -926,11 +1004,22 @@ func _render_desktop_entries(entries: Array) -> void:
 			var button := button_value as Button
 			button.disabled = true
 			button.focus_mode = Control.FOCUS_NONE
+	if _desktop_resident_models_button != null:
+		_desktop_resident_models_button.disabled = true
+		_desktop_resident_models_button.focus_mode = Control.FOCUS_NONE
+		_desktop_resident_models_visual.modulate = Color("928a78")
+		_desktop_resident_models_label.add_theme_color_override(
+			"font_color",
+			COLOR_MUTED,
+		)
 	for entry_value: Variant in entries:
 		if not entry_value is Dictionary:
 			continue
 		var entry := entry_value as Dictionary
 		var entry_id := str(entry.get("id", ""))
+		if entry_id == "resident_models":
+			_render_desktop_resident_models_entry(entry)
+			continue
 		var button_value: Variant = _desktop_entry_buttons.get(entry_id)
 		if not button_value is Button:
 			continue
@@ -947,6 +1036,35 @@ func _render_desktop_entries(entries: Array) -> void:
 		button.focus_mode = (
 			Control.FOCUS_NONE if button.disabled else Control.FOCUS_ALL
 		)
+
+
+func _render_desktop_resident_models_entry(entry: Dictionary) -> void:
+	if _desktop_resident_models_button == null:
+		return
+	var tone := str(entry.get("tone", "quiet"))
+	var action := _pause_action("openResidentModels")
+	var enabled := _entry_is_enabled("resident_models", tone, action)
+	_desktop_resident_models_button.disabled = not enabled
+	_desktop_resident_models_button.focus_mode = (
+		Control.FOCUS_ALL if enabled else Control.FOCUS_NONE
+	)
+	_desktop_resident_models_button.tooltip_text = (
+		"重新分配当前小镇居民使用的模型"
+		if enabled
+		else _player_message_for_reason(String(
+			entry.get(
+				"disabledReason",
+				action.get("disabledReason", "ACTION_DISABLED"),
+			)
+		))
+	)
+	_desktop_resident_models_visual.modulate = (
+		Color.WHITE if enabled else Color("928a78")
+	)
+	_desktop_resident_models_label.add_theme_color_override(
+		"font_color",
+		COLOR_INK if enabled else COLOR_MUTED,
+	)
 
 
 func _on_entry_pressed(entry_id: String) -> void:
@@ -1492,6 +1610,11 @@ func _configure_focus_chains() -> void:
 			var button := button_value as Button
 			if not button.disabled:
 				_desktop_focus_chain.append(button)
+	if (
+		_desktop_resident_models_button != null
+		and not _desktop_resident_models_button.disabled
+	):
+		_desktop_focus_chain.append(_desktop_resident_models_button)
 	if (
 		_desktop_save_create_button != null
 		and _desktop_save_create_button.visible

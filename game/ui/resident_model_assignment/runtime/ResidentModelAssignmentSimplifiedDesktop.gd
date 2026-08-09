@@ -65,6 +65,8 @@ const RESIDENT_SCROLL_RECT := Rect2(643, 241, 24, 487)
 const MODEL_SCROLL_RECT := Rect2(1555, 450, 24, 316)
 
 
+var in_session_mode := false
+var single_resident_mode := false
 var _font: Font
 var _data: Dictionary = {}
 var _actions: Dictionary = {}
@@ -324,6 +326,9 @@ func _build_header() -> void:
 			),
 		"asset_text_button",
 	)
+	_mode_surface.visible = not single_resident_mode
+	(_labels.get("ModeCopy") as Label).visible = true
+	(_buttons.get("mode") as Button).visible = not single_resident_mode
 
 
 func _build_resident_list() -> void:
@@ -582,7 +587,11 @@ func _build_completion_modal() -> void:
 	_completion_message_primary = _add_label(
 		"ModalMessagePrimary",
 		Rect2(596, 421, 482, 56),
-		"15 位居民的模型均已配置完成",
+		(
+			"这位新居民的模型已经配置完成"
+			if single_resident_mode
+			else "15 位居民的模型均已配置完成"
+		),
 		18,
 		HORIZONTAL_ALIGNMENT_CENTER,
 		INK_MUTED,
@@ -593,7 +602,11 @@ func _build_completion_modal() -> void:
 	_completion_message_secondary = _add_label(
 		"ModalMessageSecondary",
 		Rect2(596, 479, 482, 47),
-		"现在可以开始游戏。",
+		(
+			"确认后会立即进入小镇。"
+			if single_resident_mode
+			else "保存后会立即用于当前小镇。" if in_session_mode else "现在可以开始游戏。"
+		),
 		18,
 		HORIZONTAL_ALIGNMENT_CENTER,
 		INK_MUTED,
@@ -610,7 +623,11 @@ func _build_completion_modal() -> void:
 	_add_modal_button(
 		"modal_start",
 		Rect2(849, 584, 234, 70),
-		"开始游戏",
+		(
+			"确认入镇"
+			if single_resident_mode
+			else "保存修改" if in_session_mode else "开始游戏"
+		),
 		func() -> void: completion_modal_start_pressed.emit(),
 	)
 	for id: String in ["modal_return", "modal_start"]:
@@ -635,7 +652,13 @@ func _render(view_model: Dictionary) -> void:
 			else "%d / %d 已分配" % [completed, total]
 		),
 	)
-	_set_text("ModeCopy", "返回单人" if batch_mode else "批量选择")
+	_set_text(
+		"ModeCopy",
+		"入镇绑定" if single_resident_mode else "返回单人" if batch_mode else "批量选择",
+	)
+	_mode_surface.visible = not single_resident_mode
+	(_labels.get("ModeCopy") as Label).visible = true
+	(_buttons.get("mode") as Button).visible = not single_resident_mode
 	_mode_surface.texture = _load_texture(
 		MODE_CONTROL_BATCH_PATH if batch_mode else MODE_CONTROL_SINGLE_PATH
 	)
@@ -823,7 +846,11 @@ func _render_action_states(batch_mode: bool) -> void:
 	_set_text(
 		"AssignCopy",
 		(
-			"已全部分配 · 开始游戏"
+			(
+				"已全部分配 · 确认入镇"
+				if single_resident_mode
+				else "已全部分配 · 保存修改" if in_session_mode else "已全部分配 · 开始游戏"
+			)
 			if ready_to_start
 			else "分配给已选 %d 人" % (_data.get("selectedBatchResidentIds", []) as Array).size()
 			if batch_mode
@@ -1234,7 +1261,11 @@ func _operation_copy(view_model: Dictionary) -> String:
 		"disabled":
 			return "当前没有可用模型"
 	if _action_enabled("applyDraft"):
-		return "全部居民均已完成模型分配，可以开始游戏"
+		return (
+			"全部居民均已完成模型分配，可以保存修改"
+			if in_session_mode
+			else "全部居民均已完成模型分配，可以开始游戏"
+		)
 	return "模型来自已连接服务；此处只负责分配"
 
 

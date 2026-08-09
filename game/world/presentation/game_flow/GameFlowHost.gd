@@ -80,6 +80,16 @@ const BOOTSTRAP := preload("res://world/presentation/session/TownSessionBootstra
 const TOWN_ENTRY_LOADING_OVERLAY := preload(
 	"res://ui/startup/TownEntryLoadingOverlay.gd"
 )
+const REPLACEMENT_ARRIVAL_PANEL := preload(
+	"res://ui/resident_admission/ReplacementResidentArrivalPanel.gd"
+)
+const REPLACEMENT_CANDIDATE_POOL := preload(
+	"res://world/presentation/session/TownReplacementResidentCandidatePool.gd"
+)
+const RESIDENT_REPLACEMENT := preload(
+	"res://world/runtime/lifecycle/TownResidentReplacementAdmission.gd"
+)
+const AGENT_SOUL_PROFILE := preload("res://agent/soul/AgentSoulProfile.gd")
 const PROVIDER_SERVICE := preload("res://world/integration/TownAgentProviderService.gd")
 const GATEWAY := preload("res://world/integration/TownWorldAgentGateway.gd")
 const FORMAL_SLOT_ARCHIVER := preload(
@@ -114,6 +124,17 @@ const FORMAL_RUNTIME_AUDIT_ENV := "AI_TOWN_FORMAL_RUNTIME_AUDIT_PATH"
 const DAILY_AUTO_SAVE_REASON := "daily_auto_save"
 const DAILY_AUTO_SAVE_RETRY_INTERVAL_MSEC := 5000
 const DAILY_AUTO_SAVE_ERROR_HISTORY_LIMIT := 32
+const REPLACEMENT_AGENT_ATTRIBUTE_FIELDS: Array[String] = [
+	"name",
+	"gender",
+	"age",
+	"appearance",
+	"desire",
+	"personality",
+	"speech",
+	"interests",
+	"customInterests",
+]
 const CUSTOM_RESIDENT_LIBRARY_PATH_ENV := "AI_TOWN_CUSTOM_RESIDENT_LIBRARY_PATH"
 const CUSTOM_RESIDENT_CREATOR_BLOCKED_REASON := (
 	"CUSTOM_RESIDENT_CREATOR_MOUNTING_NOT_AUTHORIZED"
@@ -164,6 +185,7 @@ var _audio_display_settings_service: AUDIO_DISPLAY_SETTINGS_SERVICE
 var _provider_settings_ui_service: PROVIDER_SETTINGS_SERVICE
 var _ui_page_projection_service: UI_PAGE_PROJECTION_SERVICE
 var _startup_ui_adapter: Node
+var _town_ui_adapter: Node
 var _startup_provider_service: RefCounted
 var _startup_provider_settings_service: RefCounted
 var _startup_save_store: RefCounted
@@ -220,6 +242,16 @@ var _daily_auto_save_last_attempt_day := -1
 var _daily_auto_save_last_attempt_msec := -100000
 var _daily_auto_save_attempts := 0
 var _daily_auto_save_successes := 0
+var _replacement_generation_pending := false
+var _replacement_last_checked_minute := -1
+var _pending_replacement_candidate: Dictionary = {}
+var _replacement_arrival_panel: ReplacementResidentArrivalPanel
+var _replacement_editor_page: CustomResidentCreatorScreen
+var _replacement_editor_service: TownCustomResidentCreatorService
+var _replacement_candidate_pool: RefCounted
+var _replacement_assignment_active := false
+var _replacement_world_admitted := false
+var _replacement_admission_committed := false
 var _daily_auto_save_last_revision := 0
 var _daily_auto_save_failures: Array[Dictionary] = []
 var _daily_auto_save_inflight := false
@@ -254,8 +286,726 @@ func _notification(what: int) -> void:
 
 func _process(_delta: float) -> void:
 	_bind_current_scene()
+	_poll_resident_replacement()
 	if _formal_runtime_audit_requested:
 		_write_formal_runtime_audit_if_requested.call_deferred()
+
+
+func _ensure_town_entry_loading_overlay() -> void:
+	if is_instance_valid(_town_entry_loading_overlay):
+		return
+	_town_entry_loading_overlay = TOWN_ENTRY_LOADING_OVERLAY.new() as CanvasLayer
+	_town_entry_loading_overlay.name = "TownEntryLoadingOverlay"
+	add_child(_town_entry_loading_overlay)
+
+
+func _poll_resident_replacement() -> void:
+	if (
+		_replacement_generation_pending
+		or not _pending_replacement_candidate.is_empty()
+		or not is_instance_valid(_town_runtime)
+		or _provider_service == null
+		or _gateway == null
+		or _active_session_config.is_empty()
+	):
+		return
+	var world := _town_runtime.get_world_runtime() as TownWorldRuntime
+	if (
+		world == null
+		or not world.has_method("get_public_death_events")
+	):
+		return
+	var current_minute := RESIDENT_REPLACEMENT.world_absolute_minute(world)
+	if current_minute < 0 or current_minute == _replacement_last_checked_minute:
+		return
+	_replacement_last_checked_minute = current_minute
+	if RESIDENT_REPLACEMENT.living_resident_count(world) >= 15:
+		return
+	var death_events := world.get_public_death_events() as Array
+	for death_event_value: Variant in death_events:
+		if not death_event_value is Dictionary:
+			continue
+		var death_event := death_event_value as Dictionary
+		if current_minute >= _replacement_due_minute(death_event):
+			_begin_replacement_persona_generation(death_event)
+			return
+
+
+func _replacement_due_minute(death_event: Dictionary) -> int:
+	var time := death_event.get("time", {}) as Dictionary
+	var day := maxi(1, int(time.get("day", 1)))
+	var clock_parts := String(time.get("clock", "00:00")).split(":")
+	var hour := int(clock_parts[0]) if clock_parts.size() > 0 else 0
+	var minute := int(clock_parts[1]) if clock_parts.size() > 1 else 0
+	var death_minute := (day - 1) * 1440 + hour * 60 + minute
+	var event_id := String(death_event.get("event_id", "resident-death"))
+	return death_minute + 1 + posmod(event_id.hash(), 1440)
+
+
+func _begin_replacement_persona_generation(death_event: Dictionary) -> void:
+	var bindings := _active_session_config.get("residentBindings", []) as Array
+	if bindings.is_empty():
+		return
+	var source_binding := (bindings[0] as Dictionary).duplicate(true)
+	var deceased_id := String(
+		death_event.get("deceased_resident_id", "")
+	).strip_edges()
+	for binding_value: Variant in bindings:
+		if (
+			binding_value is Dictionary
+			and String((binding_value as Dictionary).get("residentId", ""))
+			== deceased_id
+		):
+			source_binding = (binding_value as Dictionary).duplicate(true)
+			break
+	var provider_result := _provider_service.create_provider_for_resident(
+		source_binding,
+	) as Dictionary
+	if not bool(provider_result.get("ok", false)):
+		_present_generated_replacement(
+			_build_replacement_candidate(death_event, source_binding, {}),
+		)
+		return
+	var provider: Object = provider_result.get("provider")
+	if provider == null or not provider.has_method("request_json"):
+		_present_generated_replacement(
+			_build_replacement_candidate(death_event, source_binding, {}),
+		)
+		return
+	_replacement_generation_pending = true
+	provider.request_json({
+		"request_kind": "replacement_resident_persona",
+		"messages": [{
+			"role": "system",
+			"content": (
+				"为一座现代中文小镇生成一名新居民。只返回严格 JSON，字段必须为 "
+				+ "name、gender、age、desire、personality、speech。gender 只能是男或女，"
+				+ "age 为 18 到 80 的整数，其余字段使用简洁自然的中文，不要解释。"
+			),
+		}, {
+			"role": "user",
+			"content": "随机生成一名与现有居民不同、能够长期生活的新居民。",
+		}],
+		"max_tokens": 360,
+	}, _on_replacement_persona_generated.bind(
+		death_event.duplicate(true),
+		source_binding.duplicate(true),
+	))
+
+
+func _on_replacement_persona_generated(
+	result: Dictionary,
+	death_event: Dictionary,
+	source_binding: Dictionary,
+) -> void:
+	_replacement_generation_pending = false
+	var persona: Dictionary = {}
+	if bool(result.get("ok", false)) and result.get("json", {}) is Dictionary:
+		persona = (result.get("json", {}) as Dictionary).duplicate(true)
+	_present_generated_replacement(
+		_build_replacement_candidate(death_event, source_binding, persona),
+	)
+
+
+func _build_replacement_candidate(
+	death_event: Dictionary,
+	source_binding: Dictionary,
+	persona: Dictionary,
+) -> Dictionary:
+	var opening := _active_session_config.get("openingConfig", {}) as Dictionary
+	var residents := opening.get("residents", []) as Array
+	if residents.is_empty():
+		return {}
+	var deceased_id := String(
+		death_event.get("deceased_resident_id", "")
+	).strip_edges()
+	var template := (residents[0] as Dictionary).duplicate(true)
+	for resident_value: Variant in residents:
+		if (
+			resident_value is Dictionary
+			and String((resident_value as Dictionary).get("residentId", ""))
+			== deceased_id
+		):
+			template = (resident_value as Dictionary).duplicate(true)
+			break
+	var event_id := String(death_event.get("event_id", "resident-death"))
+	var visual_index := posmod(event_id.hash(), residents.size())
+	var visual := residents[visual_index] as Dictionary
+	var visual_attributes := visual.get("attributes", {}) as Dictionary
+	var attributes := (template.get("attributes", {}) as Dictionary).duplicate(true)
+	attributes["appearance"] = String(
+		visual_attributes.get("appearance", attributes.get("appearance", ""))
+	)
+	var fallback_names := ["林澄", "周禾", "许岸", "陈野", "沈弦", "顾晴"]
+	var proposed_name := String(persona.get("name", "")).strip_edges().left(24)
+	var used_names: Dictionary = {}
+	for resident_value: Variant in residents:
+		if resident_value is Dictionary:
+			used_names[String(
+				((resident_value as Dictionary).get("attributes", {}) as Dictionary)
+				.get("name", "")
+			)] = true
+	if proposed_name.is_empty() or used_names.has(proposed_name):
+		for offset in fallback_names.size():
+			var fallback_name := String(
+				fallback_names[(visual_index + offset) % fallback_names.size()]
+			)
+			if not used_names.has(fallback_name):
+				proposed_name = fallback_name
+				break
+	if proposed_name.is_empty() or used_names.has(proposed_name):
+		proposed_name = "新居民%d" % (residents.size() + 1)
+	attributes["name"] = proposed_name
+	var gender := String(persona.get("gender", "")).strip_edges()
+	attributes["gender"] = gender if gender in ["男", "女"] else (
+		"女" if posmod(event_id.hash(), 2) == 0 else "男"
+	)
+	attributes["age"] = clampi(int(persona.get("age", 26)), 18, 80)
+	attributes["desire"] = _replacement_text_or_fallback(
+		persona.get("desire"),
+		"在小镇找到能够长久投入的生活",
+	)
+	attributes["personality"] = _replacement_text_or_fallback(
+		persona.get("personality"),
+		"安静但愿意帮助别人，对新环境保持好奇",
+	)
+	attributes["speech"] = _replacement_text_or_fallback(
+		persona.get("speech"),
+		"说话简洁，熟悉之后会偶尔开玩笑",
+	)
+	template["attributes"] = attributes
+	# World 的十五个住宅席位与 residentId 一一对应。新居民接替死亡
+	# 居民的席位，保留内部稳定 ID，但姓名、人设、记忆和 Agent 运行时
+	# 都会换成新居民，死亡记录仍留在公共世界日志中。
+	var resident_id := deceased_id
+	template["residentId"] = resident_id
+	var world_state := (template.get("worldState", {}) as Dictionary).duplicate(true)
+	world_state["doing"] = "刚刚来到小镇"
+	template["worldState"] = world_state
+	var binding := source_binding.duplicate(true)
+	binding["residentId"] = resident_id
+	binding["residentName"] = proposed_name
+	return {
+		"record": template,
+		"identity": {
+			"residentId": resident_id,
+			"residentName": proposed_name,
+		},
+		"binding": binding,
+		"deathEvent": death_event.duplicate(true),
+	}
+
+
+func _replacement_text_or_fallback(value: Variant, fallback: String) -> String:
+	if not value is String:
+		return fallback
+	var normalized := (value as String).strip_edges()
+	return fallback if normalized.is_empty() else normalized.left(160)
+
+
+func _present_generated_replacement(candidate: Dictionary) -> void:
+	if candidate.is_empty() or not is_instance_valid(_town_runtime):
+		return
+	_pending_replacement_candidate = candidate.duplicate(true)
+	_replacement_world_admitted = false
+	_replacement_admission_committed = false
+	_town_runtime.set_resident_editor_open(true)
+	if not is_instance_valid(_replacement_arrival_panel):
+		_replacement_arrival_panel = REPLACEMENT_ARRIVAL_PANEL.new()
+		_replacement_arrival_panel.name = "ReplacementResidentArrivalPanel"
+		_replacement_arrival_panel.edit_requested.connect(
+			_on_replacement_arrival_edit_requested,
+		)
+		var host: Node = (
+			_town_ui_canvas_layer
+			if is_instance_valid(_town_ui_canvas_layer)
+			else self
+		)
+		host.add_child(_replacement_arrival_panel)
+	_replacement_arrival_panel.present(candidate)
+
+
+func _on_replacement_arrival_edit_requested() -> void:
+	if is_instance_valid(_replacement_arrival_panel):
+		_replacement_arrival_panel.queue_free()
+	_replacement_arrival_panel = null
+	_open_replacement_resident_editor()
+
+
+func _open_replacement_resident_editor() -> void:
+	if (
+		_pending_replacement_candidate.is_empty()
+		or not is_instance_valid(_town_ui_adapter)
+		or not is_instance_valid(_town_ui_canvas_layer)
+	):
+		return
+	if is_instance_valid(_replacement_editor_page):
+		return
+	var record := (
+		_pending_replacement_candidate.get("record", {}) as Dictionary
+	).duplicate(true)
+	var attributes := record.get("attributes", {}) as Dictionary
+	var initial_name := String(attributes.get("name", "")).strip_edges()
+	var used_names: Array[String] = []
+	var opening := _active_session_config.get("openingConfig", {}) as Dictionary
+	for value: Variant in opening.get("residents", []) as Array:
+		if not value is Dictionary:
+			continue
+		var resident := value as Dictionary
+		if String(resident.get("residentId", "")) == String(record.get("residentId", "")):
+			continue
+		var name_value := String(
+			(resident.get("attributes", {}) as Dictionary).get("name", "")
+		).strip_edges()
+		if not name_value.is_empty():
+			used_names.append(name_value)
+	_replacement_candidate_pool = REPLACEMENT_CANDIDATE_POOL.new()
+	var pool_result := _replacement_candidate_pool.configure(
+		used_names,
+		initial_name,
+	) as Dictionary
+	if not bool(pool_result.get("ok", false)):
+		_last_result = pool_result
+		_present_generated_replacement(_pending_replacement_candidate)
+		return
+	_replacement_editor_service = TownCustomResidentCreatorService.new()
+	var configured := _replacement_editor_service.configure(
+		_replacement_candidate_pool,
+		FORMAL_CATALOG.load_catalog(),
+		_read_json(WORLD_DATA_PATH),
+		{
+			"draftId": "replacement-resident-%d" % Time.get_ticks_msec(),
+			"revision": 1,
+			"initialSource": record,
+		},
+	) as Dictionary
+	if not bool(configured.get("ok", false)):
+		_last_result = configured
+		_replacement_editor_service = null
+		_present_generated_replacement(_pending_replacement_candidate)
+		return
+	var bound := _town_ui_adapter.bind_custom_resident_creator_service(
+		_replacement_editor_service,
+	) as Dictionary
+	if not bool(bound.get("ok", false)):
+		_last_result = bound
+		_replacement_editor_service = null
+		_present_generated_replacement(_pending_replacement_candidate)
+		return
+	var page_scene := load(CUSTOM_RESIDENT_CREATOR_SCENE_PATH) as PackedScene
+	var page := (
+		page_scene.instantiate() as CustomResidentCreatorScreen
+		if page_scene != null
+		else null
+	)
+	if page == null:
+		_town_ui_adapter.bind_custom_resident_creator_service(null)
+		_replacement_editor_service = null
+		_present_generated_replacement(_pending_replacement_candidate)
+		return
+	page.name = "ReplacementResidentEditor"
+	page.process_mode = Node.PROCESS_MODE_ALWAYS
+	page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	page.z_index = 2700
+	page.set("presentation_mode", "admission")
+	page.set("navigation_back_available", true)
+	page.bind_town_ui_adapter(_town_ui_adapter)
+	_connect_once(
+		page,
+		"intent_requested",
+		_on_replacement_editor_intent_requested,
+	)
+	_connect_once(
+		page,
+		"action_blocked",
+		_on_replacement_editor_action_blocked,
+	)
+	_replacement_editor_page = page
+	_town_ui_canvas_layer.add_child(page)
+	if page.has_method("focus_default_control"):
+		page.call_deferred("focus_default_control")
+
+
+func _on_replacement_editor_intent_requested(
+	intent: String,
+	payload: Dictionary,
+) -> void:
+	var route_only := bool(payload.get("routeOnly", false))
+	var dispatch_result := payload.get("dispatchResult", {}) as Dictionary
+	if not route_only and not bool(dispatch_result.get("ok", false)):
+		_last_result = dispatch_result.duplicate(true)
+		return
+	if intent == "custom_resident_creator.cancel":
+		_close_replacement_resident_editor()
+		_present_generated_replacement(_pending_replacement_candidate)
+		return
+	if intent == "custom_resident_creator.open_wardrobe":
+		var handoff := dispatch_result.get("wardrobeHandoff", {}) as Dictionary
+		if (
+			handoff.is_empty()
+			or not is_instance_valid(_replacement_editor_page)
+			or not _replacement_editor_page.open_complete_set_wardrobe(
+				handoff.duplicate(true),
+			)
+		):
+			_last_result = _failure("CUSTOM_RESIDENT_WARDROBE_ROUTE_UNAVAILABLE", false)
+		return
+	if intent == "custom_resident_creator.apply_wardrobe_result":
+		return
+	if intent != "custom_resident_creator.create":
+		return
+	var edited_source := dispatch_result.get("candidate", {}) as Dictionary
+	if edited_source.is_empty():
+		_last_result = _failure("CUSTOM_RESIDENT_SELECTION_HANDOFF_MISSING", false)
+		return
+	_merge_replacement_editor_source(edited_source)
+	_close_replacement_resident_editor()
+	call_deferred("_open_replacement_model_assignment")
+
+
+func _on_replacement_editor_action_blocked(
+	_intent: String,
+	reason: String,
+) -> void:
+	_last_result = _failure(reason, false)
+
+
+func _merge_replacement_editor_source(source: Dictionary) -> void:
+	var candidate := _pending_replacement_candidate.duplicate(true)
+	var record := (candidate.get("record", {}) as Dictionary).duplicate(true)
+	var source_attributes := source.get("attributes", {}) as Dictionary
+	var attributes := (record.get("attributes", {}) as Dictionary).duplicate(true)
+	# 自定义页面的 selectionSummary 等展示元数据不属于
+	# World/Agent 居民合同。只合并正式居民字段，避免 UI
+	# 后续新增字段时再次泄漏到 Agent 初始化资料。
+	for field_name: String in REPLACEMENT_AGENT_ATTRIBUTE_FIELDS:
+		if source_attributes.has(field_name):
+			attributes[field_name] = source_attributes.get(field_name)
+	record["attributes"] = attributes
+	var occupation := source.get("occupation", {}) as Dictionary
+	var social := (record.get("socialState", {}) as Dictionary).duplicate(true)
+	social["job"] = String(occupation.get("name", social.get("job", "")))
+	social["workplace"] = String(
+		occupation.get("workplacePlace", social.get("workplace", ""))
+	)
+	record["socialState"] = social
+	if source.get("presentation", {}) is Dictionary:
+		record["presentation"] = (
+			source.get("presentation", {}) as Dictionary
+		).duplicate(true)
+	var resident_name := String(attributes.get("name", "")).strip_edges()
+	var identity := (candidate.get("identity", {}) as Dictionary).duplicate(true)
+	identity["residentName"] = resident_name
+	var binding := (candidate.get("binding", {}) as Dictionary).duplicate(true)
+	binding["residentName"] = resident_name
+	candidate["record"] = record
+	candidate["identity"] = identity
+	candidate["binding"] = binding
+	_pending_replacement_candidate = candidate
+
+
+func _close_replacement_resident_editor() -> void:
+	if is_instance_valid(_replacement_editor_page):
+		_replacement_editor_page.unbind_town_ui_adapter()
+		_replacement_editor_page.queue_free()
+	_replacement_editor_page = null
+	if is_instance_valid(_town_ui_adapter):
+		_town_ui_adapter.bind_custom_resident_creator_service(null)
+	_replacement_editor_service = null
+	_replacement_candidate_pool = null
+
+
+func _open_replacement_model_assignment() -> void:
+	if (
+		_pending_replacement_candidate.is_empty()
+		or not is_instance_valid(_town_ui_adapter)
+		or not is_instance_valid(_town_ui_host)
+		or _provider_service == null
+	):
+		_present_generated_replacement(_pending_replacement_candidate)
+		return
+	var candidate := _pending_replacement_candidate
+	var record := candidate.get("record", {}) as Dictionary
+	var resident_id := String(record.get("residentId", ""))
+	var home_space_id := _replacement_home_space_id(resident_id)
+	_resident_model_assignment_service = RESIDENT_MODEL_ASSIGNMENT_SERVICE.new()
+	var configured := _resident_model_assignment_service.configure(
+		_provider_service,
+		{"residents": [record.duplicate(true)]},
+		{
+			"schemaVersion": 1,
+			"sourceScope": "resident_selection",
+			"draftRevision": 1,
+			"slots": [{
+				"residentId": resident_id,
+				"spaceId": home_space_id,
+				"llmBinding": {},
+			}],
+		},
+		{
+			"revision": 1,
+			"selectedResidentId": resident_id,
+			"singleResidentMode": true,
+			"allowedSpaceIds": [home_space_id],
+			"applyHandler": _apply_pending_replacement_admission,
+		},
+	) as Dictionary
+	if not bool(configured.get("ok", false)):
+		_last_result = configured
+		_resident_model_assignment_service = null
+		_open_replacement_resident_editor()
+		return
+	_replacement_assignment_active = true
+	_resident_model_assignment_service.back_requested.connect(
+		_on_replacement_assignment_back_requested,
+	)
+	var bound := _town_ui_adapter.bind_resident_model_assignment_service(
+		_resident_model_assignment_service,
+	) as Dictionary
+	if not bool(bound.get("ok", false)):
+		_last_result = bound
+		_replacement_assignment_active = false
+		_resident_model_assignment_service = null
+		_open_replacement_resident_editor()
+		return
+	var opened := _town_ui_host.open_page(
+		&"resident_model_assignment",
+		{"mode": "resident_admission"},
+	) as Dictionary
+	if not bool(opened.get("ok", false)):
+		_last_result = opened
+		_replacement_assignment_active = false
+		_open_replacement_resident_editor()
+
+
+func _replacement_home_space_id(resident_id: String) -> String:
+	var resident_ids: Array[String] = []
+	var opening := _active_session_config.get("openingConfig", {}) as Dictionary
+	for value: Variant in opening.get("residents", []) as Array:
+		if value is Dictionary:
+			resident_ids.append(String((value as Dictionary).get("residentId", "")))
+	resident_ids.sort()
+	var index := resident_ids.find(resident_id)
+	return "home_%02d" % (index + 1 if index >= 0 else 1)
+
+
+func _on_replacement_assignment_back_requested(
+	_draft: Dictionary,
+	_revision: int,
+) -> void:
+	if not _replacement_assignment_active:
+		return
+	if _replacement_world_admitted:
+		_last_result = _failure(
+			"RESIDENT_REPLACEMENT_BINDING_RETRY_REQUIRED",
+			true,
+		)
+		return
+	_replacement_assignment_active = false
+	_replacement_world_admitted = false
+	call_deferred("_restore_replacement_editor_after_assignment_back")
+
+
+func _restore_replacement_editor_after_assignment_back() -> void:
+	if is_instance_valid(_town_ui_adapter):
+		_town_ui_adapter.bind_resident_model_assignment_service(null)
+	_resident_model_assignment_service = null
+	_open_replacement_resident_editor()
+
+
+func _apply_pending_replacement_admission(
+	_draft: Dictionary,
+	assignment_bindings: Array,
+) -> Dictionary:
+	if _pending_replacement_candidate.is_empty():
+		return _failure("REPLACEMENT_RESIDENT_CANDIDATE_MISSING", false)
+	if assignment_bindings.size() != 1 or not assignment_bindings[0] is Dictionary:
+		return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+	var candidate := _pending_replacement_candidate.duplicate(true)
+	var record := candidate.get("record", {}) as Dictionary
+	var identity := candidate.get("identity", {}) as Dictionary
+	var binding := (assignment_bindings[0] as Dictionary).duplicate(true)
+	binding["residentName"] = String(identity.get("residentName", ""))
+	var death_event := candidate.get("deathEvent", {}) as Dictionary
+	var world := _town_runtime.get_world_runtime() as TownWorldRuntime
+	if world == null:
+		return _failure("RESIDENT_REPLACEMENT_WORLD_UNAVAILABLE", true)
+	if _replacement_admission_committed:
+		binding = (
+			candidate.get("committedBinding", binding) as Dictionary
+		).duplicate(true)
+	else:
+		var roster_projection := _build_replacement_session_roster(
+			record,
+			identity,
+			binding,
+		) as Dictionary
+		if not bool(roster_projection.get("ok", false)):
+			_last_result = roster_projection.duplicate(true)
+			return roster_projection
+		var deceased_id := String(
+			death_event.get("deceased_resident_id", "")
+		)
+		if not _replacement_world_admitted:
+			var preview := RESIDENT_REPLACEMENT.preview_agent_initialization(
+				world,
+				record,
+				deceased_id,
+			) as Dictionary
+			if not bool(preview.get("ok", false)):
+				_last_result = preview.duplicate(true)
+				return preview
+			var preflight := _gateway.preflight_replacement_resident(
+				identity,
+				binding,
+				preview.get("initialization", {}),
+			) as Dictionary
+			if not bool(preflight.get("ok", false)):
+				_last_result = preflight.duplicate(true)
+				return preflight
+			var world_result := RESIDENT_REPLACEMENT.admit(
+				world,
+				record,
+				deceased_id,
+			) as Dictionary
+			if not bool(world_result.get("ok", false)):
+				_last_result = world_result.duplicate(true)
+				return world_result
+			_replacement_world_admitted = true
+		var gateway_result := _gateway.admit_replacement_resident(
+			identity,
+			binding,
+		) as Dictionary
+		if not bool(gateway_result.get("ok", false)):
+			_last_result = gateway_result.duplicate(true)
+			return gateway_result
+		_active_session_config["openingConfig"] = (
+			roster_projection.get("openingConfig", {}) as Dictionary
+		).duplicate(true)
+		_active_session_config["residentIdentities"] = (
+			roster_projection.get("residentIdentities", []) as Array
+		).duplicate(true)
+		_active_session_config["residentBindings"] = (
+			roster_projection.get("residentBindings", []) as Array
+		).duplicate(true)
+		candidate["committedBinding"] = binding.duplicate(true)
+		_pending_replacement_candidate = candidate.duplicate(true)
+		_replacement_admission_committed = true
+	var opening := (
+		_active_session_config.get("openingConfig", {}) as Dictionary
+	).duplicate(true)
+	var identities := (
+		_active_session_config.get("residentIdentities", []) as Array
+	).duplicate(true)
+	var bindings := (
+		_active_session_config.get("residentBindings", []) as Array
+	).duplicate(true)
+	var roster_results: Array = [
+		_town_runtime.update_resident_roster(identities, bindings, opening),
+		_session_ui_service.update_resident_roster(identities, bindings, opening),
+	]
+	if is_instance_valid(_town_ui_adapter):
+		roster_results.append(_town_ui_adapter.update_session_resident_roster(
+			identities,
+			bindings,
+			opening,
+		))
+	for roster_result_value: Variant in roster_results:
+		if (
+			not roster_result_value is Dictionary
+			or not bool((roster_result_value as Dictionary).get("ok", false))
+		):
+			_last_result = _failure(
+				"SESSION_RESIDENT_ROSTER_UPDATE_FAILED",
+				true,
+				[{"result": roster_result_value}],
+			)
+			return _last_result
+	var save_result := _session_ui_service.create_save(
+		{"reason": "resident_replacement_admitted"},
+	) as Dictionary
+	_last_result = save_result.duplicate(true)
+	if not bool(save_result.get("ok", false)):
+		return save_result
+	_pending_replacement_candidate.clear()
+	_replacement_assignment_active = false
+	_replacement_world_admitted = false
+	_replacement_admission_committed = false
+	_town_runtime.set_resident_editor_open(false)
+	call_deferred("_restore_in_session_resident_assignment_after_admission")
+	return save_result
+
+
+func _build_replacement_session_roster(
+	record: Dictionary,
+	identity: Dictionary,
+	binding: Dictionary,
+) -> Dictionary:
+	var resident_id := String(identity.get("residentId", ""))
+	var opening := (
+		_active_session_config.get("openingConfig", {}) as Dictionary
+	).duplicate(true)
+	var residents := (opening.get("residents", []) as Array).duplicate(true)
+	var identities := (
+		_active_session_config.get("residentIdentities", []) as Array
+	).duplicate(true)
+	var bindings := (
+		_active_session_config.get("residentBindings", []) as Array
+	).duplicate(true)
+	var resident_replaced := false
+	var identity_replaced := false
+	var binding_replaced := false
+	for resident_index in residents.size():
+		if String((residents[resident_index] as Dictionary).get("residentId", "")) == resident_id:
+			residents[resident_index] = record.duplicate(true)
+			resident_replaced = true
+			break
+	for identity_index in identities.size():
+		if String((identities[identity_index] as Dictionary).get("residentId", "")) == resident_id:
+			identities[identity_index] = identity.duplicate(true)
+			identity_replaced = true
+			break
+	for binding_index in bindings.size():
+		if String((bindings[binding_index] as Dictionary).get("residentId", "")) == resident_id:
+			bindings[binding_index] = binding.duplicate(true)
+			binding_replaced = true
+			break
+	if not resident_replaced or not identity_replaced or not binding_replaced:
+		return _failure("SESSION_RESIDENT_REPLACEMENT_SLOT_MISSING", false)
+	opening["residents"] = residents
+	opening["agentSoulProfiles"] = AGENT_SOUL_PROFILE.analyze_all(residents)
+	identities.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return String(a.get("residentId", "")) < String(b.get("residentId", ""))
+	)
+	bindings.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return String(a.get("residentId", "")) < String(b.get("residentId", ""))
+	)
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"openingConfig": opening,
+		"residentIdentities": identities,
+		"residentBindings": bindings,
+	}
+
+
+func _restore_in_session_resident_assignment_after_admission() -> void:
+	if is_instance_valid(_town_ui_adapter):
+		_configure_in_session_resident_model_assignment(_town_ui_adapter)
+
+
+func _reset_replacement_admission_ui() -> void:
+	if is_instance_valid(_replacement_arrival_panel):
+		_replacement_arrival_panel.queue_free()
+	_replacement_arrival_panel = null
+	_close_replacement_resident_editor()
+	if _replacement_assignment_active and is_instance_valid(_town_ui_adapter):
+		_town_ui_adapter.bind_resident_model_assignment_service(null)
+	_replacement_assignment_active = false
+	_replacement_world_admitted = false
+	_replacement_admission_committed = false
+	_replacement_candidate_pool = null
 
 
 func _instantiate_town_runtime() -> Node:
@@ -278,14 +1028,6 @@ func _instantiate_control_script(script_path: String) -> Control:
 	if script == null:
 		return null
 	return script.new() as Control
-
-
-func _ensure_town_entry_loading_overlay() -> void:
-	if is_instance_valid(_town_entry_loading_overlay):
-		return
-	_town_entry_loading_overlay = TOWN_ENTRY_LOADING_OVERLAY.new() as CanvasLayer
-	_town_entry_loading_overlay.name = "TownEntryLoadingOverlay"
-	add_child(_town_entry_loading_overlay)
 
 
 func _begin_town_entry_loading(
@@ -799,10 +1541,12 @@ func _release_internal_session_refs() -> void:
 	_dismiss_town_entry_loading()
 	_reset_custom_resident_creator_session(true)
 	_reset_resident_model_assignment_session()
+	_reset_replacement_admission_ui()
 	_bootstrap = null
 	_provider_service = null
 	_gateway = null
 	_session_ui_service = null
+	_town_ui_adapter = null
 	_provider_settings_ui_service = null
 	_ui_page_projection_service = null
 	_active_session_config.clear()
@@ -814,6 +1558,10 @@ func _release_internal_session_refs() -> void:
 	_daily_auto_save_last_revision = 0
 	_daily_auto_save_failures.clear()
 	_daily_auto_save_inflight = false
+	_replacement_generation_pending = false
+	_replacement_last_checked_minute = -1
+	_replacement_world_admitted = false
+	_pending_replacement_candidate.clear()
 	_pending_runtime = null
 	_town_runtime = null
 	_town_ui_canvas_layer = null
@@ -3096,6 +3844,7 @@ func _bind_town_runtime(runtime: Node) -> void:
 	if adapter == null:
 		_last_result = _failure("TOWN_UI_ADAPTER_UNAVAILABLE", false)
 		return
+	_town_ui_adapter = adapter
 	_session_ui_service = SESSION_UI_SERVICE.new()
 	var save_configuration := _session_ui_service.call(
 		"configure",
@@ -3135,6 +3884,11 @@ func _bind_town_runtime(runtime: Node) -> void:
 		"bind_provider_settings_service",
 		_provider_settings_ui_service,
 	)
+	var resident_model_binding := (
+		_configure_in_session_resident_model_assignment(adapter)
+	)
+	if not bool(resident_model_binding.get("ok", false)):
+		_last_result = resident_model_binding.duplicate(true)
 	_ui_page_projection_service = UI_PAGE_PROJECTION_SERVICE.new()
 	var projection_binding := _ui_page_projection_service.bind(runtime,
 		runtime.call("get_world_runtime"),
@@ -3747,6 +4501,199 @@ func _build_resident_binding_payload(draft: Dictionary) -> Array[Dictionary]:
 	return bindings
 
 
+func _configure_in_session_resident_model_assignment(
+	adapter: Node,
+) -> Dictionary:
+	if (
+		adapter == null
+		or _provider_service == null
+		or _active_session_config.is_empty()
+	):
+		return _failure(
+			"RESIDENT_MODEL_ASSIGNMENT_RUNTIME_DEPENDENCY_MISSING",
+			false,
+		)
+	var opening := _active_session_config.get("openingConfig", {}) as Dictionary
+	var opening_residents_value: Variant = opening.get("residents", [])
+	var bindings_value: Variant = _active_session_config.get(
+		"residentBindings",
+		[],
+	)
+	if (
+		not opening_residents_value is Array
+		or not bindings_value is Array
+		or (opening_residents_value as Array).is_empty()
+		or (opening_residents_value as Array).size()
+		!= (bindings_value as Array).size()
+	):
+		return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+	var base_entries_by_id: Dictionary = {}
+	for entry_value: Variant in (
+		FORMAL_CATALOG.load_catalog().get("residents", []) as Array
+	):
+		if not entry_value is Dictionary:
+			continue
+		var entry := entry_value as Dictionary
+		base_entries_by_id[String(entry.get("residentId", ""))] = (
+			entry.duplicate(true)
+		)
+	var catalog_residents: Array[Dictionary] = []
+	for resident_value: Variant in opening_residents_value as Array:
+		if not resident_value is Dictionary:
+			return _failure("SESSION_RESIDENT_IDENTITIES_INVALID", false)
+		var opening_resident := resident_value as Dictionary
+		var resident_id := String(
+			opening_resident.get("residentId", "")
+		).strip_edges()
+		if resident_id.is_empty():
+			return _failure("SESSION_RESIDENT_IDENTITIES_INVALID", false)
+		if base_entries_by_id.has(resident_id):
+			catalog_residents.append(
+				(base_entries_by_id[resident_id] as Dictionary).duplicate(true)
+			)
+		else:
+			# Save 内的自定义居民已经带着显示名与灵魂属性；模型分配页
+			# 只依赖这些字段，头像缺失时会使用姓名首字作为稳定回退。
+			catalog_residents.append({
+				"residentId": resident_id,
+				"attributes": (
+					opening_resident.get("attributes", {}) as Dictionary
+				).duplicate(true),
+				"presentation": {},
+			})
+	var bindings_by_id: Dictionary = {}
+	for binding_value: Variant in bindings_value as Array:
+		if not binding_value is Dictionary:
+			return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+		var binding := binding_value as Dictionary
+		var resident_id := String(binding.get("residentId", "")).strip_edges()
+		if (
+			resident_id.is_empty()
+			or bindings_by_id.has(resident_id)
+			or not binding.get("llmBinding", {}) is Dictionary
+		):
+			return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+		bindings_by_id[resident_id] = (
+			binding.get("llmBinding", {}) as Dictionary
+		).duplicate(true)
+	var ordered_resident_ids: Array[String] = []
+	for resident in catalog_residents:
+		ordered_resident_ids.append(String(resident.get("residentId", "")))
+	ordered_resident_ids.sort()
+	var slots: Array[Dictionary] = []
+	for index in ordered_resident_ids.size():
+		var resident_id := ordered_resident_ids[index]
+		if not bindings_by_id.has(resident_id):
+			return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+		slots.append({
+			"residentId": resident_id,
+			"spaceId": "home_%02d" % (index + 1),
+			"llmBinding": (
+				bindings_by_id[resident_id] as Dictionary
+			).duplicate(true),
+		})
+	_resident_model_assignment_service = RESIDENT_MODEL_ASSIGNMENT_SERVICE.new()
+	var configured := _resident_model_assignment_service.configure(
+		_provider_service,
+		{"residents": catalog_residents},
+		{
+			"schemaVersion": 1,
+			"sourceScope": "resident_selection",
+			"draftRevision": 1,
+			"slots": slots,
+		},
+		{
+			"revision": 1,
+			"applyHandler": _apply_in_session_resident_model_bindings,
+		},
+	) as Dictionary
+	if not bool(configured.get("ok", false)):
+		_resident_model_assignment_service = null
+		return configured
+	var bound := adapter.bind_resident_model_assignment_service(
+		_resident_model_assignment_service,
+	) as Dictionary
+	if not bool(bound.get("ok", false)):
+		_resident_model_assignment_service = null
+		return bound
+	return configured
+
+
+func _apply_in_session_resident_model_bindings(
+	_draft: Dictionary,
+	bindings: Array,
+) -> Dictionary:
+	if (
+		_gateway == null
+		or not is_instance_valid(_gateway)
+		or not _gateway.has_method("update_resident_bindings")
+		or not is_instance_valid(_town_runtime)
+		or not _town_runtime.has_method("update_resident_bindings")
+		or _session_ui_service == null
+		or not _session_ui_service.has_method("update_resident_bindings")
+	):
+		return _failure(
+			"RESIDENT_MODEL_ASSIGNMENT_RUNTIME_DEPENDENCY_MISSING",
+			false,
+		)
+	var previous_bindings := (
+		_active_session_config.get("residentBindings", []) as Array
+	).duplicate(true)
+	var gateway_result := _gateway.update_resident_bindings(
+		bindings.duplicate(true),
+	) as Dictionary
+	if not bool(gateway_result.get("ok", false)):
+		return gateway_result
+	var runtime_result := _town_runtime.update_resident_bindings(
+		bindings.duplicate(true),
+	) as Dictionary
+	if not bool(runtime_result.get("ok", false)):
+		_gateway.update_resident_bindings(previous_bindings)
+		return runtime_result
+	var session_result := _session_ui_service.update_resident_bindings(
+		bindings.duplicate(true),
+	) as Dictionary
+	if not bool(session_result.get("ok", false)):
+		_town_runtime.update_resident_bindings(previous_bindings)
+		_gateway.update_resident_bindings(previous_bindings)
+		return session_result
+	_active_session_config["residentBindings"] = bindings.duplicate(true)
+	var save_result := _session_ui_service.create_save(
+		{"reason": "resident_model_rebind"},
+	) as Dictionary
+	if not bool(save_result.get("ok", false)):
+		var rollback_errors: Array[Dictionary] = []
+		for rollback_value: Variant in [
+			_session_ui_service.update_resident_bindings(
+				previous_bindings,
+			),
+			_town_runtime.update_resident_bindings(
+				previous_bindings,
+			),
+			_gateway.update_resident_bindings(
+				previous_bindings,
+			),
+		]:
+			if (
+				not rollback_value is Dictionary
+				or not bool((rollback_value as Dictionary).get("ok", false))
+			):
+				rollback_errors.append({"result": rollback_value})
+		_active_session_config["residentBindings"] = previous_bindings
+		if not rollback_errors.is_empty():
+			return _failure(
+				"RESIDENT_MODEL_ASSIGNMENT_ROLLBACK_FAILED",
+				true,
+				rollback_errors,
+			)
+		_last_result = save_result.duplicate(true)
+		return save_result
+	_last_result = save_result.duplicate(true)
+	var result := save_result.duplicate(true)
+	result["changed"] = bool(gateway_result.get("changed", true))
+	return result
+
+
 func _formal_new_game_catalog() -> Dictionary:
 	if _custom_resident_candidate_pool != null:
 		var merged := _custom_resident_candidate_pool.get_merged_catalog() as Dictionary
@@ -4250,6 +5197,20 @@ func _on_pause_intent_requested(intent: StringName, payload: Dictionary) -> void
 							"present_host_result",
 							"pause_menu.open_llm_settings",
 							settings_opened,
+						)
+		"pause_menu.open_resident_models":
+			if is_instance_valid(_town_ui_host):
+				_pause_host.hide()
+				var assignment_opened := _town_ui_host.open_page(
+					&"resident_model_assignment",
+					{"mode": "in_session"},
+				) as Dictionary
+				if not bool(assignment_opened.get("ok", false)):
+					_pause_host.show()
+					if _pause_host.has_method("present_host_result"):
+						_pause_host.present_host_result(
+							"pause_menu.open_resident_models",
+							assignment_opened,
 						)
 
 

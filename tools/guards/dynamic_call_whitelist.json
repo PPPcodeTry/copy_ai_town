@@ -3,6 +3,12 @@
   "note": "确属必要的动态调用，逐项记 reason（如：Callable 实例调用，非字符串派发 / 方法名来自配置）。标识与基线一致：path + func + call。",
   "entries": [
     {
+      "path": "game/ui/resident_model_assignment/runtime/ResidentModelAssignmentService.gd",
+      "func": "_apply_draft",
+      "call": "variable:.call( _draft.duplicate(true), bindings.duplicate(true), )",
+      "reason": "局内改绑与新居民入镇由宿主注入事务提交回调；这是 Callable 实例调用，不按字符串选择生产方法。"
+    },
+    {
       "path": "game/agent/AgentSystem.gd",
       "func": "request_json_for_resident",
       "call": "string:.call( \"request_json\", model_request, on_complete, )",

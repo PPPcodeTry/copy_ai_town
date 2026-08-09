@@ -72,6 +72,9 @@ const RESIDENT_CATALOG := preload("res://world/presentation/session/TownResident
 const RESIDENT_EDITOR_SERVICE := preload(
 	"res://world/presentation/session/TownResidentEditorService.gd"
 )
+const RESIDENT_WARDROBE_CATALOG_PATH := (
+	"res://assets/characters/resident_2d_rig_v1/wardrobe_v1/wardrobe_catalog.json"
+)
 const CONVERSATION_BUBBLE_PLAYBACK := preload(
 	"res://world/presentation/ui/TownConversationBubblePlayback.gd"
 )
@@ -292,6 +295,9 @@ func bind_runtime(runtime: Node, world: RefCounted, gateway: Node, session_confi
 	_world = world
 	_gateway = gateway
 	_session_config = session_config.duplicate(true)
+	_resident_portrait_by_id.clear()
+	_resident_portrait_ref_by_id.clear()
+	_resident_portraits_loaded = false
 	_dirty_world_scopes.clear()
 	_pending_world_refresh_scopes.clear()
 	_world_refresh_wait_frames = 0
@@ -379,6 +385,28 @@ func _town_hud_head_anchor_unavailable() -> Dictionary:
 		"y": 0.0,
 		"spaceId": "",
 	}
+
+
+func update_session_resident_bindings(bindings: Array) -> Dictionary:
+	_session_config["residentBindings"] = bindings.duplicate(true)
+	_refresh_scope("pause_menu", true)
+	return _success_result()
+
+
+func update_session_resident_roster(
+	identities: Array,
+	bindings: Array,
+	opening_config: Dictionary,
+) -> Dictionary:
+	_session_config["residentIdentities"] = identities.duplicate(true)
+	_session_config["residentBindings"] = bindings.duplicate(true)
+	_session_config["openingConfig"] = opening_config.duplicate(true)
+	_resident_portrait_by_id.clear()
+	_resident_portrait_ref_by_id.clear()
+	_resident_portraits_loaded = false
+	_refresh_resident_identities()
+	_refresh_all(true)
+	return _success_result()
 
 
 func bind_session_save_service(service: Object) -> Dictionary:
@@ -552,11 +580,13 @@ func set_custom_resident_creator_route_capabilities(
 
 func bind_resident_model_assignment_service(service: Object) -> Dictionary:
 	_resident_model_assignment_startup_state.clear()
-	return _bind_external_ui_service(
+	var result := _bind_external_ui_service(
 		"resident_model_assignment",
 		service,
 		"_resident_model_assignment_service",
 	)
+	_refresh_scope("pause_menu", true)
+	return result
 
 
 func set_resident_model_assignment_startup_state(
@@ -3957,6 +3987,55 @@ func _ensure_resident_portraits_loaded() -> void:
 				portrait.atlas = texture
 				portrait.region = Rect2(0, 0, 64, 64)
 				_resident_portrait_by_id[entry_id] = portrait
+		_load_session_resident_portraits()
+
+
+func _load_session_resident_portraits() -> void:
+	if not FileAccess.file_exists(RESIDENT_WARDROBE_CATALOG_PATH):
+		return
+	var parsed: Variant = JSON.parse_string(
+		FileAccess.get_file_as_string(RESIDENT_WARDROBE_CATALOG_PATH)
+	)
+	if not parsed is Dictionary:
+		return
+	var portrait_by_appearance: Dictionary = {}
+	for loadout_value: Variant in (parsed as Dictionary).get("loadouts", []) as Array:
+		if not loadout_value is Dictionary:
+			continue
+		var loadout := loadout_value as Dictionary
+		var appearance_id := String(loadout.get("appearanceId", "")).strip_edges()
+		var portrait_path := String(loadout.get("portraitPath", "")).strip_edges()
+		if (
+			appearance_id.is_empty()
+			or portrait_path.is_empty()
+			or not ResourceLoader.exists(portrait_path)
+		):
+			continue
+		portrait_by_appearance[appearance_id] = portrait_path
+	var opening := _session_config.get("openingConfig", {}) as Dictionary
+	var residents_value: Variant = opening.get(
+		"residents",
+		_session_config.get("residentIdentities", []),
+	)
+	if not residents_value is Array:
+		return
+	for resident_value: Variant in residents_value as Array:
+		if not resident_value is Dictionary:
+			continue
+		var resident := resident_value as Dictionary
+		var resident_id := String(resident.get("residentId", "")).strip_edges()
+		var attributes := resident.get("attributes", {}) as Dictionary
+		var appearance_id := String(attributes.get("appearance", "")).strip_edges()
+		var portrait_path := String(
+			portrait_by_appearance.get(appearance_id, "")
+		)
+		if resident_id.is_empty() or portrait_path.is_empty():
+			continue
+		var texture := ResourceLoader.load(portrait_path, "Texture2D") as Texture2D
+		if texture == null:
+			continue
+		_resident_portrait_ref_by_id[resident_id] = portrait_path
+		_resident_portrait_by_id[resident_id] = texture
 
 
 func _hud_indoor_items(runtime_state: Dictionary) -> Array[Dictionary]:
@@ -4174,6 +4253,7 @@ func _build_pause_menu_view_model(operation: Dictionary, error: Dictionary) -> D
 				(provider_value as Dictionary).get("models", []) as Array
 			).size()
 	var provider_route_available := _provider_settings_service != null
+	var resident_models_available := _resident_model_assignment_service != null
 	var audio_vm := get_view_model("audio_display_settings")
 	var audio_data := audio_vm.get("data", {}) as Dictionary
 	var audio := audio_data.get("audio", {}) as Dictionary
@@ -4189,6 +4269,7 @@ func _build_pause_menu_view_model(operation: Dictionary, error: Dictionary) -> D
 				{"id": "return_game", "icon": "resume", "label": "继续游戏", "tone": "primary"},
 				{"id": "save_game", "icon": "save", "label": "保存游戏", "tone": "quiet" if save_available else "disabled", "disabledReason": save_status_reason},
 				{"id": "load_game", "icon": "load", "label": "加载游戏", "tone": "quiet" if load_available else "disabled", "disabledReason": load_disabled_reason},
+				{"id": "resident_models", "icon": "resident_models", "label": "居民模型", "tone": "quiet" if resident_models_available else "disabled", "disabledReason": "" if resident_models_available else "RESIDENT_MODEL_ASSIGNMENT_SERVICE_NOT_BOUND"},
 				{"id": "game_settings", "icon": "settings", "label": "游戏设置", "tone": "quiet"},
 			],
 			"currentTownSummary": {
@@ -4240,6 +4321,11 @@ func _build_pause_menu_view_model(operation: Dictionary, error: Dictionary) -> D
 				load_disabled_reason,
 			),
 			"openGameSettings": _action("pause_menu.open_audio_video", true),
+			"openResidentModels": _action(
+				"pause_menu.open_resident_models",
+				resident_models_available,
+				"" if resident_models_available else "RESIDENT_MODEL_ASSIGNMENT_SERVICE_NOT_BOUND",
+			),
 			"returnToStart": _action("pause_menu.return_to_start", true),
 			"quitGame": _action("pause_menu.quit_game", true),
 		},
@@ -4521,7 +4607,7 @@ func _execute_save_intent(intent: String, payload: Dictionary) -> Dictionary:
 
 func _execute_pause_menu_intent(intent: String, _payload: Dictionary) -> Dictionary:
 	match intent:
-		"pause_menu.open_audio_video", "pause_menu.open_load_game", "pause_menu.return_to_start", "pause_menu.quit_game":
+		"pause_menu.open_audio_video", "pause_menu.open_load_game", "pause_menu.open_resident_models", "pause_menu.return_to_start", "pause_menu.quit_game":
 			return _success_result()
 		"pause_menu.open_save_status", "pause_menu.open_residents_map_pack":
 			return _local_failure("ROUTE_NOT_CONNECTED", false)

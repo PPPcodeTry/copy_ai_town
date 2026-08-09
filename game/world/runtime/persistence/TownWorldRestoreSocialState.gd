@@ -215,21 +215,13 @@ static func _validate_saved_event_log(
 				"世界存档 eventLog 没有居民 ID 却保存了居民姓名：%s"
 				% event_id
 			)
-		elif not resident_id.is_empty() and residents.has(resident_id):
-			var resident_value: Variant = residents.get(resident_id)
-			var expected_name := ""
-			if resident_value is Dictionary:
-				var attributes_value: Variant = (
-					resident_value as Dictionary
-				).get("attributes")
-				if attributes_value is Dictionary:
-					expected_name = _string_or_empty(
-						(attributes_value as Dictionary).get("name")
-					)
-			if expected_name.is_empty() or resident_name != expected_name:
-				errors.append(
-					"世界存档 eventLog 居民姓名镜像不一致：%s" % event_id
-				)
+		elif not resident_id.is_empty() and resident_name.is_empty():
+			errors.append(
+				"世界存档 eventLog 居民姓名不能为空：%s" % event_id
+			)
+		# eventLog 是发生当时的历史快照。居民补位会复用住宅席位
+		# 的稳定 residentId，但不应把旧事件的 residentName 改成新居民。
+		# 因此这里只校验席位存在且历史姓名非空，不再要求与当前姓名相同。
 		var place_name := _string_or_empty(item.get("placeName"))
 		if not item.get("placeName") is String:
 			errors.append("世界存档 eventLog.placeName 必须是文本：%s" % event_id)

@@ -181,6 +181,14 @@ func initialize_resident(
 	return _success(normalized_id, {"created": true})
 
 
+func reset_resident(resident_id: String, random_seed: int) -> Dictionary:
+	var normalized_id := resident_id.strip_edges()
+	if not _residents.has(normalized_id):
+		return _failure("CONDITION_RESIDENT_ID_INVALID")
+	_residents.erase(normalized_id)
+	return initialize_resident(normalized_id, random_seed)
+
+
 func has_resident(resident_id: String) -> bool:
 	return _residents.has(resident_id)
 

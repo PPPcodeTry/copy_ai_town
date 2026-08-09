@@ -157,6 +157,91 @@ func get_save_snapshot() -> Dictionary:
 	}
 
 
+func update_resident_bindings(bindings_value: Variant) -> Dictionary:
+	if not bindings_value is Array:
+		return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+	var identities_value: Variant = _session_config.get("residentIdentities", [])
+	if not identities_value is Array:
+		return _failure("SESSION_RESIDENT_IDENTITIES_INVALID", false)
+	var expected_ids: Dictionary = {}
+	for identity_value: Variant in identities_value as Array:
+		if not identity_value is Dictionary:
+			return _failure("SESSION_RESIDENT_IDENTITIES_INVALID", false)
+		var resident_id := String(
+			(identity_value as Dictionary).get("residentId", "")
+		).strip_edges()
+		if resident_id.is_empty() or expected_ids.has(resident_id):
+			return _failure("SESSION_RESIDENT_IDENTITIES_INVALID", false)
+		expected_ids[resident_id] = true
+	var seen_ids: Dictionary = {}
+	var normalized: Array[Dictionary] = []
+	for binding_value: Variant in bindings_value as Array:
+		if not binding_value is Dictionary:
+			return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+		var binding := binding_value as Dictionary
+		var resident_id := String(binding.get("residentId", "")).strip_edges()
+		if (
+			resident_id.is_empty()
+			or not expected_ids.has(resident_id)
+			or seen_ids.has(resident_id)
+			or not binding.get("llmBinding", {}) is Dictionary
+		):
+			return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+		seen_ids[resident_id] = true
+		normalized.append({
+			"residentId": resident_id,
+			"llmBinding": (
+				binding.get("llmBinding", {}) as Dictionary
+			).duplicate(true),
+		})
+	if seen_ids.size() != expected_ids.size():
+		return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+	normalized.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return String(a.get("residentId", "")) < String(b.get("residentId", ""))
+	)
+	var previous := (
+		_session_config.get("residentBindings", []) as Array
+	).duplicate(true)
+	_session_config["residentBindings"] = normalized.duplicate(true)
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"changed": normalized != previous,
+		"previousBindings": previous,
+		"residentBindings": normalized,
+	}
+
+
+func update_resident_roster(
+	identities_value: Variant,
+	bindings_value: Variant,
+	opening_config_value: Variant,
+) -> Dictionary:
+	if (
+		not identities_value is Array
+		or not bindings_value is Array
+		or not opening_config_value is Dictionary
+	):
+		return _failure("SESSION_RESIDENT_ROSTER_INVALID", false)
+	var identities := (identities_value as Array).duplicate(true)
+	var bindings := (bindings_value as Array).duplicate(true)
+	if identities.is_empty() or identities.size() != bindings.size():
+		return _failure("SESSION_RESIDENT_ROSTER_INVALID", false)
+	_session_config["residentIdentities"] = identities
+	_session_config["residentBindings"] = bindings
+	_session_config["openingConfig"] = (
+		opening_config_value as Dictionary
+	).duplicate(true)
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"changed": true,
+		"residentCount": identities.size(),
+	}
+
+
 func create_save(payload: Dictionary = {}) -> Dictionary:
 	var blocker := _save_blocker()
 	if not blocker.is_empty():

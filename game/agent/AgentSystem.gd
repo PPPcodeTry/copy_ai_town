@@ -476,6 +476,85 @@ func initialize_resident(
 	}
 
 
+func validate_resident_replacement(
+	initialization: Variant,
+	model_provider: Object,
+	photo_content_resolver: Object = null,
+) -> Dictionary:
+	var errors: Array[String] = AgentContractScript.validate_initialization(
+		initialization,
+	)
+	if not _session_open:
+		errors.append("Agent 会话已关闭")
+	if model_provider == null or not model_provider.has_method("request_decision"):
+		errors.append("model_provider 必须实现 request_decision")
+	if (
+		photo_content_resolver != null
+		and not photo_content_resolver.has_method("resolve_photo")
+	):
+		errors.append("photo_content_resolver 必须实现 resolve_photo")
+	if not errors.is_empty() or not initialization is Dictionary:
+		return {"ok": false, "errors": errors}
+	var initialization_data := initialization as Dictionary
+	var resident_id := String(
+		(initialization_data.get("me", {}) as Dictionary).get(
+			"resident_id",
+			"",
+		)
+	).strip_edges()
+	if resident_id.is_empty() or not _residents.has(resident_id):
+		return {"ok": false, "errors": ["找不到要接替的居民 Agent 席位"]}
+	# 在 World 改变生命状态之前构造一次完整运行时，确认严格
+	# Agent 合同、记忆上下文与模型适配都能接受新居民。
+	# 该运行时不接入会话，随局部引用释放，不会替换现有居民。
+	var resident_runtime := ResidentRuntimeScript.new(
+		initialization_data,
+		model_provider,
+		_memory_root,
+		photo_content_resolver,
+		_avatar_person_id,
+		_avatar_name,
+	)
+	var runtime_errors: Array = resident_runtime.get_initialization_errors()
+	if not runtime_errors.is_empty():
+		return {"ok": false, "errors": runtime_errors}
+	return {
+		"ok": true,
+		"resident_id": resident_id,
+		"resident_name": String(
+			(initialization_data.get("me", {}) as Dictionary)
+			.get("attributes", {})
+			.get("name", "")
+		),
+	}
+
+
+func replace_resident(
+	initialization: Variant,
+	model_provider: Object,
+	photo_content_resolver: Object = null,
+) -> Dictionary:
+	if not initialization is Dictionary:
+		return {"ok": false, "errors": ["新居民初始化资料无效"]}
+	var me := (initialization as Dictionary).get("me", {}) as Dictionary
+	var resident_id := String(me.get("resident_id", "")).strip_edges()
+	if not _session_open or resident_id.is_empty() or not _residents.has(resident_id):
+		return {"ok": false, "errors": ["找不到要接替的居民 Agent 席位"]}
+	var previous := _residents[resident_id] as AgentResidentRuntime
+	_residents.erase(resident_id)
+	var initialized := initialize_resident(
+		initialization,
+		model_provider,
+		photo_content_resolver,
+	) as Dictionary
+	if not bool(initialized.get("ok", false)):
+		_residents[resident_id] = previous
+		return initialized
+	_retired_residents.append(previous)
+	previous.retire(_release_retired_resident.bind(previous))
+	return initialized
+
+
 func configure_debug_runtime_storage(root: String) -> Dictionary:
 	return _configure_tool_runtime_storage(root, DEBUG_RUNTIME_ROOTS, "debug")
 

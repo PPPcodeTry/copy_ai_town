@@ -590,6 +590,63 @@ func get_ui_adapter() -> Node:
 	return _ui_adapter
 
 
+func update_resident_bindings(bindings_value: Variant) -> Dictionary:
+	if not bindings_value is Array:
+		return RESULT_SHAPES.failure("SESSION_LLM_BINDINGS_INVALID")
+	var expected_ids: Dictionary = {}
+	for identity_value: Variant in session_config.get("residentIdentities", []) as Array:
+		if not identity_value is Dictionary:
+			return RESULT_SHAPES.failure("SESSION_RESIDENT_IDENTITIES_INVALID")
+		var resident_id := String(
+			(identity_value as Dictionary).get("residentId", "")
+		).strip_edges()
+		if resident_id.is_empty() or expected_ids.has(resident_id):
+			return RESULT_SHAPES.failure("SESSION_RESIDENT_IDENTITIES_INVALID")
+		expected_ids[resident_id] = true
+	var seen_ids: Dictionary = {}
+	var normalized: Array[Dictionary] = []
+	for binding_value: Variant in bindings_value as Array:
+		if not binding_value is Dictionary:
+			return RESULT_SHAPES.failure("SESSION_LLM_BINDINGS_INVALID")
+		var binding := binding_value as Dictionary
+		var resident_id := String(binding.get("residentId", "")).strip_edges()
+		if (
+			resident_id.is_empty()
+			or not expected_ids.has(resident_id)
+			or seen_ids.has(resident_id)
+			or not binding.get("llmBinding", {}) is Dictionary
+		):
+			return RESULT_SHAPES.failure("SESSION_LLM_BINDINGS_INVALID")
+		seen_ids[resident_id] = true
+		normalized.append({
+			"residentId": resident_id,
+			"llmBinding": (
+				binding.get("llmBinding", {}) as Dictionary
+			).duplicate(true),
+		})
+	if seen_ids.size() != expected_ids.size():
+		return RESULT_SHAPES.failure("SESSION_LLM_BINDINGS_INVALID")
+	normalized.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return String(a.get("residentId", "")) < String(b.get("residentId", ""))
+	)
+	var previous := (session_config.get("residentBindings", []) as Array).duplicate(true)
+	session_config["residentBindings"] = normalized.duplicate(true)
+	if _ui_adapter != null and _ui_adapter.has_method(
+		"update_session_resident_bindings"
+	):
+		_ui_adapter.update_session_resident_bindings(
+			normalized.duplicate(true),
+		)
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"changed": normalized != previous,
+		"previousBindings": previous,
+		"residentBindings": normalized,
+	}
+
+
 func configure_agent_gateway(gateway: Node) -> Dictionary:
 	if is_inside_tree():
 		return _local_command_failure(
@@ -798,6 +855,84 @@ func get_resident_identity_snapshot() -> Dictionary:
 			_world.get_resident_identity_snapshot() as Dictionary
 		).duplicate(true)
 	return _resident_identity_snapshot_from_local_map()
+
+
+func update_resident_roster(
+	identities_value: Variant,
+	bindings_value: Variant,
+	opening_config_value: Variant,
+) -> Dictionary:
+	if (
+		not identities_value is Array
+		or not bindings_value is Array
+		or not opening_config_value is Dictionary
+	):
+		return _local_command_failure(
+			"SESSION_RESIDENT_ROSTER_INVALID",
+			"新居民资料无效",
+		)
+	var identities := (identities_value as Array).duplicate(true)
+	var bindings := (bindings_value as Array).duplicate(true)
+	if identities.is_empty() or identities.size() != bindings.size():
+		return _local_command_failure(
+			"SESSION_RESIDENT_ROSTER_INVALID",
+			"居民身份与模型绑定数量不一致",
+		)
+	session_config["residentIdentities"] = identities
+	session_config["residentBindings"] = bindings
+	session_config["openingConfig"] = (
+		opening_config_value as Dictionary
+	).duplicate(true)
+	var replacement_resident_ids: Array[String] = []
+	for identity_value: Variant in identities:
+		if not identity_value is Dictionary:
+			continue
+		var identity := identity_value as Dictionary
+		var resident_id := String(identity.get("residentId", ""))
+		var resident_name := String(identity.get("residentName", ""))
+		if (
+			_resident_name_by_id.has(resident_id)
+			and String(_resident_name_by_id.get(resident_id, ""))
+			!= resident_name
+		):
+			replacement_resident_ids.append(resident_id)
+	_apply_resident_identities({
+		"status": "confirmed",
+		"residents": identities,
+	})
+	# 补位复用原住宅席位的 residentId，对应角色节点也会复用。
+	# 死亡消散结束后该节点是隐藏的，因此名单更新时必须用最新
+	# World 状态强制同步一次，让 normal 生命周期恢复立绘和位置。
+	if (
+		_resident_presentation != null
+		and _resident_presentation.has_method("sync_from_world")
+	):
+		for resident_id: String in replacement_resident_ids:
+			var prepared := _resident_presentation.prepare_resident_replacement(
+				resident_id,
+			) as Dictionary
+			if not bool(prepared.get("ok", false)):
+				return _local_command_failure(
+					"SESSION_RESIDENT_PRESENTATION_RESET_FAILED",
+					"新居民已入镇，但地图角色无法重置",
+				)
+		var presentation_result := _resident_presentation.sync_from_world(
+			true,
+		) as Dictionary
+		if not bool(presentation_result.get("ok", false)):
+			return _local_command_failure(
+				"SESSION_RESIDENT_PRESENTATION_REFRESH_FAILED",
+				"新居民已入镇，但地图角色刷新失败：%s" % JSON.stringify(
+					presentation_result,
+				),
+			)
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"changed": true,
+		"residentCount": identities.size(),
+	}
 
 
 func _resident_identity_snapshot_from_local_map() -> Dictionary:

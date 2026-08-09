@@ -1140,6 +1140,26 @@ func is_death_dissolve_active() -> bool:
 	return _death_visual_active
 
 
+func prepare_for_resident_replacement() -> void:
+	# 补位居民复用稳定席位 ID，但是一个全新的身份。旧居民
+	# 死亡前累积的移动修订号不能用来拒绝新居民的初始位置。
+	_authority_revision = -1
+	_movement_revision = -1
+	_applied_appearance = ""
+	_apply_lifecycle_appearance({
+		"lifecycle": {"appearancePolicy": "normal"},
+	})
+	_authority_action_token = ""
+	velocity = Vector2.ZERO
+	_has_navigation_target = false
+	_authority_route_active = false
+	_navigation_path.clear()
+	_target_position = position
+	_authority_position = position
+	_reset_target_progress()
+	_reset_local_avoidance()
+
+
 func _begin_death_visual() -> void:
 	if _death_visual_active or _death_finished_emitted:
 		return

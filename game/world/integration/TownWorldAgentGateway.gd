@@ -942,6 +942,180 @@ func get_resident_debug_snapshot(resident_id: String) -> Dictionary:
 	return snapshot
 
 
+func get_resident_bindings() -> Array[Dictionary]:
+	var bindings: Array[Dictionary] = []
+	for identity in _resident_identities:
+		var resident_id := String(identity.get("residentId", ""))
+		var binding := _bindings_by_id.get(resident_id, {}) as Dictionary
+		bindings.append({
+			"residentId": resident_id,
+			"llmBinding": (
+				binding.get("llmBinding", {}) as Dictionary
+			).duplicate(true),
+		})
+	return bindings
+
+
+func update_resident_bindings(bindings_value: Variant) -> Dictionary:
+	if not _session_active:
+		return _failure("AGENT_GATEWAY_SESSION_INACTIVE", false)
+	var normalized := _normalize_bindings(
+		bindings_value,
+		_resident_identities,
+	)
+	if not bool(normalized.get("ok", false)):
+		return normalized
+	if (
+		_provider_service == null
+		or not _provider_service.has_method("validate_resident_bindings")
+	):
+		return _failure("PROVIDER_SERVICE_CONTRACT_MISSING", false)
+	var validation := _provider_service.validate_resident_bindings(
+		bindings_value,
+	) as Dictionary
+	if not bool(validation.get("ok", false)):
+		return validation
+	var previous := get_resident_bindings()
+	_bindings_by_id = (
+		normalized.get("bindingsById", {}) as Dictionary
+	).duplicate(true)
+	var current := get_resident_bindings()
+	_session_config["residentBindings"] = current.duplicate(true)
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"changed": current != previous,
+		"previousBindings": previous,
+		"residentBindings": current,
+	}
+
+
+func preflight_replacement_resident(
+	identity_value: Variant,
+	binding_value: Variant,
+	initialization_value: Variant,
+) -> Dictionary:
+	if not _session_active or _world == null:
+		return _failure("AGENT_GATEWAY_SESSION_INACTIVE", false)
+	if (
+		not identity_value is Dictionary
+		or not binding_value is Dictionary
+		or not initialization_value is Dictionary
+	):
+		return _failure("RESIDENT_REPLACEMENT_AGENT_INPUT_INVALID", false)
+	var identity := identity_value as Dictionary
+	var binding := binding_value as Dictionary
+	var initialization := initialization_value as Dictionary
+	var resident_id := String(identity.get("residentId", "")).strip_edges()
+	var resident_name := String(identity.get("residentName", "")).strip_edges()
+	var me := initialization.get("me", {}) as Dictionary
+	var initialization_attributes := me.get("attributes", {}) as Dictionary
+	if (
+		resident_id.is_empty()
+		or resident_name.is_empty()
+		or not _connected_resident_ids.has(resident_id)
+		or String(binding.get("residentId", "")) != resident_id
+		or not binding.get("llmBinding", {}) is Dictionary
+		or String(me.get("resident_id", "")) != resident_id
+		or String(initialization_attributes.get("name", "")) != resident_name
+	):
+		return _failure("RESIDENT_REPLACEMENT_AGENT_INPUT_INVALID", false)
+	var provider_result := _provider_service.create_provider_for_resident(
+		binding,
+	) as Dictionary
+	if not bool(provider_result.get("ok", false)):
+		return _normalized_failure(
+			provider_result,
+			"LLM_MODEL_PROVIDER_CREATION_FAILED",
+		)
+	if not _agent_system.has_method("validate_resident_replacement"):
+		return _failure("AGENT_REPLACEMENT_PREFLIGHT_UNAVAILABLE", false)
+	var validated := _agent_system.validate_resident_replacement(
+		initialization.duplicate(true),
+		provider_result.get("provider"),
+		_photo_store,
+	) as Dictionary
+	if not bool(validated.get("ok", false)):
+		return _agent_stage_failure(
+			"AGENT_RESIDENT_INITIALIZATION_FAILED",
+			"preflight_resident",
+			resident_id,
+			validated,
+		)
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"residentId": resident_id,
+	}
+
+
+func admit_replacement_resident(
+	identity_value: Variant,
+	binding_value: Variant,
+) -> Dictionary:
+	if not _session_active or _world == null:
+		return _failure("AGENT_GATEWAY_SESSION_INACTIVE", false)
+	if not identity_value is Dictionary or not binding_value is Dictionary:
+		return _failure("RESIDENT_REPLACEMENT_AGENT_INPUT_INVALID", false)
+	var identity := (identity_value as Dictionary).duplicate(true)
+	var resident_id := String(identity.get("residentId", "")).strip_edges()
+	var resident_name := String(identity.get("residentName", "")).strip_edges()
+	var binding := (binding_value as Dictionary).duplicate(true)
+	if (
+		resident_id.is_empty()
+		or resident_name.is_empty()
+		or not _connected_resident_ids.has(resident_id)
+		or String(binding.get("residentId", "")) != resident_id
+		or not binding.get("llmBinding", {}) is Dictionary
+	):
+		return _failure("RESIDENT_REPLACEMENT_AGENT_INPUT_INVALID", false)
+	var initialization := _world.get_agent_initialization_by_id(resident_id) as Dictionary
+	if initialization.is_empty():
+		return _failure("WORLD_AGENT_INITIALIZATION_MISSING", false)
+	var provider_result := _provider_service.create_provider_for_resident(
+		binding,
+	) as Dictionary
+	if not bool(provider_result.get("ok", false)):
+		return _normalized_failure(
+			provider_result,
+			"LLM_MODEL_PROVIDER_CREATION_FAILED",
+		)
+	var initialized := _agent_system.replace_resident(
+		initialization,
+		provider_result.get("provider"),
+		_photo_store,
+	) as Dictionary
+	if not bool(initialized.get("ok", false)):
+		return _agent_stage_failure(
+			"AGENT_RESIDENT_INITIALIZATION_FAILED",
+			"initialize_resident",
+			resident_id,
+			initialized,
+		)
+	for identity_index in _resident_identities.size():
+		if String(_resident_identities[identity_index].get("residentId", "")) == resident_id:
+			_resident_identities[identity_index] = identity
+			break
+	_resident_identities.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return String(a.get("residentId", "")) < String(b.get("residentId", ""))
+	)
+	binding["residentName"] = resident_name
+	_bindings_by_id[resident_id] = binding
+	_rebuild_identity_maps()
+	_session_config["residentIdentities"] = _resident_identities.duplicate(true)
+	_session_config["residentBindings"] = get_resident_bindings()
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"changed": true,
+		"residentId": resident_id,
+		"residentCount": _connected_resident_ids.size(),
+	}
+
+
 func get_debug_inflight_count() -> int:
 	return _inflight.size()
 
