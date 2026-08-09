@@ -43,6 +43,8 @@ const EDITABLE_FIELDS: Array[String] = [
 	"interests",
 	"customInterests",
 	"occupationId",
+	"workplaceId",
+	"ownedPlaceId",
 ]
 const INTENT_TO_ACTION := {
 	"resident_profile_editor.update_fields": "updateFields",
@@ -156,7 +158,7 @@ func get_view_model() -> Dictionary:
 			"resolvedAppearance": _resolved_appearance.duplicate(true),
 			"options": _options.duplicate(true),
 			"editableFields": EDITABLE_FIELDS.duplicate(),
-			"readOnlyFields": ["name", "workplaceId", "ownedPlaceId"],
+			"readOnlyFields": ["name"],
 			"validation": validation,
 		},
 		"actions": _actions(validation),
@@ -446,6 +448,22 @@ func _update_fields(fields: Dictionary) -> Dictionary:
 				if workplace_id.is_empty():
 					return _failure("RESIDENT_PROFILE_WORKPLACE_UNKNOWN")
 				next["workplaceId"] = workplace_id
+			"workplaceId":
+				var selected_workplace_id := String(fields[key]).strip_edges()
+				if not _option_has_id(
+					_options.get("workplaces", []) as Array,
+					selected_workplace_id,
+				):
+					return _failure("RESIDENT_PROFILE_WORKPLACE_UNKNOWN")
+				next[key] = selected_workplace_id
+			"ownedPlaceId":
+				var owned_place_id := String(fields[key]).strip_edges()
+				if not _option_has_id(
+					_options.get("ownedPlaces", []) as Array,
+					owned_place_id,
+				):
+					return _failure("RESIDENT_PROFILE_HOME_UNKNOWN")
+				next[key] = owned_place_id
 			"interests":
 				var interest_values := INTERESTS.normalize(fields[key])
 				var interest_error := INTERESTS.profile_validation_error(
