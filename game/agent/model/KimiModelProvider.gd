@@ -5,21 +5,18 @@ extends "res://agent/model/OpenAICompatibleModelProvider.gd"
 const DEFAULT_ENDPOINT := "https://api.moonshot.cn/v1/chat/completions"
 const K2_5_MODEL := "kimi-k2.5"
 const K2_6_MODEL := "kimi-k2.6"
-const K2_7_CODE_MODEL := "kimi-k2.7-code"
 const K2_7_CODE_HIGHSPEED_MODEL := "kimi-k2.7-code-highspeed"
 const K3_MODEL := "kimi-k3"
 const DEFAULT_MODEL := K3_MODEL
 const MODEL_DESCRIPTORS := [
 	{"id": K2_5_MODEL, "label": "Kimi K2.5", "deprecated": true, "input_modalities": ["text", "image"]},
 	{"id": K2_6_MODEL, "label": "Kimi K2.6", "input_modalities": ["text", "image"]},
-	{"id": K2_7_CODE_MODEL, "label": "Kimi K2.7 Code", "input_modalities": ["text", "image"]},
 	{"id": K2_7_CODE_HIGHSPEED_MODEL, "label": "Kimi K2.7 Code Highspeed", "input_modalities": ["text", "image"]},
 	{"id": K3_MODEL, "label": "Kimi K3", "input_modalities": ["text", "image"]},
 ]
 const MODEL_OUTPUT_BUDGETS := {
 	K2_5_MODEL: 32768,
 	K2_6_MODEL: 32768,
-	K2_7_CODE_MODEL: 32768,
 	K2_7_CODE_HIGHSPEED_MODEL: 32768,
 	K3_MODEL: 32768,
 }
@@ -72,11 +69,11 @@ func _provider_request_options() -> Dictionary:
 				"thinking": {"type": String(_config.get("thinking_type", "disabled"))},
 				"response_format": {"type": "json_object"},
 			}
-		K2_7_CODE_MODEL, K2_7_CODE_HIGHSPEED_MODEL:
+		K2_7_CODE_HIGHSPEED_MODEL:
 			return {"response_format": {"type": "json_object"}}
 		K3_MODEL:
 			return {
-				"reasoning_effort": "max",
+				"reasoning_effort": "low",
 				"response_format": {"type": "json_object"},
 			}
 	return {}

@@ -17,8 +17,9 @@ const QUIT_GAME_INTENT := &"startup.quit_game"
 const RESIDENT_MESSAGES_SHOWN_INTENT := &"startup.resident_messages_shown"
 const UiNodeRetirement := preload("res://ui/common/AiTownUiNodeRetirement.gd")
 
-const TOWN_MAP_TEXTURE_PATH := "res://world/maps/town/assets/town.png"
-const TOWN_RUNTIME_LAYERS_PATH := "res://world/maps/town/generated/layers.tscn"
+const STARTUP_BACKGROUND_TEXTURE_PATH := (
+	"res://assets/ui/startup/final/startup_town_background.png"
+)
 const STARTUP_TITLE_PATH := "res://assets/ui/startup/final/startup_title_sign.png"
 const STARTUP_COMPONENT_DIR := "res://assets/ui/startup/final/components_v1"
 const STARTUP_EXACT_COMPONENT_DIR := (
@@ -47,27 +48,11 @@ const RESIDENT_MESSAGE_CLOSE_BUTTON_PATH := (
 const STARTUP_BUTTON_THEME := preload(
 	"res://ui/startup/StartupButtonImageTheme.gd"
 )
-const AMBIENT_RESIDENT_SCRIPT_PATH := (
-	"res://ui/startup/StartupAmbientResident.gd"
-)
-const AMBIENT_ROUTE_CATALOG_SCRIPT := preload(
-	"res://ui/startup/StartupAmbientRouteCatalog.gd"
-)
 
 const REFERENCE_VIEWPORT := Vector2(1920.0, 1080.0)
 const MAIN_MENU_SCALE := 0.86
 const MAIN_MENU_PIVOT := Vector2(960.0, 570.0)
-const WORLD_MAP_SIZE := Vector2(6688.0, 3764.0)
-const STARTUP_OCCLUSION_GROUP := &"startup_map_occlusion_subject"
-const STARTUP_AMBIENT_RESIDENT_VISUALS_ENABLED := false
-const AMBIENT_LOADOUTS: Array[String] = [
-	"elder_man",
-	"skirt_woman",
-	"suit_man",
-	"neutral_hoodie",
-	"energetic_ponytail",
-	"street_creator",
-]
+const STARTUP_BACKGROUND_SIZE := Vector2(1920.0, 1080.0)
 const DAY_CYCLE_SECONDS := 48.0
 const WEATHER_BLEND_SPEED := 0.50
 const WEATHER_NAMES: Array[String] = ["晴天", "雨天", "雪天", "雷暴"]
@@ -162,14 +147,20 @@ void fragment() {
 	float rain_on = clamp(rain_intensity + storm_on, 0.0, 1.0);
 	float snow_on = clamp(snow_intensity, 0.0, 1.0);
 
-	float rain = rain_layer(UV, 1.0, 15.0, 0.0) * 0.66;
-	rain += rain_layer(UV, 1.45, 21.0, 17.0) * 0.34;
-	rain *= rain_on;
+	float rain = 0.0;
+	if (rain_on > 0.001) {
+		rain = rain_layer(UV, 1.0, 15.0, 0.0) * 0.66;
+		rain += rain_layer(UV, 1.45, 21.0, 17.0) * 0.34;
+		rain *= rain_on;
+	}
 
-	float snow = snow_layer(UV, 0.75, 1.25, 4.0) * 0.48;
-	snow += snow_layer(UV, 1.15, 1.75, 19.0) * 0.36;
-	snow += snow_layer(UV, 1.60, 2.20, 37.0) * 0.22;
-	snow *= snow_on;
+	float snow = 0.0;
+	if (snow_on > 0.001) {
+		snow = snow_layer(UV, 0.75, 1.25, 4.0) * 0.48;
+		snow += snow_layer(UV, 1.15, 1.75, 19.0) * 0.36;
+		snow += snow_layer(UV, 1.60, 2.20, 37.0) * 0.22;
+		snow *= snow_on;
+	}
 
 	float bad_weather = max(rain_on, snow_on);
 	vec3 shade = mix(vec3(0.18, 0.24, 0.30), vec3(0.09, 0.13, 0.20), storm_on);
@@ -188,9 +179,8 @@ void fragment() {
 
 var _background_material: ShaderMaterial
 var _weather_material: ShaderMaterial
-var _ambient_world: Node2D
-var _ambient_resident_layer: Node2D
-var _ambient_residents: Array[Node] = []
+var _weather_overlay: ColorRect
+var _background_preview: Node2D
 var _save_summary_label: Label
 var _continue_button: Button
 var _new_game_button: Button
@@ -241,7 +231,6 @@ func _process(delta: float) -> void:
 	_weather_elapsed += delta
 	var cycle := fmod(_elapsed / DAY_CYCLE_SECONDS, 1.0)
 	_background_material.set_shader_parameter("day_cycle", cycle)
-	_ambient_resident_layer.modulate = _day_modulate(cycle)
 	_weather_material.set_shader_parameter("weather_time", _elapsed)
 	_update_weather_blend(delta)
 
@@ -260,11 +249,6 @@ func _process(delta: float) -> void:
 			_lightning_wait = _rng.randf_range(2.8, 4.8)
 	_lightning_flash = move_toward(_lightning_flash, 0.0, delta * 4.8)
 	_weather_material.set_shader_parameter("lightning_flash", _lightning_flash)
-
-
-func _physics_process(delta: float) -> void:
-	for resident in _ambient_residents:
-		resident.call("advance", delta)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -292,210 +276,53 @@ func _build_background() -> void:
 	background_shader.code = BACKGROUND_SHADER_CODE
 	_background_material = ShaderMaterial.new()
 	_background_material.shader = background_shader
-	_build_formal_town_world()
-	_build_ambient_residents()
+	_build_startup_background()
 
-	var weather_overlay := ColorRect.new()
-	weather_overlay.name = "WeatherOverlay"
-	weather_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	weather_overlay.color = Color.WHITE
-	weather_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	weather_overlay.z_index = 500
+	_weather_overlay = ColorRect.new()
+	_weather_overlay.name = "WeatherOverlay"
+	_weather_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_weather_overlay.color = Color.WHITE
+	_weather_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_weather_overlay.z_index = 500
 	var weather_shader := Shader.new()
 	weather_shader.code = WEATHER_SHADER_CODE
 	_weather_material = ShaderMaterial.new()
 	_weather_material.shader = weather_shader
-	weather_overlay.material = _weather_material
-	add_child(weather_overlay)
-	resized.connect(_layout_ambient_world)
-	_layout_ambient_world()
+	_weather_overlay.material = _weather_material
+	add_child(_weather_overlay)
+	resized.connect(_layout_startup_background)
+	_layout_startup_background()
 
 
-func _build_formal_town_world() -> void:
-	_ambient_world = Node2D.new()
-	_ambient_world.name = "FormalTownPreview"
-	add_child(_ambient_world)
+func _build_startup_background() -> void:
+	_background_preview = Node2D.new()
+	_background_preview.name = "StartupTownPreview"
+	add_child(_background_preview)
 
 	var town_map := Sprite2D.new()
 	town_map.name = "TownMap"
 	town_map.centered = false
-	town_map.texture = _load_texture(TOWN_MAP_TEXTURE_PATH)
+	town_map.texture = _load_texture(STARTUP_BACKGROUND_TEXTURE_PATH)
 	town_map.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	town_map.material = _background_material
 	town_map.z_index = -200
-	_ambient_world.add_child(town_map)
-
-	if ResourceLoader.exists(TOWN_RUNTIME_LAYERS_PATH, "PackedScene"):
-		var layers_scene := ResourceLoader.load(
-			TOWN_RUNTIME_LAYERS_PATH,
-			"PackedScene"
-		) as PackedScene
-		if layers_scene != null:
-			var runtime_layers := layers_scene.instantiate()
-			runtime_layers.name = "FormalRuntimeLayers"
-			_ambient_world.add_child(runtime_layers)
-			var occlusion := runtime_layers.get_node_or_null("Occlusion")
-			if occlusion != null:
-				occlusion.set("subject_group", STARTUP_OCCLUSION_GROUP)
-				for child in occlusion.get_children():
-					if child is Polygon2D:
-						(child as Polygon2D).material = _background_material
-	else:
-		push_error("启动页缺少正式地图运行层：%s" % TOWN_RUNTIME_LAYERS_PATH)
-
-	_ambient_resident_layer = Node2D.new()
-	_ambient_resident_layer.name = "AmbientResidentLayer"
-	_ambient_resident_layer.y_sort_enabled = true
-	_ambient_world.add_child(_ambient_resident_layer)
+	_background_preview.add_child(town_map)
 
 
-func _build_ambient_residents() -> void:
-	_ambient_residents.clear()
-	if _ambient_resident_layer == null:
-		return
-	# The temporary paper-doll walkers are not part of the approved title
-	# screen. Keep the route, movement, occlusion and spawning implementation
-	# dormant so formal character assets can take over this same integration
-	# point later without showing placeholder residents in the meantime.
-	if not STARTUP_AMBIENT_RESIDENT_VISUALS_ENABLED:
-		return
-	var ambient_resident_script := load(
-		AMBIENT_RESIDENT_SCRIPT_PATH
-	) as Script
-	if ambient_resident_script == null:
-		return
-	var route_catalog := AMBIENT_ROUTE_CATALOG_SCRIPT.new()
-	if not bool(route_catalog.call("load_catalog")):
-		return
-	var definitions: Array[Dictionary] = [
-		{
-			"name": "WestHomeLoopWalker",
-			"nodes": PackedStringArray([
-				"junction_west_middle", "portal_home_05_outside",
-				"junction_west_middle", "junction_west_north",
-				"junction_library_south", "junction_plaza_west",
-				"junction_west_middle",
-			]),
-			"indoor": {"portal_home_05_outside": Vector2(4.0, 8.0)},
-			"speed": 30.0,
-			"scale": 0.58,
-		},
-		{
-			"name": "TownServiceLoopWalker",
-			"nodes": PackedStringArray([
-				"junction_north_center", "portal_town_hall_outside",
-				"junction_north_center", "junction_clinic_south",
-				"portal_clinic_outside", "junction_clinic_south",
-				"junction_plaza_east", "junction_north_center",
-			]),
-			"indoor": {
-				"portal_town_hall_outside": Vector2(5.0, 9.0),
-				"portal_clinic_outside": Vector2(4.0, 7.0),
-			},
-			"speed": 33.0,
-			"scale": 0.62,
-		},
-		{
-			"name": "GardenCafeLoopWalker",
-			"nodes": PackedStringArray([
-				"junction_garden_east", "portal_home_14_outside",
-				"junction_garden_east", "junction_southeast",
-				"junction_south_east", "portal_cafe_outside",
-				"junction_south_east", "junction_garden_south",
-				"junction_garden_east",
-			]),
-			"indoor": {
-				"portal_home_14_outside": Vector2(4.0, 8.0),
-				"portal_cafe_outside": Vector2(5.0, 10.0),
-			},
-			"speed": 29.0,
-			"scale": 0.60,
-		},
-		{
-			"name": "HarborWorkLoopWalker",
-			"nodes": PackedStringArray([
-				"junction_harbor_north", "portal_workshop_outside",
-				"junction_harbor_north", "portal_dock_warehouse_outside",
-				"junction_harbor_center", "junction_south_east",
-				"junction_southeast", "junction_harbor_north",
-			]),
-			"indoor": {
-				"portal_workshop_outside": Vector2(4.0, 8.0),
-				"portal_dock_warehouse_outside": Vector2(6.0, 11.0),
-			},
-			"speed": 30.0,
-			"scale": 0.64,
-		},
-		{
-			"name": "SouthHomeLoopWalker",
-			"nodes": PackedStringArray([
-				"junction_south_west", "portal_home_10_outside",
-				"junction_south_west", "portal_home_09_outside",
-				"junction_south_west", "junction_south_center",
-				"portal_home_12_outside", "junction_south_center",
-				"junction_south_west",
-			]),
-			"indoor": {
-				"portal_home_10_outside": Vector2(4.0, 7.0),
-				"portal_home_09_outside": Vector2(4.0, 8.0),
-				"portal_home_12_outside": Vector2(5.0, 9.0),
-			},
-			"speed": 35.0,
-			"scale": 0.60,
-		},
-	]
-	var available_definitions := definitions.duplicate(true)
-	var available_loadouts := AMBIENT_LOADOUTS.duplicate()
-	var resident_count := _rng.randi_range(4, definitions.size())
-	var reference_scale := REFERENCE_VIEWPORT.x / WORLD_MAP_SIZE.x
-	for index in range(resident_count):
-		var definition_index := _rng.randi_range(0, available_definitions.size() - 1)
-		var definition := available_definitions.pop_at(definition_index) as Dictionary
-		var route_nodes := (definition["nodes"] as PackedStringArray).duplicate()
-		if _rng.randf() < 0.5:
-			route_nodes.reverse()
-		var route_steps: Array[Dictionary] = []
-		var built_steps: Array = route_catalog.call(
-			"build_loop_script",
-			route_nodes,
-			definition["indoor"] as Dictionary,
-		)
-		for step_value: Variant in built_steps:
-			route_steps.append((step_value as Dictionary).duplicate(true))
-		if route_steps.is_empty():
-			continue
-		var resident := ambient_resident_script.new() as Node
-		if resident == null:
-			continue
-		resident.name = "%s_%02d" % [String(definition["name"]), index + 1]
-		var loadout_index := _rng.randi_range(0, available_loadouts.size() - 1)
-		var loadout_id := String(available_loadouts.pop_at(loadout_index))
-		resident.call(
-			"configure",
-			loadout_id,
-			route_steps,
-			float(definition["speed"]) / reference_scale * _rng.randf_range(0.92, 1.08),
-			float(definition["scale"]) / reference_scale * _rng.randf_range(0.96, 1.04),
-			_rng.randi(),
-			_rng.randf_range(0.0, 1.2),
-		)
-		resident.add_to_group(STARTUP_OCCLUSION_GROUP)
-		_ambient_resident_layer.add_child(resident)
-		_ambient_residents.append(resident)
-
-
-func _layout_ambient_world() -> void:
-	if _ambient_world == null:
+func _layout_startup_background() -> void:
+	if _background_preview == null:
 		return
 	var viewport_size := size
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		viewport_size = get_viewport_rect().size
 	var cover_scale := maxf(
-		viewport_size.x / WORLD_MAP_SIZE.x,
-		viewport_size.y / WORLD_MAP_SIZE.y
+		viewport_size.x / STARTUP_BACKGROUND_SIZE.x,
+		viewport_size.y / STARTUP_BACKGROUND_SIZE.y
 	)
-	_ambient_world.scale = Vector2.ONE * cover_scale
-	_ambient_world.position = (viewport_size - WORLD_MAP_SIZE * cover_scale) * 0.5
+	_background_preview.scale = Vector2.ONE * cover_scale
+	_background_preview.position = (
+		viewport_size - STARTUP_BACKGROUND_SIZE * cover_scale
+	) * 0.5
 
 
 func _build_interface() -> void:
@@ -788,21 +615,11 @@ func _sync_weather_shader() -> void:
 	_weather_material.set_shader_parameter("rain_intensity", _rain_intensity)
 	_weather_material.set_shader_parameter("snow_intensity", _snow_intensity)
 	_weather_material.set_shader_parameter("storm_intensity", _storm_intensity)
-
-
-func _day_modulate(cycle: float) -> Color:
-	var phase_colors: Array[Color] = [
-		Color(1.0, 1.0, 1.0),
-		Color(0.94, 0.72, 0.56),
-		Color(0.42, 0.52, 0.72),
-		Color(0.74, 0.64, 0.80),
-		Color(1.0, 1.0, 1.0),
-	]
-	var scaled_cycle := fposmod(cycle, 1.0) * 4.0
-	var phase_index := clampi(floori(scaled_cycle), 0, 3)
-	var phase_progress := scaled_cycle - float(phase_index)
-	var smoothed := phase_progress * phase_progress * (3.0 - 2.0 * phase_progress)
-	return phase_colors[phase_index].lerp(phase_colors[phase_index + 1], smoothed)
+	if _weather_overlay != null:
+		_weather_overlay.visible = maxf(
+			_rain_intensity,
+			maxf(_snow_intensity, _storm_intensity),
+		) > 0.001
 
 
 func _show_notice(message: String) -> void:
@@ -1778,7 +1595,3 @@ func force_weather(weather_index: int) -> void:
 	_lightning_flashes_remaining = _rng.randi_range(1, 2) if _weather_index == 3 else 0
 	_lightning_flash = 0.0
 	_set_weather_blend_immediate()
-
-
-func get_ambient_resident_count() -> int:
-	return _ambient_residents.size()

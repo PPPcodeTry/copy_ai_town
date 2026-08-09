@@ -593,6 +593,7 @@ func _rebuild_layout() -> void:
 	var viewport_size := get_viewport_rect().size
 	if viewport_size.x <= 0 or viewport_size.y <= 0:
 		return
+	var input_focus_state := _capture_input_focus_state()
 	_layout_profile = _profile_for(viewport_size)
 	if is_instance_valid(_layout_root):
 		UiNodeRetirement.retire(_layout_root)
@@ -610,7 +611,7 @@ func _rebuild_layout() -> void:
 	if _use_composite_desktop(viewport_size):
 		_rebuild_composite_desktop(viewport_size)
 		_refresh_operation_state()
-		call_deferred("_focus_initial_control")
+		_schedule_focus_after_rebuild(input_focus_state)
 		return
 	_layout_root = MarginContainer.new()
 	_layout_root.name = "ResponsiveSafeMargin"
@@ -684,7 +685,61 @@ func _rebuild_layout() -> void:
 	page.add_child(separator)
 	page.add_child(_build_main())
 	_refresh_operation_state()
-	call_deferred("_focus_initial_control")
+	_schedule_focus_after_rebuild(input_focus_state)
+
+
+func _capture_input_focus_state() -> Dictionary:
+	if not is_inside_tree():
+		return {}
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	var field := ""
+	if focus_owner == _key_edit:
+		field = "api_key"
+	elif focus_owner == _base_url_edit:
+		field = "base_url"
+	if field.is_empty() or not focus_owner is LineEdit:
+		return {}
+	var edit := focus_owner as LineEdit
+	var state := {
+		"field": field,
+		"caretColumn": edit.get_caret_column(),
+		"hasSelection": edit.has_selection(),
+	}
+	if edit.has_selection():
+		state["selectionFrom"] = edit.get_selection_from_column()
+		state["selectionTo"] = edit.get_selection_to_column()
+	return state
+
+
+func _schedule_focus_after_rebuild(input_focus_state: Dictionary) -> void:
+	if input_focus_state.is_empty():
+		call_deferred("_focus_initial_control")
+		return
+	call_deferred("_restore_input_focus_state", input_focus_state)
+
+
+func _restore_input_focus_state(input_focus_state: Dictionary) -> void:
+	if not is_inside_tree() or not is_instance_valid(_layout_root):
+		return
+	var edit := (
+		_key_edit
+		if String(input_focus_state.get("field", "")) == "api_key"
+		else _base_url_edit
+	)
+	if edit == null or not edit.is_visible_in_tree() or not edit.editable:
+		_focus_initial_control()
+		return
+	edit.grab_focus()
+	edit.set_caret_column(clampi(
+		int(input_focus_state.get("caretColumn", edit.text.length())),
+		0,
+		edit.text.length(),
+	))
+	if bool(input_focus_state.get("hasSelection", false)):
+		edit.select(
+			clampi(int(input_focus_state.get("selectionFrom", 0)), 0, edit.text.length()),
+			clampi(int(input_focus_state.get("selectionTo", 0)), 0, edit.text.length()),
+		)
 
 
 func _use_composite_desktop(viewport_size: Vector2) -> bool:
@@ -1513,11 +1568,7 @@ func _build_base_url_section(provider: Dictionary) -> Control:
 	column.add_child(row)
 	_base_url_edit = LineEdit.new()
 	_base_url_edit.name = "BaseUrlInput"
-	_base_url_edit.text = (
-		_draft_base_url
-		if not _draft_base_url.is_empty()
-		else str(provider.get("baseUrl", ""))
-	)
+	_base_url_edit.text = _draft_base_url
 	_base_url_edit.placeholder_text = "留空使用官方默认地址"
 	_base_url_edit.custom_minimum_size = Vector2(
 		220 if _is_phone_profile() else 320,
@@ -2594,9 +2645,11 @@ func _detail_scroll_range() -> float:
 
 
 func _safe_insets(viewport_size: Vector2) -> Vector4:
-	var override := OS.get_environment(
-		"AI_TOWN_PROVIDER_SAFE_INSETS"
-	)
+	var override := ""
+	if OS.is_debug_build():
+		override = OS.get_environment(
+			"AI_TOWN_PROVIDER_SAFE_INSETS"
+		)
 	if not override.is_empty():
 		var parts := override.split(",")
 		if parts.size() == 4:

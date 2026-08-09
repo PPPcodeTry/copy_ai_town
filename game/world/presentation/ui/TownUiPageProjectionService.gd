@@ -2173,6 +2173,22 @@ func _resident_overview_options(
 			and workplace_label not in workplace_labels
 		):
 			workplace_labels.append(workplace_label)
+	if _world != null and _world.has_method("get_all_place_details"):
+		for place_value: Variant in _world.get_all_place_details() as Array:
+			if not place_value is Dictionary:
+				continue
+			var place := place_value as Dictionary
+			var place_name := String(place.get("name", "")).strip_edges()
+			var place_type := String(place.get("type", "")).strip_edges()
+			if place_name.is_empty():
+				continue
+			if place_type == "住家" and place_name not in home_labels:
+				home_labels.append(place_name)
+			elif (
+				place_type in ["铺面", "公共地点"]
+				and place_name not in workplace_labels
+			):
+				workplace_labels.append(place_name)
 	home_labels.sort()
 	occupation_labels.sort()
 	workplace_labels.sort()

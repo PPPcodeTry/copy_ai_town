@@ -6,18 +6,32 @@ const AMBIENCE_MIX_RATE := 24000
 const AMBIENCE_SECONDS := 8.0
 
 
-static func build_cues(mix_rate: int = DEFAULT_MIX_RATE) -> Dictionary:
+static func build_cues(
+	mix_rate: int = DEFAULT_MIX_RATE,
+	cue_ids: Array = [],
+) -> Dictionary:
 	var cues: Dictionary = {}
 	var specs := _cue_specs()
 	for cue_id: String in specs:
-		var spec := specs[cue_id] as Dictionary
-		cues[cue_id] = _make_cue(
-			cue_id,
-			float(spec.get("duration", 0.12)),
-			spec.get("hits", []) as Array,
-			mix_rate,
-		)
+		if not cue_ids.is_empty() and not cue_ids.has(cue_id):
+			continue
+		cues[cue_id] = build_cue(cue_id, mix_rate)
 	return cues
+
+
+static func build_cue(
+	cue_id: String,
+	mix_rate: int = DEFAULT_MIX_RATE,
+) -> AudioStreamWAV:
+	var spec := _cue_specs().get(cue_id, {}) as Dictionary
+	if spec.is_empty():
+		return null
+	return _make_cue(
+		cue_id,
+		float(spec.get("duration", 0.12)),
+		spec.get("hits", []) as Array,
+		mix_rate,
+	)
 
 
 static func build_ambiences() -> Dictionary:
@@ -26,6 +40,12 @@ static func build_ambiences() -> Dictionary:
 		"night": _make_ambience("night"),
 		"indoor": _make_ambience("indoor"),
 	}
+
+
+static func build_ambience(kind: String) -> AudioStreamWAV:
+	if kind not in ["day", "night", "indoor"]:
+		return null
+	return _make_ambience(kind)
 
 
 static func _cue_specs() -> Dictionary:

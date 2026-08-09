@@ -12,7 +12,7 @@ config_version=5
 
 config/name="我的ai小镇"
 run/main_scene="res://ui/startup/StartupScreen.tscn"
-config/features=PackedStringArray("4.7", "Forward Plus")
+config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.png"
 
 [autoload]
@@ -22,10 +22,15 @@ GameFlowHost="*res://world/presentation/game_flow/GameFlowHost.gd"
 
 [display]
 
+window/dpi/allow_hidpi=true
 window/size/viewport_width=1920
 window/size/viewport_height=1080
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+
+[gui]
+
+timers/tooltip_delay_sec=3155760000.0
 
 [input]
 
@@ -74,6 +79,9 @@ interact={
 [rendering]
 
 textures/canvas_textures/default_texture_filter=0
-rendering_device/driver.windows="d3d12"
 textures/vram_compression/import_etc2_astc=true
+renderer/rendering_method="gl_compatibility"
+gl_compatibility/driver.windows="opengl3_angle"
+gl_compatibility/fallback_to_angle=true
+gl_compatibility/fallback_to_native=true
 2d/snap/snap_2d_transforms_to_pixel=true

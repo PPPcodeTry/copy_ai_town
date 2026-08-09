@@ -65,6 +65,7 @@ AI Town 是一款使用 Godot 4.7 开发的单机生活模拟游戏。小镇居�
 - Godot 4.7 稳定版
 - 可用的 LLM Provider 与 API Key
 - 支持 Godot 4.7 的桌面系统
+- Windows 发布版默认使用兼容渲染，可通过 Direct3D 11（ANGLE）运行，并在需要时回退到原生 OpenGL
 
 ### 从源码启动
 

@@ -120,6 +120,63 @@ class AdapterHarness extends Node:
 			) as Dictionary
 		if intent == "resident_overview.update_profile":
 			_apply_resident_profile_update(payload)
+		if intent == "announcements.composer.open":
+			var announcements := (
+				view_models.get("announcements", {}) as Dictionary
+			).duplicate(true)
+			var announcement_data := (
+				announcements.get("data", {}) as Dictionary
+			)
+			var announcement_panel := (
+				announcement_data.get("panel", {}) as Dictionary
+			)
+			var composer := (
+				announcement_data.get("composer", {}) as Dictionary
+			)
+			announcement_panel["mode"] = "compose"
+			composer["open"] = true
+			composer["inputFocused"] = true
+			announcement_data["panel"] = announcement_panel
+			announcement_data["composer"] = composer
+			announcements["data"] = announcement_data
+			announcements["revision"] = (
+				int(announcements.get("revision", 0)) + 1
+			)
+			view_models["announcements"] = announcements
+			view_model_changed.emit(
+				"announcements",
+				announcements.duplicate(true),
+			)
+		if intent == "announcements.draft.update":
+			var announcements := (
+				view_models.get("announcements", {}) as Dictionary
+			).duplicate(true)
+			var loading := announcements.duplicate(true)
+			loading["revision"] = int(loading.get("revision", 0)) + 1
+			loading["operation"] = {
+				"status": "loading",
+				"requestId": "announcement-draft-loading",
+				"intent": intent,
+			}
+			view_model_changed.emit("announcements", loading)
+			var announcement_data := (
+				announcements.get("data", {}) as Dictionary
+			)
+			var composer := (
+				announcement_data.get("composer", {}) as Dictionary
+			)
+			var draft_text := String(payload.get("text", ""))
+			composer["draftText"] = draft_text
+			composer["characterCount"] = draft_text.length()
+			composer["remainingCount"] = 140 - draft_text.length()
+			announcement_data["composer"] = composer
+			announcements["data"] = announcement_data
+			announcements["revision"] = int(loading.get("revision", 0)) + 1
+			view_models["announcements"] = announcements
+			view_model_changed.emit(
+				"announcements",
+				announcements.duplicate(true),
+			)
 		if intent == "announcements.panel.close":
 			var announcements := (
 				view_models.get("announcements", {}) as Dictionary
@@ -1441,7 +1498,7 @@ func _initialize() -> void:
 
 func _run_all() -> void:
 	await _scenario_ui_runtime_host_navigation()
-	_scenario_formal_ui_runtime_contract()
+	await _scenario_formal_ui_runtime_contract()
 	_scenario_game_flow_resident_model_assignment_route()
 	_scenario_session_production_composition()
 	_scenario_hud_pause_clock()
@@ -1938,6 +1995,11 @@ func _scenario_ui_runtime_host_navigation() -> void:
 			true,
 			false,
 		) as BaseButton
+		var workplace_option := profile_editor_page.find_child(
+			"WorkplaceOption",
+			true,
+			false,
+		) as BaseButton
 		var wardrobe_preview := profile_editor_page.find_child(
 			"ResidentWardrobeV1Preview",
 			true,
@@ -1954,6 +2016,14 @@ func _scenario_ui_runtime_host_navigation() -> void:
 			"resident profile editor preloads the selected resident home",
 		)
 		_expect(
+			home_option != null and not home_option.disabled,
+			"resident profile editor allows selecting a home",
+		)
+		_expect(
+			workplace_option != null and not workplace_option.disabled,
+			"resident profile editor allows selecting a workplace",
+		)
+		_expect(
 			wardrobe_preview != null
 			and wardrobe_preview.visible
 			and wardrobe_preview.texture != null,
@@ -1962,6 +2032,78 @@ func _scenario_ui_runtime_host_navigation() -> void:
 		var editor_view_model := (
 			_adapter.custom_resident_creator_service.call("get_view_model")
 			as Dictionary
+		)
+		var editor_data := editor_view_model.get("data", {}) as Dictionary
+		var invalid_home := _adapter.custom_resident_creator_service.call(
+			"dispatch",
+			"resident_profile_editor.update_fields",
+			{
+				"revision": int(editor_view_model.get("revision", 0)),
+				"draftId": String(editor_data.get("draftId", "")),
+				"fields": {"ownedPlaceId": "不存在的住宅"},
+			},
+		) as Dictionary
+		_expect(
+			not bool(invalid_home.get("ok", false))
+			and String(invalid_home.get("errorCode", ""))
+				== "RESIDENT_PROFILE_HOME_UNKNOWN",
+			"resident profile editor rejects an unavailable home",
+		)
+		if home_option != null and not home_option.disabled:
+			home_option.emit_signal("pressed")
+			await process_frame
+			var first_home_option := _find_button_with_text(
+				profile_editor_page,
+				"北街一号住宅",
+			)
+			_expect(
+				first_home_option != null and not first_home_option.disabled,
+				"resident profile editor exposes an available home choice",
+			)
+			if first_home_option != null and not first_home_option.disabled:
+				first_home_option.emit_signal("pressed")
+				await process_frame
+		var current_after_home := (
+			_adapter.custom_resident_creator_service.call("get_view_model")
+			as Dictionary
+		)
+		_expect_equal(
+			(
+				(current_after_home.get("data", {}) as Dictionary).get(
+					"draft",
+					{},
+				) as Dictionary
+			).get("ownedPlaceId"),
+			"北街一号住宅",
+			"resident profile editor stores the selected home in the draft",
+		)
+		if workplace_option != null and not workplace_option.disabled:
+			workplace_option.emit_signal("pressed")
+			await process_frame
+			var first_workplace_option := _find_button_with_text(
+				profile_editor_page,
+				"花房咖啡馆",
+			)
+			_expect(
+				first_workplace_option != null and not first_workplace_option.disabled,
+				"resident profile editor exposes an available workplace choice",
+			)
+			if first_workplace_option != null and not first_workplace_option.disabled:
+				first_workplace_option.emit_signal("pressed")
+				await process_frame
+		var current_after_workplace := (
+			_adapter.custom_resident_creator_service.call("get_view_model")
+			as Dictionary
+		)
+		_expect_equal(
+			(
+				(current_after_workplace.get("data", {}) as Dictionary).get(
+					"draft",
+					{},
+				) as Dictionary
+			).get("workplaceId"),
+			"花房咖啡馆",
+			"resident profile editor stores the selected workplace in the draft",
 		)
 		var resolved_appearance := (
 			(editor_view_model.get("data", {}) as Dictionary).get(
@@ -2141,6 +2283,36 @@ func _scenario_ui_runtime_host_navigation() -> void:
 	await process_frame
 	profile_editor_page = _active_route_page()
 	if profile_editor_page != null:
+		var saved_home_option := profile_editor_page.find_child(
+			"OwnedPlaceOption",
+			true,
+			false,
+		) as BaseButton
+		if saved_home_option != null and not saved_home_option.disabled:
+			saved_home_option.emit_signal("pressed")
+			await process_frame
+			var saved_home_choice := _find_button_with_text(
+				profile_editor_page,
+				"北街一号住宅",
+			)
+			if saved_home_choice != null and not saved_home_choice.disabled:
+				saved_home_choice.emit_signal("pressed")
+				await process_frame
+		var saved_workplace_option := profile_editor_page.find_child(
+			"WorkplaceOption",
+			true,
+			false,
+		) as BaseButton
+		if saved_workplace_option != null and not saved_workplace_option.disabled:
+			saved_workplace_option.emit_signal("pressed")
+			await process_frame
+			var saved_workplace_choice := _find_button_with_text(
+				profile_editor_page,
+				"花房咖啡馆",
+			)
+			if saved_workplace_choice != null and not saved_workplace_choice.disabled:
+				saved_workplace_choice.emit_signal("pressed")
+				await process_frame
 		var save_button := profile_editor_page.find_child(
 			"CreateButton",
 			true,
@@ -2165,6 +2337,27 @@ func _scenario_ui_runtime_host_navigation() -> void:
 			"resident-lin",
 			"profile save preserves the selected resident",
 		)
+		var saved_overview := _adapter.get_view_model("resident_overview") as Dictionary
+		var saved_residents := (
+			(saved_overview.get("data", {}) as Dictionary).get("residents", []) as Array
+		)
+		for resident_value: Variant in saved_residents:
+			if (
+				resident_value is Dictionary
+				and String((resident_value as Dictionary).get("residentId", ""))
+					== "resident-lin"
+			):
+				_expect_equal(
+					(resident_value as Dictionary).get("homeLabel"),
+					"北街一号住宅",
+					"profile save persists the selected home in the production entry",
+				)
+				_expect_equal(
+					(resident_value as Dictionary).get("workplaceLabel"),
+					"花房咖啡馆",
+					"profile save persists the selected workplace in the production entry",
+				)
+				break
 	_expect_dispatch("resident_overview.update_profile", {
 		"residentId": "resident-lin",
 	})
@@ -2264,6 +2457,47 @@ func _scenario_ui_runtime_host_navigation() -> void:
 	_expect_equal(_host.call("current_route"), &"bulletin_board", "event HUD intent opens bulletin route")
 	_expect_single_active_page("event route")
 	_expect_context("announcements", true, {"announcementId": "announcement-1"})
+	var bulletin_page := _active_route_page()
+	if bulletin_page != null:
+		_expect(
+			bool(bulletin_page.call("debug_request_action", "openComposer", {})),
+			"bulletin composer opens for caret stability coverage",
+		)
+		await process_frame
+		var bulletin_surface := (
+			bulletin_page.call("_active_surface") as Dictionary
+		)
+		var bulletin_editor := bulletin_surface.get("editor") as TextEdit
+		_expect(
+			bulletin_editor != null,
+			"bulletin active composition exposes its editor",
+		)
+		if bulletin_editor != null:
+			var draft_text := "今天下午三点开会"
+			bulletin_editor.text = draft_text
+			bulletin_editor.set_caret_line(0)
+			bulletin_editor.set_caret_column(4)
+			bulletin_editor.text_changed.emit()
+			bulletin_page.call("_flush_draft_intent")
+			var draft_timer := bulletin_page.get("_draft_timer") as Timer
+			if draft_timer != null:
+				draft_timer.stop()
+			_expect_equal(
+				bulletin_editor.text,
+				draft_text,
+				"bulletin draft synchronization preserves local text",
+			)
+			_expect_equal(
+				bulletin_editor.get_caret_column(),
+				4,
+				"bulletin draft synchronization preserves caret column",
+			)
+			bulletin_editor.text = ""
+			bulletin_editor.set_caret_column(0)
+			bulletin_editor.text_changed.emit()
+			bulletin_page.call("_flush_draft_intent")
+			if draft_timer != null:
+				draft_timer.stop()
 	_expect(
 		bool(_host.call("request_back")),
 		"bulletin ESC/back delegates to its formal close action",
@@ -3034,6 +3268,111 @@ func _scenario_ui_runtime_host_navigation() -> void:
 		back_button,
 		"Provider route gives initial focus to BackButton",
 	)
+	var provider_input_vm := _provider_input_stability_view_model(10)
+	_expect(
+		bool(provider_page.call("apply_view_model", provider_input_vm)),
+		"Provider route accepts editable input stability data",
+	)
+	await process_frame
+	await process_frame
+	var provider_key_edit := provider_page.find_child(
+		"ApiKeyInput",
+		true,
+		false,
+	) as LineEdit
+	_expect(provider_key_edit != null, "Provider route exposes API Key input")
+	if provider_key_edit != null:
+		provider_key_edit.grab_focus()
+		provider_key_edit.text = "sk-release-review"
+		provider_key_edit.text_changed.emit(provider_key_edit.text)
+		provider_key_edit.set_caret_column(7)
+		provider_key_edit.select(3, 7)
+		var refreshed_provider_vm := _provider_input_stability_view_model(11)
+		var refreshed_data := refreshed_provider_vm.get("data", {}) as Dictionary
+		(refreshed_data.get("providers", []) as Array)[0]["connection"] = {
+			"status": "available",
+			"label": "连接正常",
+			"message": "后台检查刚刚完成。",
+		}
+		_expect(
+			bool(provider_page.call("apply_view_model", refreshed_provider_vm)),
+			"Provider route accepts an asynchronous health refresh",
+		)
+		await process_frame
+		await process_frame
+		var rebuilt_key_edit := provider_page.find_child(
+			"ApiKeyInput",
+			true,
+			false,
+		) as LineEdit
+		_expect(
+			rebuilt_key_edit != null and rebuilt_key_edit != provider_key_edit,
+			"Provider health refresh rebuilds a replacement API Key input",
+		)
+		if rebuilt_key_edit != null:
+			_expect_equal(
+				rebuilt_key_edit.text,
+				"sk-release-review",
+				"Provider health refresh preserves the local API Key draft",
+			)
+			_expect_equal(
+				get_root().get_viewport().gui_get_focus_owner(),
+				rebuilt_key_edit,
+				"Provider health refresh restores API Key input focus",
+			)
+			_expect_equal(
+				rebuilt_key_edit.get_caret_column(),
+				7,
+				"Provider health refresh restores API Key caret column",
+			)
+			_expect(
+				rebuilt_key_edit.has_selection()
+				and rebuilt_key_edit.get_selection_from_column() == 3
+				and rebuilt_key_edit.get_selection_to_column() == 7,
+				"Provider health refresh restores API Key selection",
+			)
+			rebuilt_key_edit.text = ""
+			rebuilt_key_edit.text_changed.emit("")
+		var provider_base_url_edit := provider_page.find_child(
+			"BaseUrlInput",
+			true,
+			false,
+		) as LineEdit
+		_expect(provider_base_url_edit != null, "Provider route exposes Base URL input")
+		if provider_base_url_edit != null:
+			provider_base_url_edit.grab_focus()
+			provider_base_url_edit.text = ""
+			provider_base_url_edit.text_changed.emit("")
+			var empty_base_url_vm := _provider_input_stability_view_model(12)
+			_expect(
+				bool(provider_page.call("apply_view_model", empty_base_url_vm)),
+				"Provider route accepts a refresh after clearing Base URL",
+			)
+			await process_frame
+			await process_frame
+			var rebuilt_base_url_edit := provider_page.find_child(
+				"BaseUrlInput",
+				true,
+				false,
+			) as LineEdit
+			_expect(
+				rebuilt_base_url_edit != null
+				and rebuilt_base_url_edit != provider_base_url_edit,
+				"Provider refresh rebuilds a replacement Base URL input",
+			)
+			if rebuilt_base_url_edit != null:
+				_expect_equal(
+					rebuilt_base_url_edit.text,
+					"",
+					"Provider refresh preserves an intentionally empty Base URL",
+				)
+				_expect_equal(
+					get_root().get_viewport().gui_get_focus_owner(),
+					rebuilt_base_url_edit,
+					"Provider refresh restores Base URL input focus",
+				)
+				rebuilt_base_url_edit.text = "https://api.deepseek.com"
+				rebuilt_base_url_edit.text_changed.emit(rebuilt_base_url_edit.text)
 	var dispatch_count_before_back := _adapter.dispatches.size()
 	var escape := InputEventAction.new()
 	escape.action = &"ui_cancel"
@@ -3384,6 +3723,13 @@ func _on_pause_requested() -> void:
 
 
 func _scenario_formal_ui_runtime_contract() -> void:
+	_expect(
+		float(ProjectSettings.get_setting(
+			"gui/timers/tooltip_delay_sec",
+			0.0,
+		)) >= 3155760000.0,
+		"正式版本必须保持原生悬停文字提示禁用",
+	)
 	for path in REQUIRED_FORMAL_PATHS:
 		_expect(
 			ResourceLoader.exists(path) or FileAccess.file_exists(path),
@@ -3426,7 +3772,8 @@ func _scenario_formal_ui_runtime_contract() -> void:
 					"组合分支下正式 UI 场景无法加载：%s" % path,
 				)
 		_test_resident_selection_runtime_contract()
-		_test_custom_creator_runtime_contract()
+		await _test_custom_creator_runtime_contract()
+		await _test_startup_load_focus_stability()
 		_test_startup_continue_failure_contract()
 	_test_formal_export_filters()
 	_test_formal_runtime_asset_paths()
@@ -4040,6 +4387,98 @@ func _test_custom_creator_runtime_contract() -> void:
 		"自定义居民正式页无法应用运行时 ViewModel",
 	)
 	_expect(creator.visible, "自定义居民正式页注入数据后必须显示")
+	var creator_name_edit := creator.find_child("NameEdit", true, false) as LineEdit
+	_expect(creator_name_edit != null, "自定义居民正式页缺少姓名输入框")
+	if creator_name_edit != null:
+		creator_name_edit.grab_focus()
+		creator_name_edit.text = "测试居民正在编辑"
+		creator_name_edit.text_changed.emit(creator_name_edit.text)
+		creator_name_edit.set_caret_column(4)
+		var creator_refresh := _custom_creator_view_model()
+		creator_refresh["revision"] = 2
+		var creator_refresh_data := creator_refresh.get("data", {}) as Dictionary
+		(creator_refresh_data.get("draft", {}) as Dictionary)["age"] = 28
+		_expect(
+			bool(creator.call("apply_view_model", creator_refresh)),
+			"自定义居民正式页接受无关字段刷新",
+		)
+		_expect_equal(
+			creator_name_edit.text,
+			"测试居民正在编辑",
+			"自定义居民无关刷新保留尚未提交的姓名",
+		)
+		_expect_equal(
+			creator_name_edit.get_caret_column(),
+			4,
+			"自定义居民无关刷新保留姓名光标",
+		)
+		_expect_equal(
+			root.get_viewport().gui_get_focus_owner(),
+			creator_name_edit,
+			"自定义居民无关刷新保留输入焦点",
+		)
+		var creator_confirmed := creator_refresh.duplicate(true)
+		creator_confirmed["revision"] = 3
+		var confirmed_data := creator_confirmed.get("data", {}) as Dictionary
+		(confirmed_data.get("draft", {}) as Dictionary)["name"] = "测试居民正在编辑"
+		_expect(
+			bool(creator.call("apply_view_model", creator_confirmed)),
+			"自定义居民正式页接受已确认的姓名",
+		)
+		_expect(
+			not (creator.get("_local_text_drafts") as Dictionary).has("name"),
+			"自定义居民确认姓名后清理本地待确认状态",
+		)
+		var interest_option := creator.find_child(
+			"InterestOption",
+			true,
+			false,
+		) as Button
+		_expect(interest_option != null, "自定义居民正式页缺少兴趣下拉框")
+		if interest_option != null:
+			creator.call("_open_dropdown_popup", "interests", interest_option)
+			var custom_interest_edit := creator.get("_interest_custom_edit") as LineEdit
+			_expect(custom_interest_edit != null, "兴趣下拉框缺少自定义兴趣输入")
+			if custom_interest_edit != null:
+				custom_interest_edit.grab_focus()
+				custom_interest_edit.text = "观察云朵"
+				custom_interest_edit.text_changed.emit(custom_interest_edit.text)
+				custom_interest_edit.set_caret_column(3)
+				var interest_refresh := creator_confirmed.duplicate(true)
+				interest_refresh["revision"] = 4
+				var interest_refresh_data := (
+					interest_refresh.get("data", {}) as Dictionary
+				)
+				(interest_refresh_data.get("draft", {}) as Dictionary)["age"] = 29
+				_expect(
+					bool(creator.call("apply_view_model", interest_refresh)),
+					"自定义居民兴趣输入期间接受无关字段刷新",
+				)
+				await process_frame
+				var rebuilt_interest_edit := (
+					creator.get("_interest_custom_edit") as LineEdit
+				)
+				_expect(
+					rebuilt_interest_edit != null
+					and rebuilt_interest_edit != custom_interest_edit,
+					"兴趣状态刷新会创建替换输入框",
+				)
+				if rebuilt_interest_edit != null:
+					_expect_equal(
+						rebuilt_interest_edit.text,
+						"观察云朵",
+						"兴趣状态刷新保留未提交的自定义兴趣",
+					)
+					_expect_equal(
+						rebuilt_interest_edit.get_caret_column(),
+						3,
+						"兴趣状态刷新保留自定义兴趣光标",
+					)
+					_expect_equal(
+						root.get_viewport().gui_get_focus_owner(),
+						rebuilt_interest_edit,
+						"兴趣状态刷新保留自定义兴趣焦点",
+					)
 	root.remove_child(creator)
 	creator.free()
 
@@ -4107,6 +4546,173 @@ func _custom_creator_view_model() -> Dictionary:
 		},
 		"actions": actions,
 		"operation": _startup_operation("", "idle", ""),
+		"error": null,
+	}
+
+
+func _provider_input_stability_view_model(revision: int) -> Dictionary:
+	var actions := {}
+	for action_key: String in [
+		"back",
+		"selectProvider",
+		"saveKey",
+		"deleteKey",
+		"saveBaseUrl",
+		"selectModel",
+		"checkConnection",
+		"retry",
+	]:
+		actions[action_key] = {
+			"intent": "provider_settings.%s" % action_key,
+			"enabled": true,
+			"disabledReason": "",
+		}
+	return {
+		"scope": "provider_settings",
+		"status": "ready",
+		"revision": revision,
+		"data": {
+			"source": "runtime",
+			"capabilityMode": "formal",
+			"formalReady": true,
+			"pageTitle": "模型设置",
+			"selectedProviderId": "deepseek",
+			"formalStatusLabel": "等待后台检查",
+			"providers": [{
+				"providerId": "deepseek",
+				"displayName": "DeepSeek",
+				"enabled": true,
+				"external": true,
+				"key": {
+					"saved": false,
+					"maskedValue": "",
+					"status": "missing",
+					"errorCode": "PROVIDER_API_KEY_REQUIRED",
+				},
+				"baseUrl": "https://api.deepseek.com",
+				"models": [],
+				"connection": {
+					"status": "checking",
+					"label": "正在检查",
+					"message": "正在后台检查连接。",
+				},
+			}],
+			"summary": {
+				"availableProviderCount": 0,
+				"enabledModelCount": 0,
+			},
+		},
+		"actions": actions,
+		"operation": {
+			"requestId": "provider-health-%d" % revision,
+			"intent": "provider_settings.check_connection",
+			"status": "loading",
+			"submittedAtMsec": 1,
+			"completedAtMsec": 0,
+		},
+		"error": null,
+	}
+
+
+func _test_startup_load_focus_stability() -> void:
+	var scene := ResourceLoader.load(
+		"res://ui/startup/StartupLoadGameScreen.tscn",
+	) as PackedScene
+	var screen := scene.instantiate() as Control if scene != null else null
+	_expect(screen != null, "加载游戏正式页无法实例化")
+	if screen == null:
+		return
+	root.add_child(screen)
+	var initial_vm := _startup_load_focus_view_model(1)
+	_expect(
+		bool(screen.call("apply_view_model", initial_vm)),
+		"加载游戏正式页接受存档列表",
+	)
+	await process_frame
+	var second_slot_action := screen.find_child(
+		"slot-bAction",
+		true,
+		false,
+	) as Button
+	_expect(second_slot_action != null, "加载游戏页缺少第二个存档按钮")
+	if second_slot_action != null:
+		second_slot_action.grab_focus()
+		var refreshed_vm := _startup_load_focus_view_model(2)
+		var refreshed_data := refreshed_vm.get("data", {}) as Dictionary
+		var slots := refreshed_data.get("slots", []) as Array
+		(slots[0] as Dictionary)["day"] = 8
+		_expect(
+			bool(screen.call("apply_view_model", refreshed_vm)),
+			"加载游戏正式页接受存档后台刷新",
+		)
+		await process_frame
+		var rebuilt_second_action := screen.find_child(
+			"slot-bAction",
+			true,
+			false,
+		) as Button
+		_expect(
+			rebuilt_second_action != null
+			and rebuilt_second_action != second_slot_action,
+			"存档后台刷新创建替换按钮",
+		)
+		_expect_equal(
+			root.get_viewport().gui_get_focus_owner(),
+			rebuilt_second_action,
+			"存档后台刷新保留当前存档按钮焦点",
+		)
+	root.remove_child(screen)
+	screen.free()
+
+
+func _startup_load_focus_view_model(revision: int) -> Dictionary:
+	return {
+		"scope": "save",
+		"status": "ready",
+		"revision": revision,
+		"data": {
+			"mode": "load",
+			"providerIndependent": true,
+			"pageTitle": "加载游戏",
+			"slots": [
+				{
+					"slotId": "slot-a",
+					"displayName": "第一座小镇",
+					"state": "healthy",
+					"continueAvailable": true,
+					"day": 7,
+				},
+				{
+					"slotId": "slot-b",
+					"displayName": "第二座小镇",
+					"state": "healthy",
+					"continueAvailable": true,
+					"day": 3,
+				},
+			],
+		},
+		"actions": {
+			"back": {
+				"intent": "startup.close_load_game",
+				"enabled": true,
+				"disabledReason": "",
+			},
+			"continueSlot": {
+				"intent": "session.continue_slot",
+				"enabled": true,
+				"disabledReason": "",
+			},
+			"deleteSlot": {
+				"intent": "save.request_delete_slot",
+				"enabled": true,
+				"disabledReason": "",
+			},
+		},
+		"operation": {
+			"requestId": "",
+			"intent": "",
+			"status": "idle",
+		},
 		"error": null,
 	}
 
@@ -5469,6 +6075,14 @@ func _scenario_game_flow_resident_model_assignment_route() -> void:
 func _wait_frames(count: int) -> void:
 	for _index in count:
 		await process_frame
+
+
+func _find_button_with_text(root: Node, expected: String) -> Button:
+	for node: Node in root.find_children("*", "Button", true, false):
+		var button := node as Button
+		if button != null and button.text == expected:
+			return button
+	return null
 
 
 
