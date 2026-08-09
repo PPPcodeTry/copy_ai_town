@@ -2,6 +2,22 @@ extends "res://tests/agent/support/AgentTestCase.gd"
 
 
 const CatalogScript := preload("res://agent/model/ModelProviderCatalog.gd")
+const ProviderServiceScript := preload(
+	"res://world/integration/TownAgentProviderService.gd"
+)
+const ConfigStoreScript := preload(
+	"res://world/presentation/ui/TownProviderConfigStore.gd"
+)
+const SettingsServiceScript := preload(
+	"res://world/presentation/ui/TownProviderSettingsService.gd"
+)
+const ProviderSettingsScreenScript := preload(
+	"res://ui/provider_settings/ProviderSettingsScreen.gd"
+)
+const ResidentAssignmentServiceScript := preload(
+	"res://ui/resident_model_assignment/runtime/ResidentModelAssignmentService.gd"
+)
+const CONFIG_TEST_ROOT := "user://tests/provider_compatibility_config"
 
 
 
@@ -20,6 +36,9 @@ func _initialize() -> void:
 			"zhipu-glm",
 			"xiaomi-mimo",
 			"openai-compatible",
+			"302-ai",
+			"ollama",
+			"lm-studio",
 			"fake",
 		],
 		"catalog exposes the provider adapters in stable order",
@@ -70,7 +89,25 @@ func _initialize() -> void:
 		"Xiaomi exposes the current MiMo V2.5 chat models",
 	)
 	_expect_equal(_model_ids(catalog, "openai-compatible"), ["custom"], "generic OpenAI compatibility has one custom model entry")
+	_expect_equal(_model_ids(catalog, "302-ai"), ["custom"], "302.AI accepts player model ids")
+	_expect_equal(_model_ids(catalog, "ollama"), ["custom"], "Ollama accepts local model ids")
+	_expect_equal(_model_ids(catalog, "lm-studio"), ["custom"], "LM Studio accepts local model ids")
 	_expect_equal(_model_ids(catalog, "fake"), ["fake"], "Fake is represented by the same two-level catalog")
+	_expect_equal(
+		catalog.call("descriptor", "302-ai").get("default_endpoint"),
+		"https://api.302.ai/v1",
+		"302.AI ships with its recommended API base URL",
+	)
+	_expect_equal(
+		catalog.call("descriptor", "ollama").get("auth_required"),
+		false,
+		"Ollama does not require a placeholder API key",
+	)
+	_expect_equal(
+		catalog.call("descriptor", "lm-studio").get("auth_required"),
+		false,
+		"LM Studio does not require a placeholder API key",
+	)
 	_expect_equal(catalog.call("default_model_id"), "deepseek-v4-flash", "DeepSeek remains the global default")
 	_expect_equal(catalog.call("default_model_id", "volcengine-ark"), "doubao-seed-2-0-lite-260428", "Ark defaults to Seed 2.0 Lite")
 	_expect_equal(catalog.call("default_model_id", "aliyun-bailian"), "qwen3.7-plus", "Bailian defaults to Qwen 3.7 Plus")
@@ -311,7 +348,12 @@ func _initialize() -> void:
 		"input_modalities": ["text", "audio"],
 	}) as Dictionary
 	_expect_equal(unknown_modality.get("ok"), false, "unknown input modalities are rejected")
-	_finish_suite("MODEL_PROVIDER_CATALOG_PASS")
+	_test_compatible_runtime_models()
+	_test_provider_health_isolation()
+	_test_local_endpoint_and_model_persistence()
+	_test_settings_service_custom_model_flow()
+	_test_custom_model_ui_grouping()
+	_finish_suite("MODEL_PROVIDER_CATALOG_PASS", [CONFIG_TEST_ROOT])
 
 
 func _model_ids(catalog: RefCounted, provider_id: String) -> Array[String]:
@@ -319,3 +361,336 @@ func _model_ids(catalog: RefCounted, provider_id: String) -> Array[String]:
 	for descriptor: Dictionary in catalog.call("list_models", provider_id):
 		result.append(String(descriptor.get("id", "")))
 	return result
+
+
+func _test_compatible_runtime_models() -> void:
+	var service: RefCounted = ProviderServiceScript.new()
+	var configured := service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"302-ai": {
+				"api_key": "temporary-302-key",
+				"api_models": ["vendor/model-a", "vendor/model-b"],
+				"api_model": "vendor/model-a",
+			},
+		},
+	}) as Dictionary
+	_expect_equal(configured.get("ok"), true, "302 runtime configuration is accepted")
+	var compatible_ids: Array[String] = []
+	for model: Dictionary in service.call("list_available_models"):
+		if String(model.get("providerId", "")) == "302-ai":
+			compatible_ids.append(String(model.get("modelId", "")))
+	_expect_equal(
+		compatible_ids,
+		["vendor/model-a", "vendor/model-b"],
+		"runtime exposes real compatible model ids instead of one custom alias",
+	)
+	service.set("_health_by_target", {
+		"302-ai|vendor/model-a": {
+			"providerId": "302-ai",
+			"modelId": "vendor/model-a",
+			"status": "available",
+			"errorCode": "",
+			"retryable": false,
+		},
+		"302-ai|vendor/model-b": {
+			"providerId": "302-ai",
+			"modelId": "vendor/model-b",
+			"status": "available",
+			"errorCode": "",
+			"retryable": false,
+		},
+	})
+	for index in range(2):
+		var model_id := "vendor/model-a" if index == 0 else "vendor/model-b"
+		var created := service.call("create_provider_for_resident", {
+			"residentId": "resident-%d" % index,
+			"llmBinding": {
+				"mode": "model",
+				"providerId": "302-ai",
+				"modelId": model_id,
+			},
+		}) as Dictionary
+		_expect_equal(created.get("ok"), true, "each resident can use a different 302 model")
+		if bool(created.get("ok", false)):
+			_expect_equal(
+				created.get("provider").call("get_provider_descriptor").get("model_id"),
+				model_id,
+				"the resident's real wire model reaches the provider",
+			)
+
+
+func _test_provider_health_isolation() -> void:
+	var service: RefCounted = ProviderServiceScript.new()
+	var request_host := Node.new()
+	service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"deepseek": {"api_key": "deepseek-key"},
+			"kimi": {"api_key": "kimi-key"},
+		},
+	}, request_host)
+	service.set("_health_by_target", {
+		"deepseek|deepseek-v4-flash": {
+			"providerId": "deepseek",
+			"modelId": "deepseek-v4-flash",
+			"status": "available",
+			"errorCode": "",
+			"retryable": false,
+		},
+		"kimi|kimi-k3": {
+			"providerId": "kimi",
+			"modelId": "kimi-k3",
+			"status": "available",
+			"errorCode": "",
+			"retryable": false,
+		},
+	})
+	service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"deepseek": {"api_key": "changed-deepseek-key"},
+			"kimi": {"api_key": "kimi-key"},
+		},
+	}, request_host)
+	_expect_equal(
+		(service.get("_health_by_target") as Dictionary).keys(),
+		["kimi|kimi-k3"],
+		"reconfiguration retains only unchanged provider health entries",
+	)
+	var health_by_provider: Dictionary = {}
+	for provider: Dictionary in service.call("get_health_snapshot").get("providers", []):
+		health_by_provider[String(provider.get("providerId", ""))] = String(
+			provider.get("status", ""),
+		)
+	_expect_equal(
+		health_by_provider.get("kimi"),
+		"available",
+		"changing DeepSeek preserves Kimi availability",
+	)
+	_expect(
+		health_by_provider.get("deepseek") != "available",
+		"changing DeepSeek invalidates only DeepSeek health",
+	)
+	request_host.free()
+
+
+func _test_local_endpoint_and_model_persistence() -> void:
+	DirAccess.make_dir_recursive_absolute(
+		ProjectSettings.globalize_path(CONFIG_TEST_ROOT),
+	)
+	var store: RefCounted = ConfigStoreScript.new()
+	var configured := store.call(
+		"configure",
+		"%s/settings.json" % CONFIG_TEST_ROOT,
+	) as Dictionary
+	_expect_equal(configured.get("ok"), true, "provider config test store is configured")
+	var local_config := {
+		"schemaVersion": 1,
+		"selectedProviderId": "ollama",
+		"selectedModelByProvider": {"ollama": "qwen3:8b"},
+		"providers": {
+			"ollama": {
+				"enabled": true,
+				"endpoint": "http://localhost:11434/v1",
+				"apiModels": ["qwen3:8b", "gemma3:4b"],
+			},
+		},
+	}
+	var saved := store.call("save_config", local_config) as Dictionary
+	_expect_equal(saved.get("ok"), true, "loopback HTTP endpoint and local model ids are persisted")
+	var loaded := store.call("load_config") as Dictionary
+	_expect_equal(
+		loaded.get("config", {}).get("providers", {}).get("ollama", {}).get("apiModels", []),
+		["qwen3:8b", "gemma3:4b"],
+		"local model ids survive a config reload",
+	)
+	var unsafe_config := local_config.duplicate(true)
+	unsafe_config["providers"]["ollama"]["endpoint"] = "http://example.com/v1"
+	var rejected := store.call("save_config", unsafe_config) as Dictionary
+	_expect_equal(
+		rejected.get("ok"),
+		false,
+		"unencrypted remote compatible endpoints remain forbidden",
+	)
+	var legacy_path := "%s/legacy-settings.json" % CONFIG_TEST_ROOT
+	var legacy_file := FileAccess.open(legacy_path, FileAccess.WRITE)
+	legacy_file.store_string(JSON.stringify({
+		"schemaVersion": 1,
+		"selectedProviderId": "openai-compatible",
+		"selectedModelByProvider": {"openai-compatible": "custom"},
+		"providers": {
+			"openai-compatible": {
+				"enabled": true,
+				"endpoint": "https://compatible.example/v1",
+				"apiModel": "vendor/legacy-model",
+			},
+		},
+	}))
+	legacy_file = null
+	var legacy_store: RefCounted = ConfigStoreScript.new()
+	legacy_store.call("configure", legacy_path)
+	var migrated := legacy_store.call("load_config") as Dictionary
+	_expect_equal(migrated.get("ok"), true, "legacy custom model config migrates")
+	var migrated_config := migrated.get("config", {}) as Dictionary
+	_expect_equal(
+		migrated_config.get("providers", {}).get("openai-compatible", {}).get("apiModels", []),
+		["vendor/legacy-model"],
+		"legacy API model becomes a saved custom model card",
+	)
+	_expect_equal(
+		migrated_config.get("selectedModelByProvider", {}).get("openai-compatible"),
+		"vendor/legacy-model",
+		"legacy custom selection points at the migrated real model id",
+	)
+
+
+func _test_settings_service_custom_model_flow() -> void:
+	var request_host := Node.new()
+	var provider_service: RefCounted = ProviderServiceScript.new()
+	var settings: RefCounted = SettingsServiceScript.new()
+	var configured := settings.call(
+		"configure_store",
+		"%s/settings-service.json" % CONFIG_TEST_ROOT,
+	) as Dictionary
+	_expect_equal(configured.get("ok"), true, "settings service test store is configured")
+	var bound := settings.call(
+		"bind_provider_service",
+		provider_service,
+		request_host,
+	) as Dictionary
+	_expect_equal(bound.get("ok"), true, "settings service binds the real provider runtime")
+	var saved_model := settings.call("dispatch", "provider_settings.save_api_model", {
+		"providerId": "302-ai",
+		"apiModel": "vendor/model-a",
+	}) as Dictionary
+	_expect_equal(saved_model.get("ok"), true, "302 model id can be saved from settings")
+	var model_ids: Array[String] = []
+	var view_model := settings.call("get_view_model") as Dictionary
+	var provider := _provider_from_view_model(view_model, "302-ai")
+	for model: Dictionary in provider.get("models", []):
+		model_ids.append(String(model.get("modelId", "")))
+	_expect_equal(model_ids, ["vendor/model-a"], "saved 302 model is projected back to the player")
+	var saved_local_model := settings.call(
+		"dispatch",
+		"provider_settings.save_api_model",
+		{"providerId": "ollama", "apiModel": "qwen3:8b"},
+	) as Dictionary
+	_expect_equal(saved_local_model.get("ok"), true, "Ollama model can be saved without an API key")
+	var discovered := settings.call(
+		"_persist_discovered_models",
+		"ollama",
+		["qwen3:8b", "gemma3:4b", "qwen3:8b"],
+	) as Dictionary
+	_expect_equal(discovered.get("ok"), true, "discovered local models merge into saved models")
+	settings.call("refresh")
+	view_model = settings.call("get_view_model") as Dictionary
+	provider = _provider_from_view_model(view_model, "ollama")
+	model_ids.clear()
+	for model: Dictionary in provider.get("models", []):
+		model_ids.append(String(model.get("modelId", "")))
+	_expect_equal(
+		model_ids,
+		["qwen3:8b", "gemma3:4b"],
+		"automatic discovery keeps stable unique model ids",
+	)
+	var runtime := settings.call("runtime_configuration") as Dictionary
+	_expect_equal(runtime.get("providerId"), "ollama", "local model becomes the selected provider")
+	_expect_equal(runtime.get("modelId"), "qwen3:8b", "local model id reaches runtime configuration")
+	_expect_equal(runtime.get("authRequired"), false, "local runtime records optional authentication")
+	_expect(
+		String(runtime.get("errorCode", "")) != "PROVIDER_API_KEY_REQUIRED",
+		"missing optional local key never blocks runtime configuration",
+	)
+	provider_service.set("_bindings_by_resident_id", {
+		"resident-a": {
+			"mode": "model",
+			"providerId": "ollama",
+			"modelId": "qwen3:8b",
+		},
+	})
+	var blocked_delete := settings.call(
+		"dispatch",
+		"provider_settings.delete_api_model",
+		{"providerId": "ollama", "apiModel": "qwen3:8b"},
+	) as Dictionary
+	_expect_equal(
+		blocked_delete.get("errorCode"),
+		"PROVIDER_API_MODEL_IN_USE",
+		"a custom model assigned to a resident cannot be deleted",
+	)
+	provider_service.set("_bindings_by_resident_id", {})
+	var deleted := settings.call(
+		"dispatch",
+		"provider_settings.delete_api_model",
+		{"providerId": "ollama", "apiModel": "qwen3:8b"},
+	) as Dictionary
+	_expect_equal(deleted.get("ok"), true, "unused custom model can be deleted")
+	settings.call("refresh")
+	provider = _provider_from_view_model(settings.call("get_view_model"), "ollama")
+	model_ids.clear()
+	for model: Dictionary in provider.get("models", []):
+		model_ids.append(String(model.get("modelId", "")))
+	_expect_equal(model_ids, ["gemma3:4b"], "deleting one custom model preserves the others")
+	request_host.free()
+
+
+func _test_custom_model_ui_grouping() -> void:
+	var screen := ProviderSettingsScreenScript.new()
+	screen.set("_selected_provider_id", "ollama")
+	screen.set("_render_data", {
+		"providers": [
+			{"providerId": "deepseek", "displayName": "DeepSeek"},
+			{
+				"providerId": "openai-compatible",
+				"displayName": "其他兼容接口",
+				"customModels": true,
+			},
+			{
+				"providerId": "ollama",
+				"displayName": "Ollama（本地）",
+				"customModels": true,
+			},
+			{
+				"providerId": "lm-studio",
+				"displayName": "LM Studio（本地）",
+				"customModels": true,
+			},
+		],
+	})
+	var visible: Array[Dictionary] = screen._visible_providers()
+	_expect_equal(visible.size(), 2, "compatible services collapse into one player-facing group")
+	_expect_equal(
+		visible[1].get("displayName"),
+		"自定义模型",
+		"the player-facing custom group hides the OpenAI Compatible name",
+	)
+	_expect_equal(
+		visible[1].get("providerId"),
+		"ollama",
+		"the grouped card keeps the selected custom connection active",
+	)
+	screen.free()
+	var assignment := ResidentAssignmentServiceScript.new()
+	_expect_equal(
+		assignment._compact_provider_name("ollama", "Ollama（本地）"),
+		"自定义模型 · Ollama（本地）",
+		"resident model cards identify custom models and their connection source",
+	)
+
+
+func _provider_from_view_model(view_model: Dictionary, provider_id: String) -> Dictionary:
+	var data := view_model.get("data", {}) as Dictionary
+	for value: Variant in data.get("providers", []) as Array:
+		if (
+			value is Dictionary
+			and String((value as Dictionary).get("providerId", "")) == provider_id
+		):
+			return value as Dictionary
+	return {}

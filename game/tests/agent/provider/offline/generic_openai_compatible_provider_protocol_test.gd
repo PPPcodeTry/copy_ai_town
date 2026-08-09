@@ -9,6 +9,9 @@ func _initialize() -> void:
 	_expect(provider_script != null, "通用 OpenAI Compatible Provider 脚本可加载")
 	if provider_script != null:
 		_test_generic_conservative_request(provider_script)
+		_test_base_url_completion(provider_script)
+		_test_local_api_key_is_optional(provider_script)
+		_test_model_catalog_discovery_contract(provider_script)
 		_test_missing_messages_rejected(provider_script)
 		_test_undeclared_image_input_rejected(provider_script)
 		_test_declared_image_input_allowed(provider_script)
@@ -36,6 +39,115 @@ func _test_generic_conservative_request(provider_script: Script) -> void:
 		_expect_equal(body.get("model"), "vendor-model", "generic provider separates the catalog model from the wire model")
 		_expect(not JSON.stringify(body).contains("temporary-compatible-key"), "generic key never enters the body")
 	_expect(not JSON.stringify(provider.call("get_debug_snapshot")).contains("temporary-compatible-key"), "generic key never enters debug records")
+
+
+func _test_base_url_completion(provider_script: Script) -> void:
+	var cases := {
+		"https://compatible.example": "https://compatible.example/v1/chat/completions",
+		"https://compatible.example/v1/": "https://compatible.example/v1/chat/completions",
+		"https://compatible.example/v1/chat/completions": "https://compatible.example/v1/chat/completions",
+	}
+	for base_url: String in cases:
+		var transport := FakeTransport.new()
+		transport.response = _success_response("base-url-decision")
+		var provider: RefCounted = provider_script.new(null, transport, {
+			"api_key": "temporary-compatible-key",
+			"endpoint": base_url,
+			"api_model": "vendor/model-name",
+		})
+		var collector := ResultCollector.new()
+		provider.call(
+			"request_decision",
+			{"messages": [{"role": "user", "content": "决定"}]},
+			collector.collect,
+		)
+		_expect_equal(
+			transport.requests[0].get("url") if transport.requests.size() == 1 else "",
+			cases[base_url],
+			"generic provider normalizes a saved base URL",
+		)
+	var preset_transport := FakeTransport.new()
+	preset_transport.response = _success_response("preset-url-decision")
+	var preset_provider: RefCounted = provider_script.new(null, preset_transport, {
+		"api_key": "temporary-compatible-key",
+		"api_model": "vendor/model-name",
+		"preset_provider_id": "302-ai",
+		"preset_default_endpoint": "https://api.302.ai/v1",
+	})
+	var preset_collector := ResultCollector.new()
+	preset_provider.call(
+		"request_decision",
+		{"messages": [{"role": "user", "content": "决定"}]},
+		preset_collector.collect,
+	)
+	_expect_equal(
+		preset_transport.requests[0].get("url") if preset_transport.requests.size() == 1 else "",
+		"https://api.302.ai/v1/chat/completions",
+		"a provider preset completes its default base URL",
+	)
+
+
+func _test_local_api_key_is_optional(provider_script: Script) -> void:
+	var transport := FakeTransport.new()
+	transport.response = _success_response("local-decision")
+	var provider: RefCounted = provider_script.new(null, transport, {
+		"endpoint": "http://127.0.0.1:11434/v1",
+		"api_model": "qwen3:8b",
+		"preset_provider_id": "ollama",
+		"preset_provider_label": "Ollama（本地）",
+		"preset_api_key_required": false,
+	})
+	var collector := ResultCollector.new()
+	provider.call(
+		"request_decision",
+		{"messages": [{"role": "user", "content": "决定"}]},
+		collector.collect,
+	)
+	_expect_equal(collector.values.size(), 1, "local compatible provider works without a key")
+	_expect_equal(transport.requests.size(), 1, "local compatible request reaches transport")
+	if transport.requests.size() == 1:
+		var headers := transport.requests[0].get("headers", PackedStringArray()) as PackedStringArray
+		_expect(
+			not "\n".join(headers).contains("Authorization:"),
+			"local request omits the Authorization header when no key is configured",
+		)
+
+
+func _test_model_catalog_discovery_contract(provider_script: Script) -> void:
+	var provider_302: RefCounted = provider_script.new(null, null, {
+		"endpoint": "https://api.302.ai/v1/chat/completions",
+		"preset_provider_id": "302-ai",
+	})
+	_expect_equal(
+		provider_302.call("model_catalog_endpoint"),
+		"https://api.302.ai/v1/models?llm=1&include_custom_models=1",
+		"302 model discovery uses the documented model-list query",
+	)
+	var local_provider: RefCounted = provider_script.new(null, null, {
+		"endpoint": "http://127.0.0.1:11434/v1",
+		"preset_provider_id": "ollama",
+	})
+	_expect_equal(
+		local_provider.call("model_catalog_endpoint"),
+		"http://127.0.0.1:11434/v1/models",
+		"local model discovery uses the standard OpenAI-compatible endpoint",
+	)
+	var parsed := provider_302.call("_model_catalog_result", {
+		"result": HTTPRequest.RESULT_SUCCESS,
+		"status_code": 200,
+		"body": JSON.stringify({
+			"data": [
+				{"id": "vendor/model-a"},
+				{"id": "vendor/model-b"},
+				{"id": "vendor/model-a"},
+			],
+		}).to_utf8_buffer(),
+	}) as Dictionary
+	_expect_equal(
+		parsed.get("models", []),
+		["vendor/model-a", "vendor/model-b"],
+		"discovered model ids are validated and deduplicated",
+	)
 
 func _test_missing_messages_rejected(provider_script: Script) -> void:
 	var transport := FakeTransport.new()

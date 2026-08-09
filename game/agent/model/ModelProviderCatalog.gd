@@ -36,6 +36,30 @@ func _init(include_defaults := true) -> void:
 		GenericOpenAICompatibleModelProviderScript,
 		_create_openai_compatible,
 	)
+	_register_openai_compatible_preset(
+		"302-ai",
+		"302.AI",
+		"302.AI OpenAI-compatible API",
+		"https://api.302.ai/v1",
+		true,
+		_create_302_ai,
+	)
+	_register_openai_compatible_preset(
+		"ollama",
+		"Ollama（本地）",
+		"Ollama OpenAI-compatible API",
+		"http://127.0.0.1:11434/v1",
+		false,
+		_create_ollama,
+	)
+	_register_openai_compatible_preset(
+		"lm-studio",
+		"LM Studio（本地）",
+		"LM Studio OpenAI-compatible API",
+		"http://127.0.0.1:1234/v1",
+		false,
+		_create_lm_studio,
+	)
 	register_provider(FakeModelProviderScript.new().get_provider_descriptor(), _create_fake)
 	register_model({
 		"id": "fake",
@@ -62,6 +86,33 @@ func _register_provider_with_models(
 		if registered_model.get("id") == default_model:
 			registered_model["default_for_provider"] = true
 		register_model(registered_model)
+
+
+func _register_openai_compatible_preset(
+	provider_id: String,
+	label: String,
+	transport_label: String,
+	default_endpoint: String,
+	auth_required: bool,
+	factory: Callable,
+) -> void:
+	register_provider({
+		"id": provider_id,
+		"label": label,
+		"transport_label": transport_label,
+		"external": true,
+		"auth_required": auth_required,
+		"default_endpoint": default_endpoint,
+		"custom_models": true,
+	}, factory)
+	register_model({
+		"id": "custom",
+		"label": "自定义模型",
+		"provider_id": provider_id,
+		"default_for_provider": true,
+		"input_modalities": ["text"],
+		"runtime_modalities_configurable": true,
+	})
 
 
 func register_provider(descriptor: Dictionary, factory: Callable, make_default := false) -> Dictionary:
@@ -299,6 +350,74 @@ func _create_kimi(request_host: Node, config: Dictionary) -> RefCounted:
 
 func _create_openai_compatible(request_host: Node, config: Dictionary) -> RefCounted:
 	return GenericOpenAICompatibleModelProviderScript.new(request_host, null, config)
+
+
+func _create_302_ai(request_host: Node, config: Dictionary) -> RefCounted:
+	return GenericOpenAICompatibleModelProviderScript.new(
+		request_host,
+		null,
+		_compatible_preset_config(config, {
+			"provider_id": "302-ai",
+			"provider_label": "302.AI",
+			"transport_label": "302.AI OpenAI-compatible API",
+			"default_endpoint": "https://api.302.ai/v1",
+			"api_key_required": true,
+			"api_key_environment": "AI_302_API_KEY",
+			"timeout_seconds": 60.0,
+		}),
+	)
+
+
+func _create_ollama(request_host: Node, config: Dictionary) -> RefCounted:
+	return GenericOpenAICompatibleModelProviderScript.new(
+		request_host,
+		null,
+		_compatible_preset_config(config, {
+			"provider_id": "ollama",
+			"provider_label": "Ollama（本地）",
+			"transport_label": "Ollama OpenAI-compatible API",
+			"default_endpoint": "http://127.0.0.1:11434/v1",
+			"api_key_required": false,
+			"api_key_environment": "OLLAMA_API_KEY",
+			"timeout_seconds": 120.0,
+		}),
+	)
+
+
+func _create_lm_studio(request_host: Node, config: Dictionary) -> RefCounted:
+	return GenericOpenAICompatibleModelProviderScript.new(
+		request_host,
+		null,
+		_compatible_preset_config(config, {
+			"provider_id": "lm-studio",
+			"provider_label": "LM Studio（本地）",
+			"transport_label": "LM Studio OpenAI-compatible API",
+			"default_endpoint": "http://127.0.0.1:1234/v1",
+			"api_key_required": false,
+			"api_key_environment": "LM_STUDIO_API_KEY",
+			"timeout_seconds": 120.0,
+		}),
+	)
+
+
+func _compatible_preset_config(
+	config: Dictionary,
+	preset: Dictionary,
+) -> Dictionary:
+	var result := config.duplicate(true)
+	result["preset_provider_id"] = String(preset.get("provider_id", ""))
+	result["preset_provider_label"] = String(preset.get("provider_label", ""))
+	result["preset_transport_label"] = String(preset.get("transport_label", ""))
+	result["preset_default_endpoint"] = String(preset.get("default_endpoint", ""))
+	if not result.has("endpoint"):
+		result["endpoint"] = result["preset_default_endpoint"]
+	result["preset_api_key_required"] = bool(preset.get("api_key_required", true))
+	result["preset_api_key_environment"] = String(
+		preset.get("api_key_environment", "")
+	)
+	if not result.has("timeout_seconds"):
+		result["timeout_seconds"] = float(preset.get("timeout_seconds", 30.0))
+	return result
 
 
 func _create_fake(_request_host: Node, config: Dictionary) -> RefCounted:

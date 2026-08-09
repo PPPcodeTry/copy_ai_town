@@ -28,6 +28,7 @@ const FormalDialog = preload(
 const SCOPE := &"provider_settings"
 const MAP_TEXTURE_PATH := "res://world/maps/town/assets/town.png"
 const MINIMUM_TOUCH_SIZE := Vector2(48, 48)
+const CUSTOM_MODEL_GROUP_NAME := "自定义模型"
 
 var _adapter: Object
 var _view_model: Dictionary = {}
@@ -39,8 +40,11 @@ var _draft_key := ""
 var _draft_key_baseline := ""
 var _draft_key_dirty := false
 var _draft_base_url := ""
+var _draft_api_model := ""
 var _draft_provider_id := ""
 var _discard_confirmation: FormalDialog
+var _delete_model_confirmation: FormalDialog
+var _pending_model_deletion: Dictionary = {}
 var _pending_provider_selection: Dictionary = {}
 var _discard_confirmation_action := ""
 var _layout_profile := ""
@@ -52,6 +56,7 @@ var _model_page := -1
 var _key_edit: LineEdit
 var _save_key_button: Button
 var _base_url_edit: LineEdit
+var _api_model_edit: LineEdit
 var _status_label: Label
 var _check_button: Button
 var _formal_badge: Label
@@ -67,6 +72,7 @@ func _ready() -> void:
 	theme = ProviderTheme.create()
 	_build_background()
 	_build_discard_confirmation()
+	_build_delete_model_confirmation()
 	if _view_model.is_empty():
 		_view_model = _empty_view_model()
 		_render_data = (
@@ -102,6 +108,43 @@ func _build_discard_confirmation() -> void:
 	add_child(_discard_confirmation)
 
 
+func _build_delete_model_confirmation() -> void:
+	if is_instance_valid(_delete_model_confirmation):
+		return
+	_delete_model_confirmation = FormalDialog.new()
+	_delete_model_confirmation.name = "DeleteCustomModelConfirmation"
+	_delete_model_confirmation.title = "删除这个自定义模型？"
+	_delete_model_confirmation.ok_button_text = "删除模型"
+	_delete_model_confirmation.cancel_button_text = "取消"
+	_delete_model_confirmation.confirmed.connect(_confirm_delete_custom_model)
+	_delete_model_confirmation.canceled.connect(func() -> void:
+		_pending_model_deletion.clear()
+	)
+	add_child(_delete_model_confirmation)
+
+
+func _request_delete_custom_model(provider_id: String, api_model: String) -> void:
+	if provider_id.is_empty() or api_model.is_empty():
+		return
+	_pending_model_deletion = {
+		"providerId": provider_id,
+		"apiModel": api_model,
+	}
+	_delete_model_confirmation.dialog_text = (
+		"将删除“%s”。如果居民仍在使用它，系统会阻止删除并要求先重新分配。"
+		% api_model
+	)
+	_delete_model_confirmation.popup_centered()
+
+
+func _confirm_delete_custom_model() -> void:
+	if _pending_model_deletion.is_empty():
+		return
+	var payload := _pending_model_deletion.duplicate(true)
+	_pending_model_deletion.clear()
+	_dispatch_intent(&"provider_settings.delete_api_model", payload)
+
+
 func _show_discard_confirmation(
 	action: String,
 	provider: Dictionary,
@@ -133,7 +176,10 @@ func _has_unsaved_local_draft() -> bool:
 	var selected := _find_provider(_selected_provider_id)
 	if selected.is_empty():
 		return false
-	return _draft_base_url != String(selected.get("baseUrl", ""))
+	return (
+		_draft_base_url != String(selected.get("baseUrl", ""))
+		or not _draft_api_model.is_empty()
+	)
 
 
 func bind_adapter(adapter: Object) -> void:
@@ -155,6 +201,7 @@ func bind_adapter(adapter: Object) -> void:
 	_draft_key_baseline = ""
 	_draft_key_dirty = false
 	_draft_base_url = ""
+	_draft_api_model = ""
 	_show_key = false
 	_provider_page = -1
 	_model_page = -1
@@ -241,11 +288,17 @@ func apply_view_model(view_model: Dictionary) -> bool:
 			_draft_key_dirty = false
 			_show_key = false
 			_draft_base_url = str(selected.get("baseUrl", ""))
+			_draft_api_model = ""
 		elif (
 			operation_status_text == "success"
 			and operation_intent == "provider_settings.save_base_url"
 		):
 			_draft_base_url = str(selected.get("baseUrl", ""))
+		elif (
+			operation_status_text == "success"
+			and operation_intent == "provider_settings.save_api_model"
+		):
+			_draft_api_model = ""
 	if (
 		operation_status_text == "success"
 		and operation_intent == "provider_settings.save_key"
@@ -697,6 +750,8 @@ func _capture_input_focus_state() -> Dictionary:
 		field = "api_key"
 	elif focus_owner == _base_url_edit:
 		field = "base_url"
+	elif focus_owner == _api_model_edit:
+		field = "api_model"
 	if field.is_empty() or not focus_owner is LineEdit:
 		return {}
 	var edit := focus_owner as LineEdit
@@ -721,10 +776,9 @@ func _schedule_focus_after_rebuild(input_focus_state: Dictionary) -> void:
 func _restore_input_focus_state(input_focus_state: Dictionary) -> void:
 	if not is_inside_tree() or not is_instance_valid(_layout_root):
 		return
-	var edit := (
-		_key_edit
-		if String(input_focus_state.get("field", "")) == "api_key"
-		else _base_url_edit
+	var field := String(input_focus_state.get("field", ""))
+	var edit := _key_edit if field == "api_key" else (
+		_api_model_edit if field == "api_model" else _base_url_edit
 	)
 	if edit == null or not edit.is_visible_in_tree() or not edit.editable:
 		_focus_initial_control()
@@ -818,6 +872,8 @@ func _on_composite_ui_action(
 			_sync_key_save_enabled()
 		&"ui.draft_base_url":
 			_draft_base_url = str(payload.get("value", ""))
+		&"ui.draft_api_model":
+			_draft_api_model = str(payload.get("value", ""))
 		&"ui.toggle_key_visibility":
 			_toggle_key_visibility(_selected_provider_id)
 		&"ui.save_key":
@@ -968,7 +1024,7 @@ func _build_provider_rail(compact: bool) -> Control:
 	list.add_theme_constant_override("separation", 10)
 	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(list)
-	var providers := _render_data.get("providers", []) as Array
+	var providers := _visible_providers()
 	if providers.is_empty():
 		list.add_child(_empty_state(
 			"等待表现层提供 Provider 列表。"
@@ -1016,7 +1072,7 @@ func _build_compact_provider_tabs() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	panel.add_child(row)
-	var providers := _render_data.get("providers", []) as Array
+	var providers := _visible_providers()
 	if providers.is_empty():
 		row.add_child(_empty_state("等待 Provider 列表"))
 		return panel
@@ -1126,7 +1182,7 @@ func _build_provider_picker() -> Control:
 		[16, 12, 16, 12]
 	)
 	_mark_content_surface(picker)
-	var providers := _render_data.get("providers", []) as Array
+	var providers := _visible_providers()
 	var selected_index := 0
 	for index: int in range(providers.size()):
 		var provider := providers[index] as Dictionary
@@ -1326,6 +1382,9 @@ func _build_detail() -> Control:
 		7
 	)
 	detail.add_child(_build_detail_header(selected))
+	if bool(selected.get("customModels", false)):
+		detail.add_child(_detail_divider())
+		detail.add_child(_build_custom_connection_picker(selected))
 	detail.add_child(_detail_divider())
 	detail.add_child(_build_key_section(selected))
 	detail.add_child(_detail_divider())
@@ -1357,7 +1416,11 @@ func _build_detail_header(provider: Dictionary) -> Control:
 	row.add_theme_constant_override("separation", 12)
 	panel.add_child(row)
 	var title := _label(
-		str(provider.get("displayName", "Provider")),
+		(
+			CUSTOM_MODEL_GROUP_NAME
+			if bool(provider.get("customModels", false))
+			else str(provider.get("displayName", "Provider"))
+		),
 		_section_font_size(),
 		ProviderTheme.INK,
 		"selected_provider_name"
@@ -1365,6 +1428,16 @@ func _build_detail_header(provider: Dictionary) -> Control:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.custom_minimum_size.y = _section_line_height()
 	row.add_child(title)
+	if bool(provider.get("customModels", false)):
+		var source := _label(
+			str(provider.get("displayName", "兼容接口")),
+			_caption_font_size(),
+			ProviderTheme.INK_MUTED,
+			"selected_custom_connection",
+		)
+		source.custom_minimum_size = Vector2(180, _control_height())
+		source.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		row.add_child(source)
 	var toggle := _button(
 		"",
 		"success"
@@ -1411,6 +1484,55 @@ func _build_detail_header(provider: Dictionary) -> Control:
 	return panel
 
 
+func _build_custom_connection_picker(selected: Dictionary) -> Control:
+	var panel := PanelContainer.new()
+	panel.name = "CustomConnectionPanel"
+	panel.add_theme_stylebox_override("panel", ProviderTheme.empty_style())
+	_register_paper_surface(panel, [0, 0, 0, 0])
+	_mark_content_surface(panel)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	panel.add_child(column)
+	column.add_child(_section_heading(
+		"连接来源",
+		"Ollama、LM Studio、302.AI 和其他兼容接口统一归在这里",
+	))
+	var picker := OptionButton.new()
+	picker.name = "CustomConnectionPicker"
+	picker.custom_minimum_size = Vector2(
+		220 if _is_phone_profile() else 320,
+		_control_height(),
+	)
+	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	picker.focus_mode = Control.FOCUS_ALL
+	picker.add_theme_font_size_override("font_size", _body_font_size())
+	picker.add_to_group("provider_settings_touch_target")
+	picker.set_meta("gate_id", "custom_connection_picker")
+	ProviderButtonMotion.attach(picker)
+	var selected_index := 0
+	var providers := _custom_providers()
+	for index: int in range(providers.size()):
+		var provider := providers[index]
+		var label := str(provider.get("displayName", "兼容接口"))
+		var connection := provider.get("connection", {}) as Dictionary
+		picker.add_item("%s · %s" % [
+			label,
+			str(connection.get("label", "待配置")),
+		])
+		picker.set_item_metadata(index, str(provider.get("providerId", "")))
+		if str(provider.get("providerId", "")) == str(selected.get("providerId", "")):
+			selected_index = index
+	if picker.item_count > 0:
+		picker.select(selected_index)
+	picker.item_selected.connect(func(index: int) -> void:
+		var provider := _find_provider(str(picker.get_item_metadata(index)))
+		if not provider.is_empty():
+			_select_provider(provider)
+	)
+	column.add_child(picker)
+	return panel
+
+
 func _build_key_section(provider: Dictionary) -> Control:
 	var panel := PanelContainer.new()
 	panel.name = "ApiKeyPanel"
@@ -1423,7 +1545,10 @@ func _build_key_section(provider: Dictionary) -> Control:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 8)
 	panel.add_child(column)
-	column.add_child(_section_heading("API Key", "仅保存在本机"))
+	column.add_child(_section_heading(
+		"API Key",
+		"仅保存在本机" if bool(provider.get("authRequired", true)) else "可选，仅保存在本机",
+	))
 
 	var form: Container
 	if _layout_profile == "desktop_wide":
@@ -1441,7 +1566,11 @@ func _build_key_section(provider: Dictionary) -> Control:
 	_key_edit.placeholder_text = (
 		"已安全保存，输入新 Key 可替换"
 		if bool(key_data.get("saved", false))
-		else "请输入 API Key"
+		else (
+			"请输入 API Key"
+			if bool(provider.get("authRequired", true))
+			else "本地服务通常无需填写"
+		)
 	)
 	_key_edit.text = _draft_key
 	_key_edit.custom_minimum_size = Vector2(
@@ -1555,7 +1684,11 @@ func _build_base_url_section(provider: Dictionary) -> Control:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 8)
 	panel.add_child(column)
-	column.add_child(_section_heading("Base URL", "留空使用官方地址"))
+	var default_base_url := String(provider.get("defaultBaseUrl", ""))
+	column.add_child(_section_heading(
+		"Base URL",
+		"留空使用 %s" % default_base_url if not default_base_url.is_empty() else "请填写服务地址",
+	))
 	var row: Container
 	if _is_phone_profile():
 		row = VBoxContainer.new()
@@ -1566,7 +1699,9 @@ func _build_base_url_section(provider: Dictionary) -> Control:
 	_base_url_edit = LineEdit.new()
 	_base_url_edit.name = "BaseUrlInput"
 	_base_url_edit.text = _draft_base_url
-	_base_url_edit.placeholder_text = "留空使用官方默认地址"
+	_base_url_edit.placeholder_text = (
+		default_base_url if not default_base_url.is_empty() else "例如 https://host/v1"
+	)
 	_base_url_edit.custom_minimum_size = Vector2(
 		220 if _is_phone_profile() else 320,
 		_field_height()
@@ -1636,6 +1771,8 @@ func _build_models_section(provider: Dictionary) -> Control:
 		"模型与能力",
 		"启用后参与连接检查"
 	))
+	if bool(provider.get("customModels", false)):
+		column.add_child(_build_api_model_editor(provider))
 	var grid := GridContainer.new()
 	grid.name = "ModelGrid"
 	grid.columns = 1 if _is_phone_profile() else 2
@@ -1652,6 +1789,88 @@ func _build_models_section(provider: Dictionary) -> Control:
 				model_value as Dictionary
 			))
 	return panel
+
+
+func _build_api_model_editor(provider: Dictionary) -> Control:
+	var row: Container = (
+		VBoxContainer.new() if _is_phone_profile() else HBoxContainer.new()
+	)
+	row.add_theme_constant_override("separation", 10)
+	_api_model_edit = LineEdit.new()
+	_api_model_edit.name = "ApiModelInput"
+	_api_model_edit.text = _draft_api_model
+	_api_model_edit.placeholder_text = "实际模型 ID，例如 gpt-4.1-mini 或 qwen3:8b"
+	_api_model_edit.custom_minimum_size = Vector2(
+		220 if _is_phone_profile() else 320,
+		_field_height(),
+	)
+	_api_model_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_api_model_edit.add_to_group("provider_settings_touch_target")
+	_api_model_edit.set_meta("gate_id", "api_model_input")
+	_api_model_edit.text_changed.connect(func(value: String) -> void:
+		_draft_api_model = value
+	)
+	row.add_child(_api_model_edit)
+	var save := _button(
+		"添加并选用",
+		"quiet",
+		Vector2(176 if not _is_phone_profile() else 220, _control_height()),
+	)
+	save.name = "SaveApiModelButton"
+	save.disabled = not _action_enabled("saveApiModel") or _operation_loading()
+	save.pressed.connect(func() -> void:
+		_dispatch_intent(
+			&"provider_settings.save_api_model",
+			{
+				"providerId": str(provider.get("providerId", "")),
+				"apiModel": _api_model_edit.text,
+			},
+		)
+	)
+	row.add_child(save)
+	var discover := _button(
+		"自动获取",
+		"quiet",
+		Vector2(144 if not _is_phone_profile() else 220, _control_height()),
+	)
+	discover.name = "DiscoverModelsButton"
+	discover.disabled = (
+		not _action_enabled("discoverModels")
+		or _operation_loading()
+		or (
+			bool(provider.get("authRequired", true))
+			and not bool((provider.get("key", {}) as Dictionary).get("saved", false))
+		)
+	)
+	discover.tooltip_text = "从服务读取模型列表，失败时仍可手动填写"
+	discover.pressed.connect(func() -> void:
+		_dispatch_intent(
+			&"provider_settings.discover_models",
+			{"providerId": str(provider.get("providerId", ""))},
+		)
+	)
+	row.add_child(discover)
+	var selected_model := str(provider.get("apiModel", ""))
+	var delete := _button(
+		"删除当前",
+		"danger",
+		Vector2(144 if not _is_phone_profile() else 220, _control_height()),
+	)
+	delete.name = "DeleteApiModelButton"
+	delete.disabled = (
+		not _action_enabled("deleteApiModel")
+		or _operation_loading()
+		or selected_model.is_empty()
+	)
+	delete.tooltip_text = "删除当前选中的自定义模型"
+	delete.pressed.connect(func() -> void:
+		_request_delete_custom_model(
+			str(provider.get("providerId", "")),
+			selected_model,
+		)
+	)
+	row.add_child(delete)
+	return row
 
 
 func _model_card(
@@ -2143,6 +2362,39 @@ func _find_provider(provider_id: String) -> Dictionary:
 	return {}
 
 
+func _custom_providers() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for provider_value: Variant in _render_data.get("providers", []) as Array:
+		if not provider_value is Dictionary:
+			continue
+		var provider := provider_value as Dictionary
+		if bool(provider.get("customModels", false)):
+			result.append(provider)
+	return result
+
+
+func _visible_providers() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var custom_group: Dictionary = {}
+	for provider_value: Variant in _render_data.get("providers", []) as Array:
+		if not provider_value is Dictionary:
+			continue
+		var provider := provider_value as Dictionary
+		if not bool(provider.get("customModels", false)):
+			result.append(provider)
+			continue
+		if (
+			custom_group.is_empty()
+			or str(provider.get("providerId", "")) == _selected_provider_id
+		):
+			custom_group = provider.duplicate(true)
+	if not custom_group.is_empty():
+		custom_group["displayName"] = CUSTOM_MODEL_GROUP_NAME
+		custom_group["customGroup"] = true
+		result.append(custom_group)
+	return result
+
+
 func _action_enabled(action_key: String) -> bool:
 	var action := UiViewModel.action(_view_model, action_key)
 	return UiViewModel.action_enabled(action)
@@ -2178,6 +2430,7 @@ func _perform_provider_selection(provider: Dictionary) -> void:
 	_draft_key_dirty = false
 	_show_key = false
 	_draft_base_url = str(provider.get("baseUrl", ""))
+	_draft_api_model = ""
 	_dispatch_intent(
 		&"provider_settings.select_provider",
 		{"providerId": provider_id}

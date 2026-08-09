@@ -24,6 +24,12 @@ const REQUIRED_PROVIDER_METHODS: Array[String] = [
 	"list_available_models",
 	"validate_resident_bindings",
 ]
+const CUSTOM_MODEL_PROVIDER_IDS := [
+	"openai-compatible",
+	"302-ai",
+	"ollama",
+	"lm-studio",
+]
 const INTENT_TO_ACTION := {
 	"resident_model_assignment.select_resident": "selectResident",
 	"resident_model_assignment.set_filter": "setFilter",
@@ -713,6 +719,8 @@ func _provider_snapshots() -> Array[Dictionary]:
 
 
 func _compact_provider_name(provider_id: String, fallback: String) -> String:
+	if provider_id in CUSTOM_MODEL_PROVIDER_IDS:
+		return "自定义模型 · %s" % fallback
 	match provider_id:
 		"deepseek":
 			return "DeepSeek"
