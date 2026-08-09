@@ -2166,6 +2166,8 @@ func _remove_tree(path: String) -> bool:
 	for directory_name: String in directory.get_directories():
 		if not _remove_tree(_join(path, directory_name)):
 			return false
+	# Windows keeps the directory locked while this iterator owns its handle.
+	directory = null
 	return _remove_absolute(absolute_path) == OK
 
 
@@ -3390,7 +3392,12 @@ func _remove_empty_archive_root(archive_root: String) -> void:
 	var directory := DirAccess.open(archive_root)
 	if directory == null:
 		return
-	if directory.get_files().is_empty() and directory.get_directories().is_empty():
+	var is_empty := (
+		directory.get_files().is_empty()
+		and directory.get_directories().is_empty()
+	)
+	directory = null
+	if is_empty:
 		DirAccess.remove_absolute(_absolute(archive_root))
 
 

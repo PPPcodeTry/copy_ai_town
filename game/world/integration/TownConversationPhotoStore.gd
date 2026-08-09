@@ -603,6 +603,8 @@ func _remove_tree(path: String) -> Error:
 		var child_error := _remove_tree("%s/%s" % [path, directory_name])
 		if child_error != OK:
 			return child_error
+	# Windows keeps the directory locked while this iterator owns its handle.
+	directory = null
 	return DirAccess.remove_absolute(absolute)
 
 

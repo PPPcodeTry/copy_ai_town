@@ -29,6 +29,7 @@ const PLAYER_SPEED := (
 )
 const PLAYER_CONTACT_PROBE_DISTANCE := 1.0
 const CAFE_PLAYER_DEPTH := 1000
+const DEFAULT_VIEWPORT_SIZE := Vector2(1920.0, 1080.0)
 # 室外完整地图在 z=0，运行时重绘的前景遮挡最低会落到 z=99；脚底阴影
 # 必须夹在两者之间。室内地板壳在 z=-10，家具从 z=0 开始，因此室内
 # 阴影单独落在 -9，避免跟随人物层级盖黑台阶、家具和屋顶。
@@ -1197,7 +1198,7 @@ func _build_environment_test() -> void:
 	add_child(_weather_layer)
 	_weather_overlay.name = "CloudRainAndLightning"
 	_weather_overlay.position = Vector2.ZERO
-	_weather_overlay.size = get_viewport_rect().size
+	_weather_overlay.size = _viewport_size_or_default()
 	_weather_overlay.color = Color.WHITE
 	_weather_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var shader := Shader.new()
@@ -1256,16 +1257,21 @@ func _build_environment_lights() -> void:
 
 
 func _build_screen_leaf_particles(weather_layer: CanvasLayer) -> void:
+	var viewport_size := _viewport_size_or_default()
 	_leaf_particles.name = "WindLeaves"
 	_leaf_particles.amount = 28
 	_leaf_particles.lifetime = 5.5
 	_leaf_particles.preprocess = 5.5
 	_leaf_particles.randomness = 0.72
-	_leaf_particles.position = Vector2(get_viewport_rect().size.x * 0.5, -40.0)
+	_leaf_particles.position = Vector2(viewport_size.x * 0.5, -40.0)
 	_leaf_particles.texture = _make_soft_particle_texture(10, Color(0.96, 0.67, 0.18, 0.92))
 	_leaf_material = ParticleProcessMaterial.new()
 	_leaf_material.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	_leaf_material.emission_box_extents = Vector3(get_viewport_rect().size.x * 0.58, 24.0, 0.0)
+	_leaf_material.emission_box_extents = Vector3(
+		viewport_size.x * 0.58,
+		24.0,
+		0.0,
+	)
 	_leaf_material.direction = Vector3(0.18, 1.0, 0.0).normalized()
 	_leaf_material.spread = 22.0
 	_leaf_material.initial_velocity_min = 95.0
@@ -1366,10 +1372,15 @@ func _make_soft_particle_texture(size: int, color: Color) -> Texture2D:
 
 
 func _resize_weather_overlay() -> void:
-	_weather_overlay.size = get_viewport_rect().size
-	_leaf_particles.position = Vector2(get_viewport_rect().size.x * 0.5, -40.0)
+	var viewport_size := _viewport_size_or_default()
+	_weather_overlay.size = viewport_size
+	_leaf_particles.position = Vector2(viewport_size.x * 0.5, -40.0)
 	if _leaf_material != null:
-		_leaf_material.emission_box_extents = Vector3(get_viewport_rect().size.x * 0.58, 24.0, 0.0)
+		_leaf_material.emission_box_extents = Vector3(
+			viewport_size.x * 0.58,
+			24.0,
+			0.0,
+		)
 
 
 func _update_environment_test(delta: float) -> void:
@@ -2389,10 +2400,35 @@ func _zoom_value_for_index(index: int) -> float:
 
 
 func _overview_zoom_value() -> float:
-	var viewport_size := get_viewport_rect().size
+	var viewport_size := _viewport_size_or_default()
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		return 0.25
 	return minf(viewport_size.x / MAP_SIZE.x, viewport_size.y / MAP_SIZE.y) * OVERVIEW_ZOOM_MARGIN
+
+
+func _viewport_size_or_default() -> Vector2:
+	# Save restore builds and configures the formal Town while it is still detached
+	# from the SceneTree. CanvasItem.get_viewport_rect() reports an engine error in
+	# that state, so all pre-tree layout work must use the project viewport instead.
+	if is_inside_tree():
+		var viewport_size := get_viewport_rect().size
+		if viewport_size.x > 0.0 and viewport_size.y > 0.0:
+			return viewport_size
+	var configured_size := Vector2(
+		float(ProjectSettings.get_setting(
+			"display/window/size/viewport_width",
+			DEFAULT_VIEWPORT_SIZE.x,
+		)),
+		float(ProjectSettings.get_setting(
+			"display/window/size/viewport_height",
+			DEFAULT_VIEWPORT_SIZE.y,
+		)),
+	)
+	return (
+		configured_size
+		if configured_size.x > 0.0 and configured_size.y > 0.0
+		else DEFAULT_VIEWPORT_SIZE
+	)
 
 
 func _update_camera_target(reset_smoothing := false) -> void:

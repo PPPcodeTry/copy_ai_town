@@ -8,6 +8,7 @@ python3 "$guards_dir/line_ratchet.py" --check || status=1
 python3 "$guards_dir/dynamic_call_scan.py" --check || status=1
 python3 "$guards_dir/zero_reference_scan.py" --check || status=1
 python3 "$guards_dir/required_tests_check.py" || status=1
+python3 "$guards_dir/cross_platform_text_check.py" || status=1
 if [ "$status" -ne 0 ]; then
 	echo "GUARDS_FAILED"
 	exit 1

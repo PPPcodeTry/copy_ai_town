@@ -25,6 +25,9 @@ static func remove_tree(path: String) -> Error:
 				return remove_error
 		name = directory.get_next()
 	directory.list_dir_end()
+	# Windows can keep the directory locked until the DirAccess object itself is
+	# released, even after list_dir_end() closes the enumeration.
+	directory = null
 	return DirAccess.remove_absolute(absolute_path)
 
 
@@ -38,6 +41,7 @@ static func remove_empty_directory(path: String) -> void:
 	directory.list_dir_begin()
 	var first_entry := directory.get_next()
 	directory.list_dir_end()
+	directory = null
 	if first_entry.is_empty():
 		DirAccess.remove_absolute(absolute_path)
 
