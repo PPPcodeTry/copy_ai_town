@@ -720,7 +720,10 @@ func _provider_snapshots() -> Array[Dictionary]:
 
 func _compact_provider_name(provider_id: String, fallback: String) -> String:
 	if provider_id in CUSTOM_MODEL_PROVIDER_IDS:
-		return "自定义模型 · %s" % fallback
+		var source := fallback.replace("（本地）", "")
+		if provider_id == "openai-compatible":
+			source = "兼容接口"
+		return "自定义 · %s" % source
 	match provider_id:
 		"deepseek":
 			return "DeepSeek"

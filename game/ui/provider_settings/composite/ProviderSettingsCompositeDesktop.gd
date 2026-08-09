@@ -36,9 +36,14 @@ const SETTINGS_BOARD_SOURCE_DIVIDER := 641.0
 const SETTINGS_BOARD_SOURCE_RIGHT := 1518.0
 const SELECTOR_STRETCH_SAMPLE_Y := 720.0
 const DETAIL_STRETCH_SAMPLE_Y := 735.0
+const CUSTOM_MODEL_INPUT_RECT := Rect2(838.0, 548.0, 160.0, 38.0)
+const CUSTOM_MODEL_ADD_RECT := Rect2(1004.0, 548.0, 58.0, 38.0)
+const CUSTOM_MODEL_DISCOVER_RECT := Rect2(1067.0, 548.0, 58.0, 38.0)
+const CUSTOM_MODEL_DELETE_RECT := Rect2(1130.0, 548.0, 58.0, 38.0)
 
 var key_edit: LineEdit
 var base_url_edit: LineEdit
+var api_model_edit: LineEdit
 var status_label: Label
 var check_button: Button
 var formal_badge: Label
@@ -51,6 +56,7 @@ var _selected_provider_id := ""
 var _draft_key := ""
 var _draft_key_dirty := false
 var _draft_base_url := ""
+var _draft_api_model := ""
 var _show_key := false
 var _contract: Dictionary
 var _slots: Dictionary
@@ -72,6 +78,7 @@ func configure(
 	draft_key: String,
 	draft_key_dirty: bool,
 	draft_base_url: String,
+	draft_api_model: String,
 	show_key: bool,
 	provider_page: int,
 	model_page: int,
@@ -83,6 +90,7 @@ func configure(
 	_draft_key = draft_key
 	_draft_key_dirty = draft_key_dirty
 	_draft_base_url = draft_base_url
+	_draft_api_model = draft_api_model
 	_show_key = show_key
 	_contract = _load_json(CONTRACT_PATH)
 	if _contract.is_empty():
@@ -514,13 +522,16 @@ func _build_selected_header(
 		"ui.provider-settings.composite.selected-provider-header.v1",
 		"composite-subregion"
 	)
-	_add_slot_label(
-		owner,
-		region_rect,
-		"selected_provider",
-		str(provider.get("displayName", "Provider")),
-		ProviderTheme.COMPOSITE_INK
-	)
+	if bool(provider.get("customGroup", false)):
+		_build_custom_connection_selector(provider, owner, region_rect)
+	else:
+		_add_slot_label(
+			owner,
+			region_rect,
+			"selected_provider",
+			str(provider.get("displayName", "Provider")),
+			ProviderTheme.COMPOSITE_INK
+		)
 	var toggle := _hit_button(
 		provider_detail,
 		detail_rect,
@@ -552,6 +563,89 @@ func _build_selected_header(
 			}
 		)
 	)
+
+
+func _build_custom_connection_selector(
+	provider: Dictionary,
+	owner: Control,
+	region_rect: Rect2,
+) -> void:
+	var slot := _slots.get("selected_provider", {}) as Dictionary
+	var target_rect := _scaled_rect(
+		_rect(slot.get("wellRect", slot.get("rect", [])))
+	)
+	var selector := OptionButton.new()
+	selector.name = "CustomConnectionSelector"
+	_place(selector, target_rect, region_rect)
+	selector.focus_mode = Control.FOCUS_ALL
+	selector.clip_text = true
+	selector.add_theme_font_override(
+		"font",
+		ProviderTheme.composite_font("body"),
+	)
+	selector.add_theme_font_size_override(
+		"font_size",
+		_scaled_font_size(24),
+	)
+	for color_id: String in [
+		"font_color",
+		"font_hover_color",
+		"font_pressed_color",
+		"font_focus_color",
+	]:
+		selector.add_theme_color_override(
+			color_id,
+			ProviderTheme.COMPOSITE_INK,
+		)
+	for state: String in [
+		"normal",
+		"hover",
+		"pressed",
+		"hover_pressed",
+		"focus",
+		"disabled",
+	]:
+		selector.add_theme_stylebox_override(
+			state,
+			ProviderTheme.transparent_input_style(),
+		)
+	selector.add_to_group("provider_settings_touch_target")
+	selector.set_meta("gate_id", "custom_connection_selector")
+	_register_owner(
+		selector,
+		"custom_connection_selector",
+		"operation_control",
+		"ui.provider-settings.composite.custom-connection-selector.v1",
+		"composite-transparent-control",
+	)
+	_mark_surface(selector)
+	var selected_index := 0
+	var connections := provider.get("customConnections", []) as Array
+	for index: int in range(connections.size()):
+		var connection := connections[index] as Dictionary
+		selector.add_item("自定义模型 · %s" % str(
+			connection.get("displayName", "兼容接口")
+		))
+		selector.set_item_metadata(
+			index,
+			str(connection.get("providerId", "")),
+		)
+		if str(connection.get("providerId", "")) == str(
+			provider.get("providerId", "")
+		):
+			selected_index = index
+	if selector.item_count == 0:
+		selector.add_item("自定义模型")
+		selector.disabled = true
+	else:
+		selector.select(selected_index)
+	selector.item_selected.connect(func(index: int) -> void:
+		ui_action.emit(
+			&"provider_settings.select_provider",
+			{"providerId": str(selector.get_item_metadata(index))},
+		)
+	)
+	owner.add_child(selector)
 
 
 func _build_key_section(
@@ -591,7 +685,11 @@ func _build_key_section(
 	key_edit.placeholder_text = (
 		str(key_data.get("maskedValue", "••••••••••••"))
 		if bool(key_data.get("saved", false))
-		else "请输入 API Key"
+		else (
+			"本地服务通常无需填写"
+			if not bool(provider.get("authRequired", true))
+			else "请输入 API Key"
+		)
 	)
 	key_edit.text_changed.connect(func(value: String) -> void:
 		ui_action.emit(&"ui.draft_key", {"value": value})
@@ -756,6 +854,8 @@ func _build_models_section(
 		"模型与能力",
 		ProviderTheme.COMPOSITE_INK
 	)
+	if bool(provider.get("customModels", false)):
+		_build_custom_model_controls(provider, owner, region_rect)
 	var models := provider.get("models", []) as Array
 	var page_count := _page_count(models.size(), MODELS_PER_PAGE)
 	_model_page = clampi(_model_page, 0, page_count - 1)
@@ -873,6 +973,208 @@ func _build_models_section(
 		)
 
 
+func _build_custom_model_controls(
+	provider: Dictionary,
+	owner: Control,
+	region_rect: Rect2,
+) -> void:
+	api_model_edit = LineEdit.new()
+	api_model_edit.name = "ApiModelInput"
+	_place(api_model_edit, _scaled_rect(CUSTOM_MODEL_INPUT_RECT), region_rect)
+	api_model_edit.text = _draft_api_model
+	api_model_edit.placeholder_text = "模型 ID"
+	api_model_edit.focus_mode = Control.FOCUS_ALL
+	api_model_edit.add_theme_font_override(
+		"font",
+		ProviderTheme.composite_font("small"),
+	)
+	api_model_edit.add_theme_font_size_override(
+		"font_size",
+		_scaled_font_size(18),
+	)
+	api_model_edit.add_theme_color_override(
+		"font_color",
+		ProviderTheme.COMPOSITE_INK,
+	)
+	api_model_edit.add_theme_color_override(
+		"font_placeholder_color",
+		ProviderTheme.COMPOSITE_MUTED,
+	)
+	for state: String in ["normal", "focus", "read_only"]:
+		var input_style := ProviderTheme.input_style(
+			"focus" if state == "focus" else "normal"
+		)
+		input_style.content_margin_left = _scaled_spacing(8.0)
+		input_style.content_margin_right = _scaled_spacing(8.0)
+		input_style.content_margin_top = _scaled_spacing(2.0)
+		input_style.content_margin_bottom = _scaled_spacing(2.0)
+		api_model_edit.add_theme_stylebox_override(state, input_style)
+	api_model_edit.add_to_group("provider_settings_touch_target")
+	api_model_edit.set_meta("gate_id", "api_model_input")
+	_register_owner(
+		api_model_edit,
+		"api_model_input",
+		"content_slot",
+		"ui.provider-settings.composite.api-model-input.v1",
+		"composite-input",
+	)
+	_mark_surface(api_model_edit)
+	owner.add_child(api_model_edit)
+
+	var add := _custom_model_action_button(
+		owner,
+		region_rect,
+		CUSTOM_MODEL_ADD_RECT,
+		"AddApiModelButton",
+		"api_model_add",
+		"添加",
+		"success",
+	)
+	add.disabled = (
+		_draft_api_model.strip_edges().is_empty()
+		or not _action_enabled("saveApiModel")
+		or _operation_loading()
+	)
+	add.tooltip_text = "添加并选用这个模型 ID"
+	add.pressed.connect(func() -> void:
+		ui_action.emit(
+			&"provider_settings.save_api_model",
+			{
+				"providerId": str(provider.get("providerId", "")),
+				"apiModel": api_model_edit.text,
+			},
+		)
+	)
+	api_model_edit.text_changed.connect(func(value: String) -> void:
+		_draft_api_model = value
+		ui_action.emit(&"ui.draft_api_model", {"value": value})
+		add.disabled = (
+			value.strip_edges().is_empty()
+			or not _action_enabled("saveApiModel")
+			or _operation_loading()
+		)
+	)
+	api_model_edit.text_submitted.connect(func(value: String) -> void:
+		if not add.disabled:
+			ui_action.emit(
+				&"provider_settings.save_api_model",
+				{
+					"providerId": str(provider.get("providerId", "")),
+					"apiModel": value,
+				},
+			)
+	)
+
+	var discover := _custom_model_action_button(
+		owner,
+		region_rect,
+		CUSTOM_MODEL_DISCOVER_RECT,
+		"DiscoverModelsButton",
+		"api_model_discover",
+		"获取",
+		"quiet",
+	)
+	discover.disabled = (
+		not _action_enabled("discoverModels")
+		or _operation_loading()
+		or (
+			bool(provider.get("authRequired", true))
+			and not bool((provider.get("key", {}) as Dictionary).get("saved", false))
+		)
+	)
+	discover.tooltip_text = "从当前连接获取模型列表"
+	discover.pressed.connect(func() -> void:
+		ui_action.emit(
+			&"provider_settings.discover_models",
+			{"providerId": str(provider.get("providerId", ""))},
+		)
+	)
+
+	var selected_model := str(provider.get("apiModel", ""))
+	var delete := _custom_model_action_button(
+		owner,
+		region_rect,
+		CUSTOM_MODEL_DELETE_RECT,
+		"DeleteApiModelButton",
+		"api_model_delete",
+		"删除",
+		"danger",
+	)
+	delete.disabled = (
+		selected_model.is_empty()
+		or not _action_enabled("deleteApiModel")
+		or _operation_loading()
+	)
+	delete.tooltip_text = "删除当前选中的自定义模型"
+	delete.pressed.connect(func() -> void:
+		ui_action.emit(
+			&"ui.request_delete_api_model",
+			{
+				"providerId": str(provider.get("providerId", "")),
+				"apiModel": selected_model,
+			},
+		)
+	)
+
+
+func _custom_model_action_button(
+	parent: Control,
+	parent_rect: Rect2,
+	source_rect: Rect2,
+	node_name: String,
+	gate_id: String,
+	text_value: String,
+	tone: String,
+) -> Button:
+	var target_rect := _scaled_rect(source_rect)
+	var button := Button.new()
+	button.name = node_name
+	button.text = text_value
+	_place(button, target_rect, parent_rect)
+	button.focus_mode = Control.FOCUS_ALL
+	button.add_theme_font_override(
+		"font",
+		ProviderTheme.composite_font("small"),
+	)
+	button.add_theme_font_size_override(
+		"font_size",
+		_scaled_font_size(18),
+	)
+	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
+		var style := ProviderTheme.chip_style(
+			"quiet" if state == "disabled" else tone
+		)
+		if state in ["hover", "focus"]:
+			style.bg_color = style.bg_color.lightened(0.05)
+		elif state == "pressed":
+			style.bg_color = style.bg_color.darkened(0.08)
+		button.add_theme_stylebox_override(state, style)
+	for color_id: String in [
+		"font_color",
+		"font_hover_color",
+		"font_pressed_color",
+		"font_focus_color",
+	]:
+		button.add_theme_color_override(color_id, ProviderTheme.COMPOSITE_INK)
+	button.add_theme_color_override(
+		"font_disabled_color",
+		ProviderTheme.COMPOSITE_MUTED,
+	)
+	button.add_to_group("provider_settings_touch_target")
+	button.set_meta("gate_id", gate_id)
+	_register_owner(
+		button,
+		gate_id,
+		"operation_control",
+		"ui.provider-settings.composite.%s.v1" % gate_id,
+		"composite-button",
+	)
+	_mark_surface(button)
+	parent.add_child(button)
+	ProviderButtonMotion.attach(button)
+	return button
+
+
 func _pagination_button(
 	parent: Control,
 	parent_rect: Rect2,
@@ -957,6 +1259,8 @@ func _queue_pagination_rebuild() -> void:
 		_draft_key = key_edit.text
 	if base_url_edit != null:
 		_draft_base_url = base_url_edit.text
+	if api_model_edit != null:
+		_draft_api_model = api_model_edit.text
 	if _pagination_rebuild_queued:
 		return
 	_pagination_rebuild_queued = true
@@ -968,6 +1272,7 @@ func _rebuild_after_pagination() -> void:
 	UiNodeRetirement.retire_children(self)
 	key_edit = null
 	base_url_edit = null
+	api_model_edit = null
 	status_label = null
 	check_button = null
 	formal_badge = null

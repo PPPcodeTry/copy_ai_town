@@ -805,13 +805,32 @@ func _rebuild_composite_desktop(viewport_size: Vector2) -> void:
 	_composite_desktop.name = "CompositeDesktopRoot"
 	_layout_root = _composite_desktop
 	add_child(_layout_root)
+	var composite_data := _render_data.duplicate(true)
+	var visible_providers := _visible_providers()
+	composite_data["providers"] = visible_providers
+	var visible_available := 0
+	var visible_enabled_models := 0
+	for provider: Dictionary in visible_providers:
+		if bool(provider.get("available", false)):
+			visible_available += 1
+		for model_value: Variant in provider.get("models", []) as Array:
+			if (
+				model_value is Dictionary
+				and bool((model_value as Dictionary).get("enabled", false))
+			):
+				visible_enabled_models += 1
+	composite_data["summary"] = {
+		"availableProviderCount": visible_available,
+		"enabledModelCount": visible_enabled_models,
+	}
 	var configured := _composite_desktop.configure(
 		_view_model,
-		_render_data,
+		composite_data,
 		_selected_provider_id,
 		_draft_key,
 		_draft_key_dirty,
 		_draft_base_url,
+		_draft_api_model,
 		_show_key,
 		_provider_page,
 		_model_page,
@@ -874,6 +893,11 @@ func _on_composite_ui_action(
 			_draft_base_url = str(payload.get("value", ""))
 		&"ui.draft_api_model":
 			_draft_api_model = str(payload.get("value", ""))
+		&"ui.request_delete_api_model":
+			_request_delete_custom_model(
+				str(payload.get("providerId", "")),
+				str(payload.get("apiModel", "")),
+			)
 		&"ui.toggle_key_visibility":
 			_toggle_key_visibility(_selected_provider_id)
 		&"ui.save_key":
@@ -2391,6 +2415,7 @@ func _visible_providers() -> Array[Dictionary]:
 	if not custom_group.is_empty():
 		custom_group["displayName"] = CUSTOM_MODEL_GROUP_NAME
 		custom_group["customGroup"] = true
+		custom_group["customConnections"] = _custom_providers()
 		result.append(custom_group)
 	return result
 

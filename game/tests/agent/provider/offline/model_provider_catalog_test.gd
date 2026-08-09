@@ -676,11 +676,21 @@ func _test_custom_model_ui_grouping() -> void:
 		"ollama",
 		"the grouped card keeps the selected custom connection active",
 	)
+	_expect_equal(
+		(screen._use_composite_desktop(Vector2(1920, 1080))),
+		true,
+		"1920 desktop keeps the formal composite provider settings layout",
+	)
+	_expect_equal(
+		(visible[1].get("customConnections", []) as Array).size(),
+		3,
+		"the custom model group preserves every compatible connection",
+	)
 	screen.free()
 	var assignment := ResidentAssignmentServiceScript.new()
 	_expect_equal(
 		assignment._compact_provider_name("ollama", "Ollama（本地）"),
-		"自定义模型 · Ollama（本地）",
+		"自定义 · Ollama",
 		"resident model cards identify custom models and their connection source",
 	)
 
