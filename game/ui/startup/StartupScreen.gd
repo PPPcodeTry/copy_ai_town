@@ -17,8 +17,9 @@ const QUIT_GAME_INTENT := &"startup.quit_game"
 const RESIDENT_MESSAGES_SHOWN_INTENT := &"startup.resident_messages_shown"
 const UiNodeRetirement := preload("res://ui/common/AiTownUiNodeRetirement.gd")
 
-const TOWN_MAP_TEXTURE_PATH := "res://world/maps/town/assets/town.png"
-const TOWN_RUNTIME_LAYERS_PATH := "res://world/maps/town/generated/layers.tscn"
+const STARTUP_BACKGROUND_TEXTURE_PATH := (
+	"res://assets/ui/startup/final/startup_town_background.png"
+)
 const STARTUP_TITLE_PATH := "res://assets/ui/startup/final/startup_title_sign.png"
 const STARTUP_COMPONENT_DIR := "res://assets/ui/startup/final/components_v1"
 const STARTUP_EXACT_COMPONENT_DIR := (
@@ -50,14 +51,15 @@ const STARTUP_BUTTON_THEME := preload(
 const AMBIENT_RESIDENT_SCRIPT_PATH := (
 	"res://ui/startup/StartupAmbientResident.gd"
 )
-const AMBIENT_ROUTE_CATALOG_SCRIPT := preload(
+const AMBIENT_ROUTE_CATALOG_SCRIPT_PATH := (
 	"res://ui/startup/StartupAmbientRouteCatalog.gd"
 )
 
 const REFERENCE_VIEWPORT := Vector2(1920.0, 1080.0)
 const MAIN_MENU_SCALE := 0.86
 const MAIN_MENU_PIVOT := Vector2(960.0, 570.0)
-const WORLD_MAP_SIZE := Vector2(6688.0, 3764.0)
+const STARTUP_BACKGROUND_SIZE := Vector2(1920.0, 1080.0)
+const FORMAL_TOWN_MAP_SIZE := Vector2(6688.0, 3764.0)
 const STARTUP_OCCLUSION_GROUP := &"startup_map_occlusion_subject"
 const STARTUP_AMBIENT_RESIDENT_VISUALS_ENABLED := false
 const AMBIENT_LOADOUTS: Array[String] = [
@@ -162,14 +164,20 @@ void fragment() {
 	float rain_on = clamp(rain_intensity + storm_on, 0.0, 1.0);
 	float snow_on = clamp(snow_intensity, 0.0, 1.0);
 
-	float rain = rain_layer(UV, 1.0, 15.0, 0.0) * 0.66;
-	rain += rain_layer(UV, 1.45, 21.0, 17.0) * 0.34;
-	rain *= rain_on;
+	float rain = 0.0;
+	if (rain_on > 0.001) {
+		rain = rain_layer(UV, 1.0, 15.0, 0.0) * 0.66;
+		rain += rain_layer(UV, 1.45, 21.0, 17.0) * 0.34;
+		rain *= rain_on;
+	}
 
-	float snow = snow_layer(UV, 0.75, 1.25, 4.0) * 0.48;
-	snow += snow_layer(UV, 1.15, 1.75, 19.0) * 0.36;
-	snow += snow_layer(UV, 1.60, 2.20, 37.0) * 0.22;
-	snow *= snow_on;
+	float snow = 0.0;
+	if (snow_on > 0.001) {
+		snow = snow_layer(UV, 0.75, 1.25, 4.0) * 0.48;
+		snow += snow_layer(UV, 1.15, 1.75, 19.0) * 0.36;
+		snow += snow_layer(UV, 1.60, 2.20, 37.0) * 0.22;
+		snow *= snow_on;
+	}
 
 	float bad_weather = max(rain_on, snow_on);
 	vec3 shade = mix(vec3(0.18, 0.24, 0.30), vec3(0.09, 0.13, 0.20), storm_on);
@@ -188,6 +196,7 @@ void fragment() {
 
 var _background_material: ShaderMaterial
 var _weather_material: ShaderMaterial
+var _weather_overlay: ColorRect
 var _ambient_world: Node2D
 var _ambient_resident_layer: Node2D
 var _ambient_residents: Array[Node] = []
@@ -295,53 +304,35 @@ func _build_background() -> void:
 	_build_formal_town_world()
 	_build_ambient_residents()
 
-	var weather_overlay := ColorRect.new()
-	weather_overlay.name = "WeatherOverlay"
-	weather_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	weather_overlay.color = Color.WHITE
-	weather_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	weather_overlay.z_index = 500
+	_weather_overlay = ColorRect.new()
+	_weather_overlay.name = "WeatherOverlay"
+	_weather_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_weather_overlay.color = Color.WHITE
+	_weather_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_weather_overlay.z_index = 500
 	var weather_shader := Shader.new()
 	weather_shader.code = WEATHER_SHADER_CODE
 	_weather_material = ShaderMaterial.new()
 	_weather_material.shader = weather_shader
-	weather_overlay.material = _weather_material
-	add_child(weather_overlay)
+	_weather_overlay.material = _weather_material
+	add_child(_weather_overlay)
 	resized.connect(_layout_ambient_world)
 	_layout_ambient_world()
 
 
 func _build_formal_town_world() -> void:
 	_ambient_world = Node2D.new()
-	_ambient_world.name = "FormalTownPreview"
+	_ambient_world.name = "StartupTownPreview"
 	add_child(_ambient_world)
 
 	var town_map := Sprite2D.new()
 	town_map.name = "TownMap"
 	town_map.centered = false
-	town_map.texture = _load_texture(TOWN_MAP_TEXTURE_PATH)
+	town_map.texture = _load_texture(STARTUP_BACKGROUND_TEXTURE_PATH)
 	town_map.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	town_map.material = _background_material
 	town_map.z_index = -200
 	_ambient_world.add_child(town_map)
-
-	if ResourceLoader.exists(TOWN_RUNTIME_LAYERS_PATH, "PackedScene"):
-		var layers_scene := ResourceLoader.load(
-			TOWN_RUNTIME_LAYERS_PATH,
-			"PackedScene"
-		) as PackedScene
-		if layers_scene != null:
-			var runtime_layers := layers_scene.instantiate()
-			runtime_layers.name = "FormalRuntimeLayers"
-			_ambient_world.add_child(runtime_layers)
-			var occlusion := runtime_layers.get_node_or_null("Occlusion")
-			if occlusion != null:
-				occlusion.set("subject_group", STARTUP_OCCLUSION_GROUP)
-				for child in occlusion.get_children():
-					if child is Polygon2D:
-						(child as Polygon2D).material = _background_material
-	else:
-		push_error("启动页缺少正式地图运行层：%s" % TOWN_RUNTIME_LAYERS_PATH)
 
 	_ambient_resident_layer = Node2D.new()
 	_ambient_resident_layer.name = "AmbientResidentLayer"
@@ -364,7 +355,12 @@ func _build_ambient_residents() -> void:
 	) as Script
 	if ambient_resident_script == null:
 		return
-	var route_catalog := AMBIENT_ROUTE_CATALOG_SCRIPT.new()
+	var route_catalog_script := load(
+		AMBIENT_ROUTE_CATALOG_SCRIPT_PATH
+	) as Script
+	if route_catalog_script == null:
+		return
+	var route_catalog: Object = route_catalog_script.new()
 	if not bool(route_catalog.call("load_catalog")):
 		return
 	var definitions: Array[Dictionary] = [
@@ -447,7 +443,7 @@ func _build_ambient_residents() -> void:
 	var available_definitions := definitions.duplicate(true)
 	var available_loadouts := AMBIENT_LOADOUTS.duplicate()
 	var resident_count := _rng.randi_range(4, definitions.size())
-	var reference_scale := REFERENCE_VIEWPORT.x / WORLD_MAP_SIZE.x
+	var reference_scale := REFERENCE_VIEWPORT.x / FORMAL_TOWN_MAP_SIZE.x
 	for index in range(resident_count):
 		var definition_index := _rng.randi_range(0, available_definitions.size() - 1)
 		var definition := available_definitions.pop_at(definition_index) as Dictionary
@@ -491,11 +487,13 @@ func _layout_ambient_world() -> void:
 	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
 		viewport_size = get_viewport_rect().size
 	var cover_scale := maxf(
-		viewport_size.x / WORLD_MAP_SIZE.x,
-		viewport_size.y / WORLD_MAP_SIZE.y
+		viewport_size.x / STARTUP_BACKGROUND_SIZE.x,
+		viewport_size.y / STARTUP_BACKGROUND_SIZE.y
 	)
 	_ambient_world.scale = Vector2.ONE * cover_scale
-	_ambient_world.position = (viewport_size - WORLD_MAP_SIZE * cover_scale) * 0.5
+	_ambient_world.position = (
+		viewport_size - STARTUP_BACKGROUND_SIZE * cover_scale
+	) * 0.5
 
 
 func _build_interface() -> void:
@@ -788,6 +786,11 @@ func _sync_weather_shader() -> void:
 	_weather_material.set_shader_parameter("rain_intensity", _rain_intensity)
 	_weather_material.set_shader_parameter("snow_intensity", _snow_intensity)
 	_weather_material.set_shader_parameter("storm_intensity", _storm_intensity)
+	if _weather_overlay != null:
+		_weather_overlay.visible = maxf(
+			_rain_intensity,
+			maxf(_snow_intensity, _storm_intensity),
+		) > 0.001
 
 
 func _day_modulate(cycle: float) -> Color:

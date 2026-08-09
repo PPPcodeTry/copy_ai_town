@@ -170,6 +170,17 @@ var _observer_magnify_accumulator := 0.0
 var _avatar_magnify_accumulator := 0.0
 
 
+# Formal sessions mount TownEnvironmentPresentation after the world starts.
+# Suppress TownBase's older preview weather, lights, particles and procedural
+# thunder so the same effects are not built and updated twice.
+func _build_environment_test() -> void:
+	pass
+
+
+func _update_environment_test(_delta: float) -> void:
+	pass
+
+
 func _ready() -> void:
 	if OS.get_environment("AI_TOWN_UI_FRAME_PROBE") == "1":
 		_frame_probe = load("res://world/presentation/ui/TownUiFrameProbe.gd")

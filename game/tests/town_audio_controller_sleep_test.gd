@@ -18,9 +18,31 @@ func _run() -> void:
 
 	var cover := audio.call("debug_snapshot") as Dictionary
 	_expect_equal(cover.get("musicId"), "cover", "startup uses its own cover music")
-	_expect_equal(cover.get("musicPoolSize"), 4, "title/day share the four-track daylife pool")
+	_expect_equal(cover.get("musicPoolSize"), 1, "startup loads only the compact cover track")
 	_expect_equal(cover.get("frontendMode"), true, "startup begins in cover mode")
+	_expect_equal(
+		cover.get("loadedMusicPoolIds"),
+		PackedStringArray(["cover"]),
+		"startup does not decode Town weather and time music pools",
+	)
+	_expect_equal(
+		cover.get("loadedBaseAmbienceIds"),
+		PackedStringArray(),
+		"startup does not synthesize Town ambience beds",
+	)
+	_expect_equal(cover.get("rainStreamLoaded"), false, "startup leaves rain audio unloaded")
+	_expect_equal(
+		cover.get("sleepNoiseStreamLoaded"),
+		false,
+		"startup leaves sleep noise unloaded",
+	)
+	_expect_equal(
+		cover.get("thunderStreamLoaded"),
+		false,
+		"startup leaves thunder audio unloaded",
+	)
 	for music_path: String in [
+		"res://assets/audio/music/music_town_cover_loop.ogg",
 		"res://assets/audio/music/music_town_daylife_gathering.wav",
 		"res://assets/audio/music/music_town_daylife_market.wav",
 		"res://assets/audio/music/music_town_daylife_corner_opening.wav",

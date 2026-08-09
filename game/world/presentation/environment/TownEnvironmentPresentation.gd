@@ -21,6 +21,8 @@ const SNOWFLAKE_ATLAS_PATH := (
 	"res://world/presentation/environment/assets/particles/snowflake_atlas_v1.png"
 )
 const REDUCED_FLASHING_SETTING := "application/accessibility/reduced_flashing"
+const DEFAULT_SNOW_PARTICLE_AMOUNT := 2600
+const COMPATIBILITY_SNOW_PARTICLE_AMOUNT := 1400
 const MINUTES_PER_DAY := 1440
 const PRESENTATION_TIME_CYCLE_SECONDS := 86_400.0
 const SMOKE_FADE_IN_SECONDS := 1.2
@@ -839,7 +841,9 @@ func _build_snowfall() -> void:
 
 	_snow_particles.name = "FormalWorldSnowParticles"
 	_snow_particles.position = Vector2(3344.0, 1882.0)
-	_snow_particles.amount = 2600
+	_snow_particles.amount = snow_particle_budget_for_rendering_method(
+		RenderingServer.get_current_rendering_method(),
+	)
 	_snow_particles.amount_ratio = 0.0
 	_snow_particles.lifetime = 32.0
 	_snow_particles.preprocess = 32.0
@@ -876,6 +880,16 @@ func _build_snowfall() -> void:
 	_snow_particle_material.color = Color(0.96, 0.98, 1.0, 0.90)
 	_snow_particles.process_material = _snow_particle_material
 	_snow_root.add_child(_snow_particles)
+
+
+static func snow_particle_budget_for_rendering_method(
+	rendering_method: String,
+) -> int:
+	return (
+		COMPATIBILITY_SNOW_PARTICLE_AMOUNT
+		if rendering_method == "gl_compatibility"
+		else DEFAULT_SNOW_PARTICLE_AMOUNT
+	)
 
 
 func _build_directional_shadow_overlay() -> void:

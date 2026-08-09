@@ -4,6 +4,7 @@ extends Node
 const SOUND_LIBRARY := preload("res://audio/TownProceduralSoundLibrary.gd")
 const SETTINGS_PATH := "user://audio_settings.cfg"
 const SETTINGS_SECTION := "audio"
+const COVER_MUSIC_PATH := "res://assets/audio/music/music_town_cover_loop.ogg"
 const DAYLIFE_MUSIC_PATHS := [
 	"res://assets/audio/music/music_town_daylife_gathering.wav",
 	"res://assets/audio/music/music_town_daylife_market.wav",
@@ -60,6 +61,23 @@ const SILENCE_DB := -60.0
 const UI_SAMPLE_RATE := 48000
 const UI_POOL_SIZE := 6
 const SFX_POOL_SIZE := 8
+const FRONTEND_CUE_IDS := [
+	"ui_tap",
+	"ui_select",
+	"ui_deselect",
+	"ui_back",
+	"ui_page",
+	"ui_tab",
+	"ui_toggle_on",
+	"ui_toggle_off",
+	"ui_slider",
+	"ui_confirm",
+	"ui_success",
+	"ui_warning",
+	"ui_error",
+	"ui_panel_open",
+	"connection_check",
+]
 const TAP_COOLDOWN_MSEC := 45
 const SLIDER_COOLDOWN_MSEC := 35
 
@@ -293,6 +311,10 @@ func set_indoor(indoor: bool) -> void:
 func play_cue(cue_id: String, volume_db: float = 0.0) -> void:
 	var stream := _cue_streams.get(cue_id) as AudioStream
 	if stream == null:
+		stream = _load_cue_stream(cue_id)
+		if stream != null:
+			_cue_streams[cue_id] = stream
+	if stream == null:
 		return
 	var pitch_range := _cue_pitch_range(cue_id)
 	var cue_volume := volume_db + _cue_volume_db(cue_id)
@@ -382,6 +404,14 @@ func debug_snapshot() -> Dictionary:
 			"position": player.get_playback_position(),
 			"volumeDb": player.volume_db,
 		})
+	var loaded_music_pool_ids := PackedStringArray()
+	for pool_id: String in _music_stream_pools:
+		loaded_music_pool_ids.append(pool_id)
+	loaded_music_pool_ids.sort()
+	var loaded_base_ambience_ids := PackedStringArray()
+	for ambience_id: String in _base_ambience_streams:
+		loaded_base_ambience_ids.append(ambience_id)
+	loaded_base_ambience_ids.sort()
 	return {
 		"musicId": _current_music_id,
 		"musicPoolKey": _current_music_pool_key,
@@ -404,6 +434,17 @@ func debug_snapshot() -> Dictionary:
 		"thunderPlaying": _thunder_player.playing if _thunder_player != null else false,
 		"activePlayer": _active_music_index,
 		"players": players,
+		"loadedMusicPoolIds": loaded_music_pool_ids,
+		"loadedBaseAmbienceIds": loaded_base_ambience_ids,
+		"rainStreamLoaded": (
+			_ambience_player != null and _ambience_player.stream != null
+		),
+		"sleepNoiseStreamLoaded": (
+			_sleep_noise_player != null and _sleep_noise_player.stream != null
+		),
+		"thunderStreamLoaded": (
+			_thunder_player != null and _thunder_player.stream != null
+		),
 		"wiredButtons": _wired_button_count,
 		"wiredSliders": _wired_slider_count,
 		"cueCount": _cue_streams.size(),
@@ -448,39 +489,10 @@ func _load_audio_settings() -> void:
 
 
 func _build_music_players() -> void:
-	var daylife_streams: Array[AudioStream] = []
-	for path: String in DAYLIFE_MUSIC_PATHS:
-		var stream: AudioStream = _load_music_stream(path)
-		if stream != null:
-			daylife_streams.append(stream)
-	var evening_streams: Array[AudioStream] = []
-	for path: String in EVENING_MUSIC_PATHS:
-		var stream: AudioStream = _load_music_stream(path)
-		if stream != null:
-			evening_streams.append(stream)
-	var rain_streams: Array[AudioStream] = []
-	for path: String in RAIN_MUSIC_PATHS:
-		var stream: AudioStream = _load_music_stream(path)
-		if stream != null:
-			rain_streams.append(stream)
-	var thunderstorm_streams: Array[AudioStream] = []
-	for path: String in THUNDERSTORM_MUSIC_PATHS:
-		var stream: AudioStream = _load_music_stream(path)
-		if stream != null:
-			thunderstorm_streams.append(stream)
-	var sleep_streams := _load_music_pool(SLEEP_MUSIC_PATHS, true)
-	if sleep_streams.is_empty():
-		var fallback_sleep := _load_music_stream(SLEEP_FALLBACK_MUSIC_PATH, true)
-		if fallback_sleep != null:
-			sleep_streams.append(fallback_sleep)
-	_music_stream_pools = {
-		"cover": daylife_streams,
-		"day": daylife_streams,
-		"night": evening_streams,
-		"rain": rain_streams,
-		"thunderstorm": thunderstorm_streams,
-		"sleep": sleep_streams,
-	}
+	# The title only needs its own compact cover track. Town music is loaded the
+	# first time its time/weather route is entered instead of decoding every
+	# day, night, rain, thunderstorm and sleep track before the first frame.
+	_music_stream_pools.clear()
 	for index in 2:
 		var player := AudioStreamPlayer.new()
 		player.name = "MusicPlayer%d" % (index + 1)
@@ -502,22 +514,58 @@ func _build_environment_players() -> void:
 	_ambience_player.name = "RainAmbiencePlayer"
 	_ambience_player.bus = "Ambience"
 	_ambience_player.volume_db = SILENCE_DB
-	_ambience_player.stream = _load_looping_stream(RAIN_AMBIENCE_PATH)
 	add_child(_ambience_player)
 
 	_sleep_noise_player = AudioStreamPlayer.new()
 	_sleep_noise_player.name = "SleepWhiteNoisePlayer"
 	_sleep_noise_player.bus = "Ambience"
 	_sleep_noise_player.volume_db = SILENCE_DB
-	_sleep_noise_player.stream = _load_looping_stream(SLEEP_NOISE_PATH)
 	add_child(_sleep_noise_player)
 
 	_thunder_player = AudioStreamPlayer.new()
 	_thunder_player.name = "ThunderSfxPlayer"
 	_thunder_player.bus = "SFX"
 	_thunder_player.volume_db = -2.0
-	_thunder_player.stream = _load_audio_stream(THUNDER_SFX_PATH)
 	add_child(_thunder_player)
+
+
+func _ensure_music_pool_loaded(music_id: String) -> void:
+	if _music_stream_pools.has(music_id):
+		return
+	var streams: Array[AudioStream] = []
+	if music_id == "cover":
+		var cover_stream := _load_music_stream(COVER_MUSIC_PATH, true)
+		if cover_stream != null:
+			streams.append(cover_stream)
+	else:
+		streams = _load_music_pool(
+			_music_paths(music_id),
+			music_id == "sleep",
+		)
+		if music_id == "sleep" and streams.is_empty():
+			var fallback_sleep := _load_music_stream(
+				SLEEP_FALLBACK_MUSIC_PATH,
+				true,
+			)
+			if fallback_sleep != null:
+				streams.append(fallback_sleep)
+	_music_stream_pools[music_id] = streams
+
+
+func _music_paths(music_id: String) -> Array:
+	match music_id:
+		"day":
+			return DAYLIFE_MUSIC_PATHS
+		"night":
+			return EVENING_MUSIC_PATHS
+		"rain":
+			return RAIN_MUSIC_PATHS
+		"thunderstorm":
+			return THUNDERSTORM_MUSIC_PATHS
+		"sleep":
+			return SLEEP_MUSIC_PATHS
+		_:
+			return []
 
 
 func _load_looping_music(path: String) -> AudioStream:
@@ -569,8 +617,18 @@ func _load_audio_stream(path: String) -> AudioStream:
 	return source.duplicate(true) as AudioStream
 
 
+func _load_cue_stream(cue_id: String) -> AudioStream:
+	if RECORDED_CUE_PATHS.has(cue_id):
+		return _load_audio_stream(String(RECORDED_CUE_PATHS[cue_id]))
+	return SOUND_LIBRARY.build_cue(cue_id, UI_SAMPLE_RATE)
+
+
 func _sync_rain_ambience(weather: String) -> void:
-	if _ambience_player == null or _ambience_player.stream == null:
+	if _ambience_player == null:
+		return
+	if RAIN_WEATHER.has(weather) and _ambience_player.stream == null:
+		_ambience_player.stream = _load_looping_stream(RAIN_AMBIENCE_PATH)
+	if _ambience_player.stream == null:
 		return
 	if _ambience_tween != null and _ambience_tween.is_valid():
 		_ambience_tween.kill()
@@ -633,6 +691,10 @@ func _start_base_ambience(ambience_id: String) -> void:
 		return
 	var stream := _base_ambience_streams.get(ambience_id) as AudioStream
 	if stream == null:
+		stream = SOUND_LIBRARY.build_ambience(ambience_id)
+		if stream != null:
+			_base_ambience_streams[ambience_id] = stream
+	if stream == null:
 		return
 	_base_ambience_player.stop()
 	_base_ambience_player.stream = stream
@@ -654,11 +716,15 @@ func _finish_rain_fade_out() -> void:
 
 
 func _sync_sleep_noise(weather: String) -> void:
-	if _sleep_noise_player == null or _sleep_noise_player.stream == null:
+	if _sleep_noise_player == null:
+		return
+	var should_play := _is_sleep_time and not RAIN_WEATHER.has(weather)
+	if should_play and _sleep_noise_player.stream == null:
+		_sleep_noise_player.stream = _load_looping_stream(SLEEP_NOISE_PATH)
+	if _sleep_noise_player.stream == null:
 		return
 	if _sleep_noise_tween != null and _sleep_noise_tween.is_valid():
 		_sleep_noise_tween.kill()
-	var should_play := _is_sleep_time and not RAIN_WEATHER.has(weather)
 	if should_play:
 		_current_sleep_noise_id = "sleep_white_noise"
 		if not _sleep_noise_player.playing:
@@ -696,6 +762,8 @@ func _finish_sleep_noise_fade_out() -> void:
 
 func _sync_thunder_weather(weather: String) -> void:
 	if weather == "雷暴":
+		if _thunder_player != null and _thunder_player.stream == null:
+			_thunder_player.stream = _load_audio_stream(THUNDER_SFX_PATH)
 		if _current_weather != "雷暴":
 			_thunder_wait_seconds = _rng.randf_range(
 				THUNDER_FIRST_DELAY_RANGE.x,
@@ -807,6 +875,7 @@ func _switch_music(music_id: String, force_restart: bool = false) -> void:
 
 
 func _select_music_stream(music_id: String) -> AudioStream:
+	_ensure_music_pool_loaded(music_id)
 	var pool := _music_stream_pools.get(music_id, []) as Array
 	if pool.is_empty():
 		return null
@@ -918,12 +987,11 @@ func _build_sfx_players() -> void:
 
 
 func _build_sound_library() -> void:
-	_cue_streams = SOUND_LIBRARY.build_cues(UI_SAMPLE_RATE)
-	_base_ambience_streams = SOUND_LIBRARY.build_ambiences()
-	for cue_id: String in RECORDED_CUE_PATHS:
-		var stream := _load_audio_stream(String(RECORDED_CUE_PATHS[cue_id]))
-		if stream != null:
-			_cue_streams[cue_id] = stream
+	_cue_streams = SOUND_LIBRARY.build_cues(
+		UI_SAMPLE_RATE,
+		FRONTEND_CUE_IDS,
+	)
+	_base_ambience_streams.clear()
 
 
 func _play_pooled_stream(
