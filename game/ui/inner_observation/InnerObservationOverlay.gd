@@ -529,7 +529,7 @@ func _build_controls() -> void:
 		Color("3f2717"),
 		HORIZONTAL_ALIGNMENT_LEFT,
 		VERTICAL_ALIGNMENT_TOP,
-		TextServer.AUTOWRAP_WORD_SMART
+		TextServer.AUTOWRAP_ARBITRARY
 	)
 	add_child(_monologue)
 
@@ -540,7 +540,7 @@ func _build_controls() -> void:
 		Color("5a3b25"),
 		HORIZONTAL_ALIGNMENT_LEFT,
 		VERTICAL_ALIGNMENT_TOP,
-		TextServer.AUTOWRAP_WORD_SMART
+		TextServer.AUTOWRAP_ARBITRARY
 	)
 	add_child(_reason)
 

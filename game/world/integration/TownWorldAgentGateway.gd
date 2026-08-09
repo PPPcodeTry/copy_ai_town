@@ -35,7 +35,9 @@ const MAX_DECISION_ATTEMPTS := 2
 const MAX_ERROR_HISTORY := 128
 const DEFAULT_AVATAR_PERSON_ID := "person_7f3a91c2d8e4"
 const DEFAULT_AVATAR_NAME := "旅行者"
-const INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS := 720
+# Keep this in step with ResidentMemorySummaryProjector's player-visible
+# current-thought contract; the overlay applies its own shorter display limit.
+const INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS := 1000
 const INNER_OBSERVATION_CURRENT_THOUGHT_DISPLAY_CHARS := 220
 const INNER_OBSERVATION_NEXT_PLAN_DISPLAY_CHARS := 120
 const INNER_OBSERVATION_REASON_DISPLAY_CHARS := 100
@@ -1351,8 +1353,9 @@ func _inner_observation_complete_excerpt(
 			last_sentence_end = index + 1
 	if last_sentence_end > 0:
 		return normalized.left(last_sentence_end).strip_edges()
-	# 单句本身很长时保留完整句子，交由页面自适应字号，避免改变原意。
-	return normalized
+	# 单句本身很长时也要受显示上限约束，避免固定面板被一整句撑开。
+	var bounded_characters := maxi(1, maximum_characters - 1)
+	return normalized.left(bounded_characters).strip_edges() + "…"
 
 
 func _inner_observation_player_text(
