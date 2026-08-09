@@ -95,6 +95,28 @@ class ProviderServiceStub:
 		return {}
 
 
+class RebindProvider:
+	extends RefCounted
+
+	func request_decision(_request: Dictionary, _on_complete: Callable) -> void:
+		pass
+
+
+class RebindAgentSystem:
+	extends RefCounted
+
+	var providers_by_resident_id: Dictionary = {}
+
+	func replace_resident_model_provider(
+		resident_id: String,
+		model_provider: Object,
+	) -> Dictionary:
+		if model_provider == null or not model_provider.has_method("request_decision"):
+			return {"ok": false, "errors": ["model provider missing"]}
+		providers_by_resident_id[resident_id] = model_provider
+		return {"ok": true}
+
+
 class ProviderBillingFailureStub:
 	extends RefCounted
 
@@ -881,6 +903,7 @@ func _test_runtime_resident_bindings_can_be_replaced_atomically() -> void:
 	var gateway: Node = GATEWAY.new()
 	gateway.set("_session_active", true)
 	gateway.set("_provider_service", ProviderServiceStub.new())
+	gateway.set("_agent_system", RebindAgentSystem.new())
 	gateway.set("_resident_identities", [
 		{"residentId": "resident-a", "residentName": "小林"},
 		{"residentId": "resident-b", "residentName": "小苏"},
@@ -915,6 +938,13 @@ func _test_runtime_resident_bindings_can_be_replaced_atomically() -> void:
 		) as Dictionary).get("llmBinding"),
 		bindings[0].get("llmBinding"),
 		"Gateway 立即使用更新后的居民模型",
+	)
+	_expect_equal(
+		(
+			gateway.get("_agent_system") as RebindAgentSystem
+		).providers_by_resident_id.size(),
+		2,
+		"绑定更新同步替换真实 Agent 层的居民模型提供方",
 	)
 	var before_invalid := (
 		gateway.get("_bindings_by_id") as Dictionary

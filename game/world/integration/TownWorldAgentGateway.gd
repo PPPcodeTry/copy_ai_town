@@ -975,7 +975,58 @@ func update_resident_bindings(bindings_value: Variant) -> Dictionary:
 	) as Dictionary
 	if not bool(validation.get("ok", false)):
 		return validation
+	if (
+		_agent_system == null
+		or not _agent_system.has_method("replace_resident_model_provider")
+	):
+		return _failure("AGENT_MODEL_PROVIDER_REBIND_UNSUPPORTED", false)
 	var previous := get_resident_bindings()
+	var changed_resident_ids: Array[String] = []
+	var prepared_providers: Dictionary = {}
+	var previous_by_id: Dictionary = {}
+	for previous_binding_value: Variant in previous:
+		if not previous_binding_value is Dictionary:
+			continue
+		var previous_binding := previous_binding_value as Dictionary
+		previous_by_id[String(previous_binding.get("residentId", ""))] = (
+			previous_binding.duplicate(true)
+		)
+	for identity in _resident_identities:
+		var resident_id := String(identity.get("residentId", ""))
+		var next_binding := (
+			normalized.get("bindingsById", {}) as Dictionary
+		).get(resident_id, {}) as Dictionary
+		var previous_binding := previous_by_id.get(resident_id, {}) as Dictionary
+		if next_binding.get("llmBinding", {}) == previous_binding.get("llmBinding", {}):
+			continue
+		var provider_result := _provider_service.create_provider_for_resident(
+			next_binding,
+		) as Dictionary
+		if not bool(provider_result.get("ok", false)):
+			_restore_resident_model_providers(
+				changed_resident_ids,
+				previous_by_id,
+			)
+			return _normalized_failure(
+				provider_result,
+				"LLM_MODEL_PROVIDER_REBIND_FAILED",
+			)
+		changed_resident_ids.append(resident_id)
+		prepared_providers[resident_id] = provider_result.get("provider")
+	for resident_id in changed_resident_ids:
+		var replacement := _agent_system.replace_resident_model_provider(
+			resident_id,
+			prepared_providers[resident_id],
+		) as Dictionary
+		if not bool(replacement.get("ok", false)):
+			_restore_resident_model_providers(
+				changed_resident_ids,
+				previous_by_id,
+			)
+			return _normalized_failure(
+				replacement,
+				"AGENT_MODEL_PROVIDER_REBIND_FAILED",
+			)
 	_bindings_by_id = (
 		normalized.get("bindingsById", {}) as Dictionary
 	).duplicate(true)
@@ -989,6 +1040,25 @@ func update_resident_bindings(bindings_value: Variant) -> Dictionary:
 		"previousBindings": previous,
 		"residentBindings": current,
 	}
+
+
+func _restore_resident_model_providers(
+	resident_ids: Array[String],
+	previous_by_id: Dictionary,
+) -> void:
+	for resident_id in resident_ids:
+		var previous_binding := previous_by_id.get(resident_id, {}) as Dictionary
+		if previous_binding.is_empty():
+			continue
+		var provider_result := _provider_service.create_provider_for_resident(
+			previous_binding,
+		) as Dictionary
+		if not bool(provider_result.get("ok", false)):
+			continue
+		_agent_system.replace_resident_model_provider(
+			resident_id,
+			provider_result.get("provider"),
+		)
 
 
 func preflight_replacement_resident(
