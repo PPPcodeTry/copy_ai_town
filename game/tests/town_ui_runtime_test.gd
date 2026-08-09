@@ -2052,11 +2052,10 @@ func _scenario_ui_runtime_host_navigation() -> void:
 		if home_option != null and not home_option.disabled:
 			home_option.emit_signal("pressed")
 			await process_frame
-			var first_home_option := profile_editor_page.find_child(
-				"DropdownItem_0",
-				true,
-				false,
-			) as BaseButton
+			var first_home_option := _find_button_with_text(
+				profile_editor_page,
+				"北街一号住宅",
+			)
 			_expect(
 				first_home_option != null and not first_home_option.disabled,
 				"resident profile editor exposes an available home choice",
@@ -2081,11 +2080,10 @@ func _scenario_ui_runtime_host_navigation() -> void:
 		if workplace_option != null and not workplace_option.disabled:
 			workplace_option.emit_signal("pressed")
 			await process_frame
-			var first_workplace_option := profile_editor_page.find_child(
-				"DropdownItem_0",
-				true,
-				false,
-			) as BaseButton
+			var first_workplace_option := _find_button_with_text(
+				profile_editor_page,
+				"花房咖啡馆",
+			)
 			_expect(
 				first_workplace_option != null and not first_workplace_option.disabled,
 				"resident profile editor exposes an available workplace choice",
@@ -2285,6 +2283,36 @@ func _scenario_ui_runtime_host_navigation() -> void:
 	await process_frame
 	profile_editor_page = _active_route_page()
 	if profile_editor_page != null:
+		var saved_home_option := profile_editor_page.find_child(
+			"OwnedPlaceOption",
+			true,
+			false,
+		) as BaseButton
+		if saved_home_option != null and not saved_home_option.disabled:
+			saved_home_option.emit_signal("pressed")
+			await process_frame
+			var saved_home_choice := _find_button_with_text(
+				profile_editor_page,
+				"北街一号住宅",
+			)
+			if saved_home_choice != null and not saved_home_choice.disabled:
+				saved_home_choice.emit_signal("pressed")
+				await process_frame
+		var saved_workplace_option := profile_editor_page.find_child(
+			"WorkplaceOption",
+			true,
+			false,
+		) as BaseButton
+		if saved_workplace_option != null and not saved_workplace_option.disabled:
+			saved_workplace_option.emit_signal("pressed")
+			await process_frame
+			var saved_workplace_choice := _find_button_with_text(
+				profile_editor_page,
+				"花房咖啡馆",
+			)
+			if saved_workplace_choice != null and not saved_workplace_choice.disabled:
+				saved_workplace_choice.emit_signal("pressed")
+				await process_frame
 		var save_button := profile_editor_page.find_child(
 			"CreateButton",
 			true,
@@ -6047,6 +6075,14 @@ func _scenario_game_flow_resident_model_assignment_route() -> void:
 func _wait_frames(count: int) -> void:
 	for _index in count:
 		await process_frame
+
+
+func _find_button_with_text(root: Node, expected: String) -> Button:
+	for node: Node in root.find_children("*", "Button", true, false):
+		var button := node as Button
+		if button != null and button.text == expected:
+			return button
+	return null
 
 
 
