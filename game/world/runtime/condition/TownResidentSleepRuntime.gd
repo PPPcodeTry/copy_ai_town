@@ -50,6 +50,14 @@ func initialize_resident(resident_id: String) -> Dictionary:
 	return _success(normalized_id, {"created": true})
 
 
+func reset_resident(resident_id: String) -> Dictionary:
+	var normalized_id := resident_id.strip_edges()
+	if not _residents.has(normalized_id):
+		return _failure("SLEEP_RESIDENT_UNKNOWN")
+	_residents.erase(normalized_id)
+	return initialize_resident(normalized_id)
+
+
 func has_resident(resident_id: String) -> bool:
 	return _residents.has(resident_id)
 

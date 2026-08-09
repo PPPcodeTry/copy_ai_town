@@ -72,6 +72,8 @@ const REQUIRED_ACTIONS: Array[String] = [
 ]
 
 
+var in_session_mode := false
+var single_resident_mode := false
 var _adapter: Object
 var _view_model: Dictionary = {}
 var _render_data: Dictionary = {}
@@ -157,6 +159,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+func apply_route_payload(payload: Dictionary) -> void:
+	var route_mode := String(payload.get("mode", ""))
+	in_session_mode = route_mode in ["in_session", "resident_admission"]
+	single_resident_mode = route_mode == "resident_admission"
+
+
 func request_back() -> bool:
 	if bool(_render_data.get("dirty", false)):
 		if _exit_confirmation != null and not _exit_confirmation.visible:
@@ -171,7 +179,11 @@ func _build_exit_confirmation() -> void:
 		return
 	_exit_confirmation = FormalDialog.new()
 	_exit_confirmation.name = "UnsavedChangesDialog"
-	_exit_confirmation.title = "返回居民选择？"
+	_exit_confirmation.title = (
+		"返回居民资料？"
+		if single_resident_mode
+		else "返回暂停菜单？" if in_session_mode else "返回居民选择？"
+	)
 	_exit_confirmation.dialog_text = "当前模型分配还没有应用，返回后仍会保留草稿。"
 	_exit_confirmation.ok_button_text = "返回"
 	_exit_confirmation.cancel_button_text = "继续编辑"
@@ -420,6 +432,8 @@ func _build_interface() -> void:
 	_composite_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_composite_host)
 	_composite_desktop = CompositeDesktop.new()
+	_composite_desktop.set("in_session_mode", in_session_mode)
+	_composite_desktop.set("single_resident_mode", single_resident_mode)
 	_composite_host.add_child(_composite_desktop)
 	_composite_desktop.connect("action_requested", Callable(self, "_request_action"))
 	_composite_desktop.connect("back_pressed", Callable(self, "_request_back"))
@@ -480,7 +494,13 @@ func _build_native_completion_modal() -> void:
 	title.custom_minimum_size.y = 52
 	stack.add_child(title)
 	_native_modal_body = _label(
-		"15 位居民的模型均已配置完成，现在可以开始游戏。",
+		(
+			"这位新居民的模型已经配置完成，可以确认入镇。"
+			if single_resident_mode
+			else "15 位居民的模型均已配置完成，可以保存到当前小镇。"
+			if in_session_mode
+			else "15 位居民的模型均已配置完成，现在可以开始游戏。"
+		),
 		20,
 		PageTheme.INK_MUTED,
 		"ResponsiveModalBody",
@@ -498,7 +518,16 @@ func _build_native_completion_modal() -> void:
 	_native_modal_return_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_native_modal_return_button.pressed.connect(_close_completion_modal)
 	actions.add_child(_native_modal_return_button)
-	_native_modal_start_button = _button("开始游戏", 22, "success", "ResponsiveModalStart")
+	_native_modal_start_button = _button(
+		(
+			"确认入镇"
+			if single_resident_mode
+			else "保存修改" if in_session_mode else "开始游戏"
+		),
+		22,
+		"success",
+		"ResponsiveModalStart",
+	)
 	_native_modal_start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_native_modal_start_button.pressed.connect(_start_game_from_completion_modal)
 	actions.add_child(_native_modal_start_button)
@@ -681,6 +710,7 @@ func _build_header() -> void:
 	_mode_button.custom_minimum_size = Vector2(190, 56)
 	_mode_button.pressed.connect(_toggle_mode)
 	_header_top.add_child(_mode_button)
+	_mode_button.visible = not single_resident_mode
 
 	_summary_grid = GridContainer.new()
 	_summary_grid.name = "SummaryGrid"
@@ -728,7 +758,10 @@ func _build_resident_section() -> void:
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 10)
 	_resident_section.add_child(stack)
-	stack.add_child(_section_title("居民队列 · 15人", "ResidentQueueTitle"))
+	stack.add_child(_section_title(
+		"入镇居民" if single_resident_mode else "居民队列 · 15人",
+		"ResidentQueueTitle",
+	))
 
 	var filters := HBoxContainer.new()
 	filters.add_theme_constant_override("separation", 8)
@@ -844,8 +877,11 @@ func _render() -> void:
 	_progress.value = completed
 	var mode := String(_render_data.get("mode", "single"))
 	_mode_button.text = "返回单人模式" if mode == "batch" else "切换批量模式"
+	_mode_button.visible = not single_resident_mode
 	_selected_count_label.text = (
-		"批量已选 %d 人" % (_render_data.get("selectedBatchResidentIds", []) as Array).size()
+		"仅显示本次入镇居民"
+		if single_resident_mode
+		else "批量已选 %d 人" % (_render_data.get("selectedBatchResidentIds", []) as Array).size()
 		if mode == "batch"
 		else "单人模式 · 点击居民查看绑定"
 	)
@@ -1168,7 +1204,7 @@ func _render_inspector() -> void:
 		if mode == "batch"
 		else "更新当前居民草稿"
 	)
-	_apply_button.text = "确认 15 人模型分配"
+	_apply_button.text = "确认入镇" if single_resident_mode else "确认 15 人模型分配"
 
 
 func _render_action_states() -> void:
@@ -1361,7 +1397,13 @@ func _open_completion_modal() -> void:
 		return
 	_completion_modal_open = true
 	_set_completion_modal_message(
-		"15 位居民的模型均已配置完成\n现在可以开始游戏。"
+		(
+			"这位新居民的模型已经配置完成\n确认后会立即进入小镇。"
+			if single_resident_mode
+			else "15 位居民的模型均已配置完成\n保存后会立即用于当前小镇。"
+			if in_session_mode
+			else "15 位居民的模型均已配置完成\n现在可以开始游戏。"
+		)
 	)
 	_sync_completion_modal_visibility()
 
@@ -1383,7 +1425,8 @@ func _start_game_from_completion_modal() -> void:
 			blocked_reason = "RESIDENT_MODEL_ASSIGNMENT_INTERFACE_MISSING"
 		action_blocked.emit(intent, blocked_reason)
 		_set_completion_modal_message(
-			"暂时无法开始游戏\n%s\n当前草稿已保留。"
+			("暂时无法保存修改" if in_session_mode else "暂时无法开始游戏")
+			+ "\n%s\n当前草稿已保留。"
 			% UiViewModel.player_reason(blocked_reason)
 		)
 		return
@@ -1406,7 +1449,10 @@ func _start_game_from_completion_modal() -> void:
 		reason = UiViewModel.player_reason(
 			String(result.get("errorCode", "ACTION_REJECTED"))
 		)
-	_set_completion_modal_message("暂时无法开始游戏\n%s\n当前草稿已保留。" % reason)
+	_set_completion_modal_message(
+		("暂时无法保存修改" if in_session_mode else "暂时无法开始游戏")
+		+ "\n%s\n当前草稿已保留。" % reason
+	)
 
 
 func _set_completion_modal_message(message: String) -> void:
@@ -1531,11 +1577,12 @@ func _validate_contract(view_model: Dictionary, data: Dictionary) -> PackedStrin
 		issues.append("capabilityMode 必须为 formal")
 	if String(data.get("source", "")) != "runtime":
 		issues.append("source 必须为 runtime")
-	if int(data.get("residentCount", 0)) != SLOT_COUNT:
-		issues.append("residentCount 必须为 15")
+	var expected_count := 1 if single_resident_mode else SLOT_COUNT
+	if int(data.get("residentCount", 0)) != expected_count:
+		issues.append("residentCount 必须为 %d" % expected_count)
 	var residents_value: Variant = data.get("residents", [])
-	if not residents_value is Array or (residents_value as Array).size() != SLOT_COUNT:
-		issues.append("residents 必须包含 15 个槽位")
+	if not residents_value is Array or (residents_value as Array).size() != expected_count:
+		issues.append("residents 必须包含 %d 个槽位" % expected_count)
 	else:
 		for value: Variant in residents_value as Array:
 			if not value is Dictionary:

@@ -35,6 +35,7 @@ const ROUTE_SCENE_PATHS := {
 	&"inner_observation": "res://ui/inner_observation/InnerObservationOverlay.tscn",
 	&"place_focus": "res://ui/place_focus/PlaceFocusPanel.tscn",
 	&"provider_settings": "res://ui/provider_settings/ProviderSettingsScreen.tscn",
+	&"resident_model_assignment": "res://ui/resident_model_assignment/ResidentModelAssignmentScreen.tscn",
 	&"chat": "res://ui/conversation_unified/UnifiedConversationScreen.tscn",
 	&"conversation_spectator": "res://ui/conversation_unified/UnifiedConversationScreen.tscn",
 	&"weather_control": "res://ui/weather_control/WeatherControlPanel.tscn",
@@ -51,6 +52,7 @@ const ROUTE_SCOPES := {
 	&"inner_observation": "inner_observation",
 	&"place_focus": "place_focus",
 	&"provider_settings": "provider_settings",
+	&"resident_model_assignment": "resident_model_assignment",
 	&"chat": "conversation",
 	&"conversation_spectator": "conversation",
 	&"weather_control": "weather_control",
@@ -1245,6 +1247,14 @@ func _on_self_dispatching_page_intent(
 	payload: Dictionary,
 	route: StringName,
 ) -> void:
+	if (
+		route == &"resident_model_assignment"
+		and String(intent) == "resident_model_assignment.apply_draft"
+	):
+		var dispatch_result := payload.get("dispatchResult", {}) as Dictionary
+		if bool(dispatch_result.get("ok", false)):
+			close_page()
+		return
 	if route == &"wardrobe" and _resident_profile_wardrobe_return_pending:
 		if String(intent) == "resident_profile_editor.apply_wardrobe_result":
 			var dispatch_result := payload.get("dispatchResult", {}) as Dictionary
@@ -1950,6 +1960,7 @@ func _present_navigation_feedback(
 func _intent_closes_route(intent: String, route: StringName) -> bool:
 	return intent in {
 		&"provider_settings": ["provider_settings.back"],
+		&"resident_model_assignment": ["resident_model_assignment.back"],
 		&"wardrobe": ["wardrobe.cancel"],
 		&"resident_detail": ["resident_detail.close"],
 	}.get(route, [])

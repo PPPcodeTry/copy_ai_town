@@ -84,6 +84,25 @@ func initialize_resident(
 	}
 
 
+func replace_deceased_resident(
+	resident_id: String,
+	resident_name: String,
+	home_anchor: Dictionary,
+) -> Dictionary:
+	var normalized_id := resident_id.strip_edges()
+	if (
+		not _residents.has(normalized_id)
+		or String((_residents[normalized_id] as Dictionary).get("status", ""))
+		!= STATUS_DEAD
+	):
+		return _failure(
+			"RESIDENT_REPLACEMENT_LIFECYCLE_INVALID",
+			["只有已经死亡的居民席位可以迎接新居民"],
+		)
+	_residents.erase(normalized_id)
+	return initialize_resident(normalized_id, resident_name, home_anchor)
+
+
 func confirm_death(
 	resident_id: String,
 	reason: String,

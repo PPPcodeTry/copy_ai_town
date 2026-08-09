@@ -60,6 +60,10 @@ var _health: Dictionary = {}
 var _models: Array[Dictionary] = []
 var _operation := _idle_operation()
 var _error: Variant = null
+var _apply_handler := Callable()
+var _single_resident_mode := false
+var _slot_count := SLOT_COUNT
+var _allowed_space_ids: Array[String] = []
 
 
 func configure(
@@ -69,6 +73,13 @@ func configure(
 	context: Dictionary = {},
 ) -> Dictionary:
 	_reset()
+	_single_resident_mode = bool(context.get("singleResidentMode", false))
+	_slot_count = 1 if _single_resident_mode else SLOT_COUNT
+	if _single_resident_mode:
+		for value: Variant in context.get("allowedSpaceIds", []) as Array:
+			var space_id := String(value).strip_edges()
+			if not space_id.is_empty() and not _allowed_space_ids.has(space_id):
+				_allowed_space_ids.append(space_id)
 	if provider_service == null:
 		return _configuration_failure("RESIDENT_MODEL_PROVIDER_SERVICE_NOT_BOUND")
 	var missing_methods: Array[String] = []
@@ -86,6 +97,13 @@ func configure(
 		return _configuration_failure(String(draft_result.get("errorCode", "SESSION_DRAFT_INVALID")))
 
 	_provider_service = provider_service
+	var apply_handler_value: Variant = context.get("applyHandler")
+	if apply_handler_value != null:
+		if typeof(apply_handler_value) != TYPE_CALLABLE:
+			return _configuration_failure(
+				"RESIDENT_MODEL_ASSIGNMENT_APPLY_HANDLER_INVALID"
+			)
+		_apply_handler = apply_handler_value as Callable
 	_draft = _normalize_initial_draft(session_draft)
 	_committed_draft = _draft.duplicate(true)
 	_selected_resident_id = String(context.get("selectedResidentId", ""))
@@ -115,7 +133,7 @@ func configure(
 		"errorCode": "",
 		"retryable": false,
 		"revision": _revision,
-		"residentCount": SLOT_COUNT,
+		"residentCount": _slot_count,
 		"providerReady": provider_ready,
 		"providerErrorCode": String(refreshed.get("errorCode", "")),
 	}
@@ -369,7 +387,11 @@ func _assign_batch(payload: Dictionary) -> Dictionary:
 
 
 func _apply_draft() -> Dictionary:
-	var strict_validation := DRAFT_CONTRACT.validate(_draft) as Dictionary
+	var strict_validation := (
+		_validate_initial_draft(_draft)
+		if _single_resident_mode
+		else DRAFT_CONTRACT.validate(_draft) as Dictionary
+	)
 	if not bool(strict_validation.get("ok", false)):
 		return _failure("SESSION_DRAFT_INVALID", false, strict_validation.get("errors", []) as Array)
 	var bindings: Array[Dictionary] = []
@@ -386,6 +408,26 @@ func _apply_draft() -> Dictionary:
 			bool(provider_validation.get("retryable", false)),
 			provider_validation.get("errors", []) as Array,
 		)
+	if _apply_handler.is_valid():
+		var external_result_value: Variant = _apply_handler.call(
+			_draft.duplicate(true),
+			bindings.duplicate(true),
+		)
+		if not external_result_value is Dictionary:
+			return _failure(
+				"RESIDENT_MODEL_ASSIGNMENT_APPLY_RESULT_INVALID",
+				false,
+			)
+		var external_result := external_result_value as Dictionary
+		if not bool(external_result.get("ok", false)):
+			return _failure(
+				String(external_result.get(
+					"errorCode",
+					"RESIDENT_MODEL_ASSIGNMENT_APPLY_FAILED",
+				)),
+				bool(external_result.get("retryable", false)),
+				external_result.get("errors", []) as Array,
+			)
 	_committed_draft = _draft.duplicate(true)
 	return _success(true)
 
@@ -552,7 +594,7 @@ func _actions_snapshot() -> Dictionary:
 	var target_available := bool(target_validation.get("ok", false))
 	var rows := _resident_snapshots() if configured else []
 	var counts := _status_counts(rows)
-	var complete := int(counts.get("valid", 0)) == SLOT_COUNT
+	var complete := int(counts.get("valid", 0)) == _slot_count
 	var provider_ready := _formal_ready()
 	var provider_reason := (
 		""
@@ -575,7 +617,11 @@ func _actions_snapshot() -> Dictionary:
 	return {
 		"selectResident": _action("resident_model_assignment.select_resident", configured),
 		"setFilter": _action("resident_model_assignment.set_filter", configured),
-		"setMode": _action("resident_model_assignment.set_mode", configured),
+		"setMode": _action(
+			"resident_model_assignment.set_mode",
+			configured and not _single_resident_mode,
+			"RESIDENT_MODEL_ASSIGNMENT_SINGLE_RESIDENT_MODE",
+		),
 		"selectBatchResident": _action("resident_model_assignment.select_batch_resident", configured and _mode == "batch", "RESIDENT_MODEL_ASSIGNMENT_BATCH_MODE_REQUIRED"),
 		"selectAllBatch": _action("resident_model_assignment.select_all_batch", configured and _mode == "batch" and _batch_selection.size() < rows.size(), "RESIDENT_MODEL_ASSIGNMENT_ALL_RESIDENTS_SELECTED"),
 		"selectInvalid": _action("resident_model_assignment.select_invalid", configured and _mode == "batch" and int(counts.get("invalid", 0)) > 0, "RESIDENT_MODEL_ASSIGNMENT_NO_INVALID_RESIDENTS"),
@@ -853,6 +899,8 @@ func _validate_catalog(catalog: Dictionary) -> Dictionary:
 	var residents_value: Variant = catalog.get("residents", [])
 	if not residents_value is Array:
 		return _failure("RESIDENT_MODEL_CATALOG_INVALID")
+	if _single_resident_mode and (residents_value as Array).size() != _slot_count:
+		return _failure("RESIDENT_MODEL_CATALOG_RESIDENT_COUNT_MISMATCH")
 	var seen: Dictionary = {}
 	for value: Variant in residents_value as Array:
 		if not value is Dictionary:
@@ -874,7 +922,7 @@ func _validate_initial_draft(draft: Dictionary) -> Dictionary:
 	var slots_value: Variant = draft.get("slots", [])
 	if not slots_value is Array:
 		return _failure("SESSION_DRAFT_SLOTS_INVALID")
-	if (slots_value as Array).size() != SLOT_COUNT:
+	if (slots_value as Array).size() != _slot_count:
 		return _failure("SESSION_HOME_SPACE_COUNT_MISMATCH")
 	var seen_residents: Dictionary = {}
 	var seen_spaces: Dictionary = {}
@@ -932,8 +980,10 @@ func _normalize_initial_draft(draft: Dictionary) -> Dictionary:
 
 
 func _expected_home_space_ids() -> Array[String]:
+	if _single_resident_mode and not _allowed_space_ids.is_empty():
+		return _allowed_space_ids.duplicate()
 	var result: Array[String] = []
-	for index in range(1, SLOT_COUNT + 1):
+	for index in range(1, _slot_count + 1):
 		result.append("home_%02d" % index)
 	return result
 
@@ -1076,10 +1126,10 @@ func _disabled_view_model() -> Dictionary:
 			"source": "runtime",
 			"formalReady": false,
 			"draftRevision": 0,
-			"residentCount": SLOT_COUNT,
+			"residentCount": _slot_count,
 			"completedCount": 0,
 			"invalidCount": 0,
-			"unassignedCount": SLOT_COUNT,
+			"unassignedCount": _slot_count,
 			"dirty": false,
 			"mode": "single",
 			"filter": "all",
@@ -1116,3 +1166,7 @@ func _reset() -> void:
 	_models.clear()
 	_operation = _idle_operation()
 	_error = null
+	_apply_handler = Callable()
+	_single_resident_mode = false
+	_slot_count = SLOT_COUNT
+	_allowed_space_ids.clear()

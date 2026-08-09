@@ -97,7 +97,7 @@ const ERROR_INK := Color("a7352b")
 const INFO_INK := Color("4f7790")
 
 @export var navigation_back_available := false
-@export_enum("create", "edit_existing") var presentation_mode := "create"
+@export_enum("create", "edit_existing", "admission") var presentation_mode := "create"
 
 var _adapter: Object
 var _view_model: Dictionary = {}
@@ -1082,7 +1082,7 @@ func _build_footer() -> void:
 
 	_create_button = _primary_button(
 		"CreateButton",
-		"保存修改" if _is_edit_existing() else "创建并返回名单",
+		_submit_button_copy(),
 		_source_rect(1093, 818, 341, 60),
 	)
 	_create_button.pressed.connect(_on_create_button_pressed)
@@ -1416,12 +1416,12 @@ func _render_actions(available: bool) -> void:
 		and not loading
 	)
 	_create_button.text = (
-		("正在保存……" if _is_edit_existing() else "正在创建……")
+		_submit_loading_copy()
 		if loading
 		else (
-			("重试保存" if _is_edit_existing() else "重试创建")
+			_submit_retry_copy()
 			if retryable
-			else ("保存修改" if _is_edit_existing() else "创建并返回名单")
+			else _submit_button_copy()
 		)
 	)
 	_create_button.disabled = not (
@@ -2013,6 +2013,28 @@ func _action_enabled(action_key: String) -> bool:
 
 func _is_edit_existing() -> bool:
 	return presentation_mode == "edit_existing"
+
+
+func _is_admission() -> bool:
+	return presentation_mode == "admission"
+
+
+func _submit_button_copy() -> String:
+	if _is_edit_existing():
+		return "保存修改"
+	return "确定" if _is_admission() else "创建并返回名单"
+
+
+func _submit_loading_copy() -> String:
+	if _is_edit_existing():
+		return "正在保存……"
+	return "正在确认……" if _is_admission() else "正在创建……"
+
+
+func _submit_retry_copy() -> String:
+	if _is_edit_existing():
+		return "重试保存"
+	return "重试确认" if _is_admission() else "重试创建"
 
 
 func _submit_action_key() -> String:

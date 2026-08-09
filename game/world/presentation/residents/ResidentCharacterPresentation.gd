@@ -106,6 +106,22 @@ func unbind_world() -> void:
 	_bodies.clear()
 
 
+func prepare_resident_replacement(resident_id: String) -> Dictionary:
+	var normalized_id := resident_id.strip_edges()
+	var body := _bodies.get(normalized_id) as ResidentCharacterBody
+	if normalized_id.is_empty() or not is_instance_valid(body):
+		return _failure_result(
+			"PRESENTATION_REPLACEMENT_BODY_MISSING",
+			"Replacement resident body is unavailable",
+		)
+	body.prepare_for_resident_replacement()
+	return {
+		"ok": true,
+		"status": "ready",
+		"residentId": normalized_id,
+	}
+
+
 func sync_from_world(force_relocate: bool = false) -> Dictionary:
 	if _world == null or _actor_root == null:
 		return _failure_result(
@@ -188,6 +204,7 @@ func sync_from_world(force_relocate: bool = false) -> Dictionary:
 	var presented_ids: Dictionary = {}
 	var resident_name_counts: Dictionary = {}
 	var failed_resident_ids: Array[String] = []
+	var failed_resident_details: Array[Dictionary] = []
 	for identity_value: Variant in identities:
 		if identity_value is not Dictionary:
 			_record_diagnostic(
@@ -265,6 +282,15 @@ func sync_from_world(force_relocate: bool = false) -> Dictionary:
 		)
 		if not bool(prepared.get("ok", false)):
 			failed_resident_ids.append(resident_id)
+			failed_resident_details.append({
+				"residentId": resident_id,
+				"code": String(
+					prepared.get(
+						"code",
+						prepared.get("errorCode", "UNKNOWN"),
+					)
+				),
+			})
 			continue
 		pending_entries.append(prepared)
 	if not failed_resident_ids.is_empty():
@@ -274,6 +300,9 @@ func sync_from_world(force_relocate: bool = false) -> Dictionary:
 		)
 		incomplete_result["worldRevision"] = world_revision
 		incomplete_result["failedResidentIds"] = failed_resident_ids.duplicate()
+		incomplete_result["failedResidentDetails"] = failed_resident_details.duplicate(
+			true,
+		)
 		return incomplete_result
 	for entry: Dictionary in pending_entries:
 		if not _prepared_identity_state_can_apply(entry):

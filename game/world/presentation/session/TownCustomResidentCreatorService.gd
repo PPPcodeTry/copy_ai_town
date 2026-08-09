@@ -128,6 +128,16 @@ func configure(
 			) as Array
 		).duplicate(),
 	}
+	var initial_source_value: Variant = context.get("initialSource", {})
+	if initial_source_value is Dictionary and not (initial_source_value as Dictionary).is_empty():
+		var initial_result := _apply_initial_source(
+			initial_source_value as Dictionary,
+		)
+		if not bool(initial_result.get("ok", false)):
+			return _configuration_failure(String(initial_result.get(
+				"errorCode",
+				"CUSTOM_RESIDENT_INITIAL_SOURCE_INVALID",
+			)))
 	_draft_id = String(context.get("draftId", "")).strip_edges()
 	if _draft_id.is_empty():
 		_draft_id = "custom-resident-%d" % Time.get_ticks_msec()
@@ -143,6 +153,61 @@ func configure(
 		"candidatePoolRevision": int(_candidate_pool.call("candidate_pool_revision")),
 		"draftId": _draft_id,
 	}
+
+
+func _apply_initial_source(source: Dictionary) -> Dictionary:
+	var attributes_value: Variant = source.get("attributes", {})
+	if not attributes_value is Dictionary:
+		return _failure("CUSTOM_RESIDENT_INITIAL_SOURCE_INVALID")
+	var attributes := attributes_value as Dictionary
+	var social_value: Variant = source.get("socialState", {})
+	var social := social_value as Dictionary if social_value is Dictionary else {}
+	var appearance_id := String(attributes.get("appearance", "")).strip_edges()
+	var appearance_selection: Dictionary = {}
+	for loadout_value: Variant in _wardrobe_by_loadout_id.values():
+		if not loadout_value is Dictionary:
+			continue
+		var appearance := _appearance_from_loadout(loadout_value as Dictionary)
+		if String(appearance.get("appearanceId", "")) == appearance_id:
+			appearance_selection = (
+				appearance.get("selection", {}) as Dictionary
+			).duplicate(true)
+			break
+	if appearance_selection.is_empty():
+		return _failure("CUSTOM_RESIDENT_APPEARANCE_NOT_READY")
+	var occupation_label := String(social.get("job", "")).strip_edges()
+	var occupation_id := ""
+	var workplace_id := ""
+	var related_workplace_ids: Array = []
+	for option_value: Variant in _occupation_options:
+		var option := option_value as Dictionary
+		if String(option.get("label", "")) != occupation_label:
+			continue
+		occupation_id = String(option.get("id", ""))
+		workplace_id = String(option.get("defaultWorkplaceId", ""))
+		related_workplace_ids = (
+			option.get("relatedWorkplaceIds", []) as Array
+		).duplicate()
+		break
+	if occupation_id.is_empty():
+		return _failure("CUSTOM_RESIDENT_OCCUPATION_UNKNOWN")
+	_draft = {
+		"name": String(attributes.get("name", "")).strip_edges(),
+		"gender": String(attributes.get("gender", "女")),
+		"age": int(attributes.get("age", 27)),
+		"appearanceSelection": appearance_selection,
+		"desire": String(attributes.get("desire", "")).strip_edges(),
+		"personality": String(attributes.get("personality", "")).strip_edges(),
+		"speech": String(attributes.get("speech", "")).strip_edges(),
+		"interests": INTERESTS.normalize(attributes.get("interests", [])),
+		"customInterests": INTERESTS.normalize_custom(
+			attributes.get("customInterests", []),
+		),
+		"occupationId": occupation_id,
+		"workplaceId": workplace_id,
+		"relatedWorkplaceIds": related_workplace_ids,
+	}
+	return {"ok": true, "errorCode": "", "retryable": false}
 
 
 func get_view_model() -> Dictionary:
