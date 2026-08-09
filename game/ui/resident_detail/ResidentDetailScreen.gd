@@ -2339,10 +2339,13 @@ func _add_relationship_portrait(row: Control, item: Dictionary) -> void:
 	row.add_child(portrait_slot)
 	var portrait := TextureRect.new()
 	portrait.name = "RelationshipPortrait"
-	var portrait_crop := AtlasTexture.new()
-	portrait_crop.atlas = texture
-	portrait_crop.region = Rect2(112, 32, 288, 288)
-	portrait.texture = portrait_crop
+	if texture.get_size().x >= 400 and texture.get_size().y >= 320:
+		var portrait_crop := AtlasTexture.new()
+		portrait_crop.atlas = texture
+		portrait_crop.region = Rect2(112, 32, 288, 288)
+		portrait.texture = portrait_crop
+	else:
+		portrait.texture = texture
 	portrait.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
@@ -2352,6 +2355,12 @@ func _add_relationship_portrait(row: Control, item: Dictionary) -> void:
 
 
 func _relationship_portrait_path(item: Dictionary) -> String:
+	var projected_path := str(item.get("portraitRef", "")).strip_edges()
+	if (
+		not projected_path.is_empty()
+		and ResourceLoader.exists(projected_path, "Texture2D")
+	):
+		return projected_path
 	var resident_id := str(item.get("residentId", ""))
 	if resident_id.is_empty():
 		return ""

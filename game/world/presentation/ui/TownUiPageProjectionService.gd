@@ -2222,6 +2222,10 @@ func _publish_resident_detail(operation: Dictionary, error_value: Variant) -> vo
 	var resident_lifecycle := runtime_state.get("lifecycle", {}) as Dictionary
 	var attributes := detail.get("attributes", {}) as Dictionary
 	var social_state := detail.get("socialState", {}) as Dictionary
+	var portrait_projection := _resident_portrait_projection(
+		resident_id,
+		attributes,
+	)
 	var memory_result: Dictionary = {}
 	if (
 		page_available
@@ -2282,8 +2286,13 @@ func _publish_resident_detail(operation: Dictionary, error_value: Variant) -> vo
 			"occupationLabel": String(social_state.get("job", "")),
 			"currentPlaceLabel": String(runtime_state.get("currentPlace", "")),
 			"identityStatus": "confirmed" if page_available else "unavailable",
-			"portrait": "",
-			"appearanceId": String(attributes.get("appearance", "")),
+			"portrait": String(portrait_projection.get("portraitRef", "")),
+			"portraitFrameMode": String(
+				portrait_projection.get("portraitFrameMode", "auto"),
+			),
+			"appearanceId": String(
+				portrait_projection.get("appearanceId", ""),
+			),
 			"lifecycleStatus": String(resident_lifecycle.get("lifecycleStatus", "alive")),
 			"lifecycleStatusLabel": String(resident_lifecycle.get("statusLabel", "生活中")),
 			"appearancePolicy": String(resident_lifecycle.get("appearancePolicy", "normal")),
@@ -2398,6 +2407,12 @@ func _resident_detail_content(
 				var progress := progress_value as Dictionary
 				if not _relationship_matches_filter(progress, relationship_filter):
 					continue
+				var related_resident_id := String(
+					progress.get("residentId", "")
+				)
+				var related_portrait := _resident_portrait_projection(
+					related_resident_id,
+				)
 				var display_name := String(
 					progress.get("displayName", "")
 				).strip_edges()
@@ -2405,10 +2420,11 @@ func _resident_detail_content(
 					progress.get("depth", {}) as Dictionary
 				).duplicate(true)
 				relationship_items.append({
-					"residentId": String(
-						progress.get("residentId", "")
-					),
+					"residentId": related_resident_id,
 					"displayName": display_name,
+					"portraitRef": String(
+						related_portrait.get("portraitRef", ""),
+					),
 					"relationshipLabel": "交往深度",
 					"summaryOnly": false,
 					"depth": depth,
@@ -2942,11 +2958,16 @@ func _publish_indoor(
 		var state := _world.get_resident_state(resident_name) as Dictionary
 		if String(state.get("currentPlace", "")) != place_name:
 			continue
+		var resident_id := String(identity.get("residentId", ""))
+		var portrait_projection := _resident_portrait_projection(resident_id)
 		var placement := _resident_placement(resident_name)
 		resident_targets.append({
-			"targetId": "resident-%s" % String(identity.get("residentId", "")),
-			"residentId": String(identity.get("residentId", "")),
+			"targetId": "resident-%s" % resident_id,
+			"residentId": resident_id,
 			"name": resident_name,
+			"portraitPath": String(
+				portrait_projection.get("portraitRef", ""),
+			),
 			"doingLabel": String(state.get("doing", "")),
 			"statusIconId": "resident",
 			"screenAnchor": (placement.get("screenAnchor", {}) as Dictionary).duplicate(true),
@@ -4001,6 +4022,38 @@ func _resident_overview_portrait_ref(
 	):
 		return saved_portrait
 	return saved_portrait
+
+
+func _resident_portrait_projection(
+	resident_id: String,
+	live_attributes: Dictionary = {},
+) -> Dictionary:
+	var catalog_record := _resident_catalog_record(resident_id)
+	var catalog_attributes := catalog_record.get("attributes", {}) as Dictionary
+	var presentation := catalog_record.get("presentation", {}) as Dictionary
+	var attributes := live_attributes
+	if attributes.is_empty():
+		var resident_name := _resident_name_for_id(resident_id)
+		var detail := _resident_detail(resident_name)
+		attributes = detail.get("attributes", {}) as Dictionary
+	var appearance_id := String(attributes.get("appearance", "")).strip_edges()
+	if appearance_id.is_empty():
+		appearance_id = String(
+			catalog_attributes.get("appearance", ""),
+		).strip_edges()
+	var portrait_ref := _resident_overview_portrait_ref(
+		appearance_id,
+		presentation,
+	).strip_edges()
+	return {
+		"appearanceId": appearance_id,
+		"portraitRef": portrait_ref,
+		"portraitFrameMode": (
+			"full_texture"
+			if portrait_ref.contains("/wardrobe_v1/")
+			else "legacy_atlas_64x80"
+		),
+	}
 
 
 func _resident_overview_phase_label(phase: String) -> String:
