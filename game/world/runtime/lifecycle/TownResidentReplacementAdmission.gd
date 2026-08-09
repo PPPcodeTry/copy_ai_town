@@ -38,13 +38,17 @@ static func validate(
 	var resident_name := String(attributes.get("name", "")).strip_edges()
 	var world_state := record.get("worldState", {}) as Dictionary
 	var position_value: Variant = world_state.get("position", [])
+	var name_owner_id := String(world._resident_id_by_name.get(resident_name, ""))
 	if (
 		resident_id.is_empty()
 		or resident_name.is_empty()
 		or resident_id != replacement_for_resident_id.strip_edges()
 		or not world._residents.has(resident_id)
 		or world._resident_lifecycle.is_alive(resident_id)
-		or world._resident_id_by_name.has(resident_name)
+		or (
+			world._resident_id_by_name.has(resident_name)
+			and name_owner_id != resident_id
+		)
 		or not position_value is Array
 		or (position_value as Array).size() != 2
 		or String(world_state.get("spaceId", "")).strip_edges().is_empty()

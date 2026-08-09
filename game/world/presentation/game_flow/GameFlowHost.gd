@@ -250,6 +250,7 @@ var _replacement_editor_page: CustomResidentCreatorScreen
 var _replacement_editor_service: TownCustomResidentCreatorService
 var _replacement_candidate_pool: RefCounted
 var _replacement_assignment_active := false
+var _replacement_world_admitted := false
 var _replacement_admission_committed := false
 var _daily_auto_save_last_revision := 0
 var _daily_auto_save_failures: Array[Dictionary] = []
@@ -506,6 +507,7 @@ func _present_generated_replacement(candidate: Dictionary) -> void:
 	if candidate.is_empty() or not is_instance_valid(_town_runtime):
 		return
 	_pending_replacement_candidate = candidate.duplicate(true)
+	_replacement_world_admitted = false
 	_replacement_admission_committed = false
 	_town_runtime.set_resident_editor_open(true)
 	if not is_instance_valid(_replacement_arrival_panel):
@@ -793,7 +795,14 @@ func _on_replacement_assignment_back_requested(
 ) -> void:
 	if not _replacement_assignment_active:
 		return
+	if _replacement_world_admitted:
+		_last_result = _failure(
+			"RESIDENT_REPLACEMENT_BINDING_RETRY_REQUIRED",
+			true,
+		)
+		return
 	_replacement_assignment_active = false
+	_replacement_world_admitted = false
 	call_deferred("_restore_replacement_editor_after_assignment_back")
 
 
@@ -837,30 +846,32 @@ func _apply_pending_replacement_admission(
 		var deceased_id := String(
 			death_event.get("deceased_resident_id", "")
 		)
-		var preview := RESIDENT_REPLACEMENT.preview_agent_initialization(
-			world,
-			record,
-			deceased_id,
-		) as Dictionary
-		if not bool(preview.get("ok", false)):
-			_last_result = preview.duplicate(true)
-			return preview
-		var preflight := _gateway.preflight_replacement_resident(
-			identity,
-			binding,
-			preview.get("initialization", {}),
-		) as Dictionary
-		if not bool(preflight.get("ok", false)):
-			_last_result = preflight.duplicate(true)
-			return preflight
-		var world_result := RESIDENT_REPLACEMENT.admit(
-			world,
-			record,
-			deceased_id,
-		) as Dictionary
-		if not bool(world_result.get("ok", false)):
-			_last_result = world_result.duplicate(true)
-			return world_result
+		if not _replacement_world_admitted:
+			var preview := RESIDENT_REPLACEMENT.preview_agent_initialization(
+				world,
+				record,
+				deceased_id,
+			) as Dictionary
+			if not bool(preview.get("ok", false)):
+				_last_result = preview.duplicate(true)
+				return preview
+			var preflight := _gateway.preflight_replacement_resident(
+				identity,
+				binding,
+				preview.get("initialization", {}),
+			) as Dictionary
+			if not bool(preflight.get("ok", false)):
+				_last_result = preflight.duplicate(true)
+				return preflight
+			var world_result := RESIDENT_REPLACEMENT.admit(
+				world,
+				record,
+				deceased_id,
+			) as Dictionary
+			if not bool(world_result.get("ok", false)):
+				_last_result = world_result.duplicate(true)
+				return world_result
+			_replacement_world_admitted = true
 		var gateway_result := _gateway.admit_replacement_resident(
 			identity,
 			binding,
@@ -918,6 +929,7 @@ func _apply_pending_replacement_admission(
 		return save_result
 	_pending_replacement_candidate.clear()
 	_replacement_assignment_active = false
+	_replacement_world_admitted = false
 	_replacement_admission_committed = false
 	_town_runtime.set_resident_editor_open(false)
 	call_deferred("_restore_in_session_resident_assignment_after_admission")
@@ -991,6 +1003,7 @@ func _reset_replacement_admission_ui() -> void:
 	if _replacement_assignment_active and is_instance_valid(_town_ui_adapter):
 		_town_ui_adapter.bind_resident_model_assignment_service(null)
 	_replacement_assignment_active = false
+	_replacement_world_admitted = false
 	_replacement_admission_committed = false
 	_replacement_candidate_pool = null
 
@@ -1547,6 +1560,7 @@ func _release_internal_session_refs() -> void:
 	_daily_auto_save_inflight = false
 	_replacement_generation_pending = false
 	_replacement_last_checked_minute = -1
+	_replacement_world_admitted = false
 	_pending_replacement_candidate.clear()
 	_pending_runtime = null
 	_town_runtime = null

@@ -97,6 +97,21 @@ func _run() -> void:
 		"Agent 预检会拒绝泄漏的 UI 字段",
 	)
 	_expect_equal(RESIDENT_REPLACEMENT.living_resident_count(world), 14, "预检失败前 World 不会提前补位")
+	var same_name_record := record.duplicate(true)
+	var same_name_attributes := (
+		same_name_record.get("attributes", {}) as Dictionary
+	).duplicate(true)
+	same_name_attributes["name"] = deceased_name
+	same_name_record["attributes"] = same_name_attributes
+	var same_name_validation := RESIDENT_REPLACEMENT.validate(
+		world,
+		same_name_record,
+		String(deceased.get("residentId", "")),
+	) as Dictionary
+	_expect(
+		bool(same_name_validation.get("ok", false)),
+		"补位可以复用已经死亡居民的姓名",
+	)
 	var admitted := RESIDENT_REPLACEMENT.admit(
 		world,
 		record,
