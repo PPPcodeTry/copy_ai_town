@@ -43,10 +43,9 @@ class RefreshGateway:
 			"status": "ready",
 			"content": {
 				"contentKind": "resident_current_focus",
-				"whisperText": "",
 				"monologueText": latest_focus,
 				"reasonText": "",
-				"playerStatusText": "已读取居民当前关注。",
+				"playerStatusText": "",
 				"empty": false,
 				"fallbackUsed": false,
 			},

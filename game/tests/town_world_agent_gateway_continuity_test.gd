@@ -285,14 +285,17 @@ class InnerObservationWorld:
 class InnerObservationAgent:
 	extends RefCounted
 
+	var current_thought := "想看看花圃今天有没有新芽。"
+
 	func get_resident_memory(_resident_id: String) -> Dictionary:
 		return {
 			"ok": true,
 			"memory": {
-				"current_focus": "想看看花圃今天有没有新芽。",
-				"next_plan": "想看看花圃今天有没有新芽。",
-				"current_judgment": "想看看花圃今天有没有新芽。",
-				"memory_certainties": ["想看看花圃今天有没有新芽。"],
+				"current_inner_thought": current_thought,
+				"current_focus": current_thought,
+				"next_plan": current_thought,
+				"current_judgment": current_thought,
+				"memory_certainties": [current_thought],
 				"memory_doubts": [],
 				"memory_contradictions": [],
 				"public_basis": ["想看看花圃今天有没有新芽。"],
@@ -674,7 +677,8 @@ func _test_unconsumed_fallback_keeps_social_candidate_open() -> void:
 func _test_inner_observation_accepts_newer_read_only_world_revision() -> void:
 	var gateway: Node = GATEWAY.new()
 	gateway.set("_world", InnerObservationWorld.new())
-	gateway.set("_agent_system", InnerObservationAgent.new())
+	var agent := InnerObservationAgent.new()
+	gateway.set("_agent_system", agent)
 	gateway.set("_session_active", true)
 	gateway.set("_resident_name_by_id", {"resident-a": "林岚"})
 	var snapshot := gateway.call(
@@ -692,9 +696,9 @@ func _test_inner_observation_accepts_newer_read_only_world_revision() -> void:
 		"inner observation reports the revision it actually read",
 	)
 	_expect_equal(
-		snapshot.get("currentFocus"),
+		snapshot.get("currentThought"),
 		"想看看花圃今天有没有新芽。",
-		"inner observation keeps the resident's current public focus",
+		"inner observation keeps the resident's strict current thought",
 	)
 	var ready := gateway.call(
 		"_inner_observation_ready_result",
@@ -704,14 +708,120 @@ func _test_inner_observation_accepts_newer_read_only_world_revision() -> void:
 	var content := ready.get("content", {}) as Dictionary
 	_expect_equal(
 		content.get("monologueText"),
-		"此刻在意：想看看花圃今天有没有新芽。",
-		"inner observation does not repeat the same thought across sections",
+		"想看看花圃今天有没有新芽。",
+		"inner observation presents natural prose without report labels",
 	)
 	_expect_equal(
 		content.get("reasonText"),
 		"",
 		"duplicated public basis is omitted instead of echoing the monologue",
 	)
+	var natural_ready := gateway.call(
+		"_inner_observation_ready_result",
+		{
+			"residentId": "resident-a",
+			"currentThought": "集市那边出了点事，我还是有些放心不下。",
+			"nextPlan": "等把手上的活做完，我想过去看看。",
+			"reasonBasis": ["旅行者刚刚说集市出了问题。"],
+		},
+		"inner-natural-test",
+	) as Dictionary
+	var natural_content := natural_ready.get("content", {}) as Dictionary
+	_expect_equal(
+		natural_content.get("monologueText"),
+		"集市那边出了点事，我还是有些放心不下。\n\n等把手上的活做完，我想过去看看。",
+		"current thought and next plan read as one natural monologue",
+	)
+	_expect_equal(
+		natural_content.get("reasonText"),
+		"旅行者刚刚说集市出了问题。",
+		"only one distinct current reason is shown",
+	)
+	_expect_equal(natural_content.get("playerStatusText"), "", "ready content does not show a system completion message")
+	var unrelated_ready := gateway.call(
+		"_inner_observation_ready_result",
+		{
+			"residentId": "resident-a",
+			"currentThought": "想看看花圃今天有没有新芽。",
+			"nextPlan": "",
+			"reasonBasis": ["昨天集市的木架已经修好了。"],
+		},
+		"inner-unrelated-reason-test",
+	) as Dictionary
+	_expect_equal(
+		(unrelated_ready.get("content", {}) as Dictionary).get("reasonText"),
+		"",
+		"an unrelated recent memory is not presented as the thought's reason",
+	)
+	_expect_equal(
+		gateway.call(
+			"_inner_observation_complete_excerpt",
+			"第一句话。第二句话。第三句话。",
+			10,
+		),
+		"第一句话。第二句话。",
+		"long inner text is shortened only at a complete sentence boundary",
+	)
+	var focus_720 := "想".repeat(720)
+	var focus_721 := "想".repeat(721)
+	var focus_1000 := "想".repeat(1000)
+	_expect_equal(
+		gateway.call("_inner_observation_player_text", focus_720, 1000),
+		focus_720,
+		"a current thought at the old hard limit remains visible",
+	)
+	_expect_equal(
+		gateway.call("_inner_observation_player_text", focus_721, 1000),
+		focus_721,
+		"a current thought just above the old limit is not silently dropped",
+	)
+	_expect_equal(
+		gateway.call("_inner_observation_player_text", focus_1000, 1000),
+		focus_1000,
+		"the full projected current-thought limit remains visible",
+	)
+	for focus_limit: int in [720, 721, 1000]:
+		var expected_focus := "想".repeat(focus_limit)
+		agent.current_thought = expected_focus
+		var production_snapshot := gateway.call(
+			"_public_inner_observation_snapshot",
+			"resident-a",
+			11,
+		) as Dictionary
+		_expect_equal(
+			production_snapshot.get("currentThought"),
+			expected_focus,
+			"the production inner-observation path preserves %d characters" % focus_limit,
+		)
+	agent.current_thought = "想看看花圃今天有没有新芽。"
+	var bounded_single_sentence := gateway.call(
+		"_inner_observation_complete_excerpt",
+		"想".repeat(300),
+		220,
+	) as String
+	_expect_equal(
+		bounded_single_sentence.length(),
+		220,
+		"a long single sentence is bounded for the fixed observation panel",
+	)
+	_expect(
+		bounded_single_sentence.ends_with("…"),
+		"a bounded single sentence tells the player that it continues",
+	)
+	var empty_ready := gateway.call(
+		"_inner_observation_ready_result",
+		{
+			"residentId": "resident-a",
+			"currentThought": "",
+			"nextPlan": "",
+			"reasonBasis": ["花圃里曾经有一件重要的事。"],
+		},
+		"inner-empty-test",
+	) as Dictionary
+	var empty_content := empty_ready.get("content", {}) as Dictionary
+	_expect_equal(empty_content.get("empty"), true, "inner observation preserves a real empty state")
+	_expect_equal(empty_content.get("monologueText"), "", "old memories never impersonate a current thought")
+	_expect_equal(empty_content.get("reasonText"), "", "an empty thought does not show an unrelated historical reason")
 	gateway.free()
 
 

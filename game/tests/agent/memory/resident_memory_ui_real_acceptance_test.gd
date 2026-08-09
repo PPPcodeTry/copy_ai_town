@@ -229,12 +229,18 @@ func _run() -> void:
 	) as Dictionary
 	var content := ready.get("content", {}) as Dictionary
 	_expect_equal(ready.get("status"), "ready", "real inner observation completes")
-	_expect_equal(content.get("empty"), false, "real inner observation is never an empty page")
+	_expect_equal(content.get("empty"), false, "real inner observation keeps the current reaction")
 	_expect(
 		String(content.get("monologueText", "")).contains(
+			"我得把改好的木架送到市集。",
+		),
+		"real inner observation displays the resident's current thought",
+	)
+	_expect(
+		String(content.get("reasonText", "")).contains(
 			"我记得今天要把改好的木架送到市集。",
 		),
-		"real inner observation displays the edited latest memory",
+		"real inner observation uses one relevant memory as its reason",
 	)
 
 	var service: RefCounted = UI_PROJECTION_SERVICE.new()
@@ -271,9 +277,15 @@ func _run() -> void:
 	var page_content := page_data.get("content", {}) as Dictionary
 	_expect(
 		String(page_content.get("monologueText", "")).contains(
+			"我得把改好的木架送到市集。",
+		),
+		"real inner observation page displays the resident's current thought",
+	)
+	_expect(
+		String(page_content.get("reasonText", "")).contains(
 			"我记得今天要把改好的木架送到市集。",
 		),
-		"real inner observation page displays the edited resident memory",
+		"real inner observation page displays one relevant reason",
 	)
 	service.unbind()
 

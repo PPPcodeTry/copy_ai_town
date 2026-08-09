@@ -680,6 +680,11 @@ func _test_public_current_focus_falls_back_to_formal_or_important_memory() -> vo
 		"花圃里有一件需要留意的事。",
 		"current focus falls back to the latest public formal memory",
 	)
+	_expect_equal(
+		(formal_public.get("memory", {}) as Dictionary).get("current_inner_thought"),
+		"",
+		"inner observation never treats a formal memory as a current thought",
+	)
 
 	var important_source := _new_memory_system("current-focus-important-source")
 	var important_capture := important_source.call("capture_persistent_state") as Dictionary
@@ -700,6 +705,11 @@ func _test_public_current_focus_falls_back_to_formal_or_important_memory() -> vo
 		(important_public.get("memory", {}) as Dictionary).get("current_focus"),
 		"我仍然记得那盏旧灯。",
 		"current focus falls back to the important memory summary",
+	)
+	_expect_equal(
+		(important_public.get("memory", {}) as Dictionary).get("current_inner_thought"),
+		"",
+		"inner observation never treats important memories as a current thought",
 	)
 
 
@@ -961,6 +971,7 @@ func _test_player_query_is_read_only() -> void:
 		"relationship summary remains player-visible",
 	)
 	_expect_equal(public_memory.get("current_focus"), "今晚要把木架收尾。", "current focus remains visible")
+	_expect_equal(public_memory.get("current_inner_thought"), "今晚要把木架收尾。", "strict inner thought remains visible")
 	_expect(public_memory.has("next_plan"), "inner observation next plan is projected")
 	_expect(public_memory.has("current_judgment"), "inner observation judgment is projected")
 	_expect(public_memory.has("memory_certainties"), "inner observation certainties are projected")

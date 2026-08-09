@@ -488,10 +488,9 @@ class FakeGateway:
 			"status": "ready",
 			"content": {
 				"contentKind": "resident_current_focus",
-				"whisperText": "",
 				"monologueText": "想把刚找到的资料读完。",
 				"reasonText": "",
-				"playerStatusText": "当前想法已读取。",
+				"playerStatusText": "",
 				"empty": false,
 				"fallbackUsed": false,
 			},
@@ -1159,6 +1158,20 @@ func _run() -> void:
 		))
 		and unavailable_overlay.visible,
 		"inner unavailable ViewModel does not mount its visible page",
+	)
+	var inner_heading := unavailable_overlay.find_child(
+		"ObservationWhisper",
+		true,
+		false,
+	) as Label
+	_expect_equal(
+		inner_heading.text if inner_heading != null else "",
+		"此刻的心声",
+		"inner page uses its formerly empty top slot as a clear heading",
+	)
+	_expect(
+		unavailable_overlay.find_child("PageAdvanceAction", true, false) == null,
+		"inner page no longer exposes report-style page confirmation",
 	)
 	unavailable_overlay.queue_free()
 
