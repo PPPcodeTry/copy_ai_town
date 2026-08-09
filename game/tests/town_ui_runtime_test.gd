@@ -742,10 +742,9 @@ class AdapterHarness extends Node:
 			},
 			"content": {
 				"contentKind": "resident_current_focus",
-				"whisperText": "",
 				"monologueText": "想看看花圃今天有没有新芽。",
 				"reasonText": "",
-				"playerStatusText": "当前想法已读取。",
+				"playerStatusText": "",
 				"empty": false,
 				"fallbackUsed": false,
 			},

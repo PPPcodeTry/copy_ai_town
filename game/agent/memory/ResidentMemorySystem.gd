@@ -598,6 +598,11 @@ func get_read_only_memory() -> Dictionary:
 			),
 			"important_memories": important_memories,
 			"relationships": _player_visible_text(_memory["relationships"]),
+			# 内心观察只能读取居民此刻真实保存的想法。current_focus 仍为
+			# 记忆页保留历史回退，但不能再把旧记忆冒充成当前内心。
+			"current_inner_thought": _player_visible_text(
+				_memory["current_thoughts"],
+			),
 			"current_focus": _public_current_focus(
 				_memory["current_thoughts"],
 				archive.get("entries", []),

@@ -162,6 +162,9 @@ const PLAYER_SAFE_DISABLED_FALLBACK := "内心暂不可用。"
 const BODY_FONT_SIZE := 32
 const NAME_FONT_SIZE := 48
 const BODY_LINE_SPACING := 4
+const MONOLOGUE_MIN_FONT_SIZE := 18
+const REASON_MIN_FONT_SIZE := 21
+const INNER_SECTION_TITLE := "此刻的心声"
 const CLOSED_REQUEST_HISTORY_LIMIT := 64
 var _adapter: Object
 var _highest_seen_revision := -1
@@ -177,8 +180,6 @@ var _active_generation_request_id := ""
 var _active_resident_id := ""
 var _exit_pending := false
 var _pending_action_keys: Dictionary = {}
-var _page_index := 0
-var _content_pages: Array[Dictionary] = []
 var _layout_profile := "hidden"
 var _safe_debug_enabled := false
 var _last_layout: Dictionary = {}
@@ -200,7 +201,6 @@ var _resident_name: Label
 var _monologue: Label
 var _reason: Label
 var _status: Label
-var _page_advance: Button
 var _retry: Button
 var _exit: Button
 var _safe_overlay: SafeAreaOverlay
@@ -348,10 +348,6 @@ func apply_view_model(view_model: Dictionary) -> bool:
 			_reject_snapshot("late_visible_revision", incoming_revision)
 			return false
 
-	var should_reset_page := (
-		operation_status != "rejected"
-		and incoming_revision > _confirmed_revision
-	)
 	_highest_seen_revision = maxi(_highest_seen_revision, incoming_revision)
 	_snapshot = view_model.duplicate(true)
 	_actions = (
@@ -366,9 +362,6 @@ func apply_view_model(view_model: Dictionary) -> bool:
 		if not incoming_data.is_empty():
 			_last_confirmed_data = incoming_data.duplicate(true)
 			_confirmed_revision = incoming_revision
-	if should_reset_page:
-		_page_index = 0
-
 	if visibility == "hidden":
 		_record_closed_session(incoming_request_id, incoming_revision)
 		_hide_without_input()
@@ -399,16 +392,6 @@ func request_retry() -> bool:
 	return _submit_action("retry", RETRY_INTENT)
 
 
-func advance_page() -> bool:
-	if not visible or _content_pages.is_empty():
-		return false
-	if _page_index >= _content_pages.size() - 1:
-		return false
-	_page_index += 1
-	_render_current_page()
-	return true
-
-
 func set_debug_safe_area(enabled: bool) -> void:
 	_safe_debug_enabled = enabled
 	if _safe_overlay != null:
@@ -426,8 +409,8 @@ func debug_state() -> Dictionary:
 		"residentId": _active_resident_id,
 		"generationRequestId": _active_generation_request_id,
 		"exitPending": _exit_pending,
-		"pageIndex": _page_index,
-		"pageCount": _content_pages.size(),
+		"pageIndex": 0,
+		"pageCount": 1 if visible else 0,
 		"pageText": _monologue.text if _monologue != null else "",
 		"reasonText": _reason.text if _reason != null else "",
 		"layoutProfile": _layout_profile,
@@ -437,14 +420,9 @@ func debug_state() -> Dictionary:
 
 
 func debug_reconstructed_content() -> Dictionary:
-	var monologue_parts: Array[String] = []
-	var reason_parts: Array[String] = []
-	for page: Dictionary in _content_pages:
-		monologue_parts.append(String(page.get("monologue", "")))
-		reason_parts.append(String(page.get("reason", "")))
 	return {
-		"monologue": "".join(monologue_parts).replace("\n", ""),
-		"reason": "".join(reason_parts).replace("\n", ""),
+		"monologue": _monologue.tooltip_text.replace("\n", ""),
+		"reason": _reason.tooltip_text.replace("\n", ""),
 	}
 
 
@@ -551,7 +529,7 @@ func _build_controls() -> void:
 		Color("3f2717"),
 		HORIZONTAL_ALIGNMENT_LEFT,
 		VERTICAL_ALIGNMENT_TOP,
-		TextServer.AUTOWRAP_OFF
+		TextServer.AUTOWRAP_WORD_SMART
 	)
 	add_child(_monologue)
 
@@ -561,8 +539,8 @@ func _build_controls() -> void:
 		BODY_FONT_SIZE,
 		Color("5a3b25"),
 		HORIZONTAL_ALIGNMENT_LEFT,
-		VERTICAL_ALIGNMENT_CENTER,
-		TextServer.AUTOWRAP_OFF
+		VERTICAL_ALIGNMENT_TOP,
+		TextServer.AUTOWRAP_WORD_SMART
 	)
 	add_child(_reason)
 
@@ -578,10 +556,6 @@ func _build_controls() -> void:
 	_status.clip_text = true
 	_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	add_child(_status)
-
-	_page_advance = _make_page_advance_button()
-	_page_advance.pressed.connect(advance_page)
-	add_child(_page_advance)
 
 	_retry = _make_action_button("RetryAction", "重试")
 	_center_button_text_optically(_retry, 24.0)
@@ -671,30 +645,6 @@ func _center_button_text_optically(button: Button, bottom_margin: float) -> void
 		var style := StyleBoxEmpty.new()
 		style.content_margin_bottom = bottom_margin
 		button.add_theme_stylebox_override(state, style)
-
-
-func _make_page_advance_button() -> Button:
-	var button := Button.new()
-	button.name = "PageAdvanceAction"
-	button.visible = false
-	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	button.focus_mode = Control.FOCUS_ALL
-	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	button.add_theme_font_override("font", _compact_font)
-	button.add_theme_font_size_override("font_size", BODY_FONT_SIZE)
-	button.add_theme_color_override("font_color", Color("76583d"))
-	button.add_theme_color_override("font_hover_color", Color("5a3b25"))
-	button.add_theme_color_override("font_focus_color", Color("5a3b25"))
-	button.add_theme_color_override("font_pressed_color", Color("3f2717"))
-	for state: String in [
-		"normal",
-		"hover",
-		"pressed",
-		"disabled",
-		"focus",
-	]:
-		button.add_theme_stylebox_override(state, StyleBoxEmpty.new())
-	return button
 
 
 func _font_variation(spacing_glyph: int, embolden: float) -> FontVariation:
@@ -831,7 +781,6 @@ func _validate_snapshot(view_model: Dictionary) -> PackedStringArray:
 			if phase != "failed":
 				for text_key: String in [
 					"contentKind",
-					"whisperText",
 					"monologueText",
 					"reasonText",
 					"playerStatusText",
@@ -855,9 +804,6 @@ func _validate_snapshot(view_model: Dictionary) -> PackedStringArray:
 			var monologue_text := String(
 				content.get("monologueText", "")
 			).strip_edges()
-			var whisper_text := String(
-				content.get("whisperText", "")
-			).strip_edges()
 			var reason_text := String(
 				content.get("reasonText", "")
 			).strip_edges()
@@ -880,10 +826,7 @@ func _validate_snapshot(view_model: Dictionary) -> PackedStringArray:
 					issues.append("非空 ready 必须提供真实 current_focus")
 				if (
 					content_empty
-					and (
-						not whisper_text.is_empty()
-						or not reason_text.is_empty()
-					)
+					and not reason_text.is_empty()
 				):
 					issues.append("empty ready 只显示玩家可读自然空状态")
 				if content_empty and player_status_text.is_empty():
@@ -1182,7 +1125,7 @@ func _apply_render_data() -> void:
 
 	var resident := _render_data.get("resident", {}) as Dictionary
 	var content := _render_data.get("content", {}) as Dictionary
-	_whisper.text = String(content.get("whisperText", ""))
+	_whisper.text = INNER_SECTION_TITLE
 	_whisper.tooltip_text = _whisper.text
 	_whisper.mouse_filter = Control.MOUSE_FILTER_STOP
 	_resident_name.text = String(resident.get("displayName", ""))
@@ -1245,111 +1188,80 @@ func _apply_action_state() -> void:
 	)
 
 
-func _rebuild_pages(monologue_text: String, reason_text: String) -> void:
-	var previous_page := _page_index
-	var monologue_width := maxf(
-		120.0,
-		float((_last_layout.get("monologue", REFERENCE_MONOLOGUE_RECT) as Rect2).size.x)
-	)
-	var reason_width := maxf(
-		120.0,
-		float((_last_layout.get("reason", REFERENCE_REASON_RECT) as Rect2).size.x)
-	)
-	var monologue_height := maxf(
-		48.0,
-		float((_last_layout.get("monologue", REFERENCE_MONOLOGUE_RECT) as Rect2).size.y)
-	)
-	var reason_height := maxf(
-		48.0,
-		float((_last_layout.get("reason", REFERENCE_REASON_RECT) as Rect2).size.y)
-	)
-	var body_line_height := _body_font.get_height(BODY_FONT_SIZE) + BODY_LINE_SPACING
-	var reason_line_height := _reason_font.get_height(BODY_FONT_SIZE) + BODY_LINE_SPACING
-	var monologue_capacity := clampi(
-		floori(monologue_height / body_line_height),
-		1,
-		3
-	)
-	var reason_capacity := maxi(1, floori(reason_height / reason_line_height))
-	var monologue_lines := _wrap_text(
-		monologue_text,
-		_body_font,
-		BODY_FONT_SIZE,
-		monologue_width
-	)
-	var reason_prefix := "为什么这样想：" if not reason_text.is_empty() else ""
-	var reason_lines := _wrap_text(
-		reason_prefix + reason_text,
-		_reason_font,
-		BODY_FONT_SIZE,
-		reason_width
-	)
-	var monologue_pages := _group_lines(monologue_lines, monologue_capacity)
-	var reason_pages := _group_lines(reason_lines, reason_capacity)
-	if monologue_pages.is_empty():
-		monologue_pages.append("")
-	if reason_pages.is_empty():
-		reason_pages.append("")
-	_content_pages.clear()
-	for text_value: String in monologue_pages:
-		_content_pages.append({"monologue": text_value, "reason": ""})
-	_content_pages[_content_pages.size() - 1]["reason"] = reason_pages[0]
-	for reason_index: int in range(1, reason_pages.size()):
-		_content_pages.append(
-			{"monologue": "", "reason": reason_pages[reason_index]}
-		)
-	_page_index = clampi(previous_page, 0, _content_pages.size() - 1)
-
-
 func _render_focus_content(content: Dictionary) -> void:
 	if bool(content.get("empty", false)):
-		_content_pages.clear()
-		_page_index = 0
 		_monologue.text = String(content.get("playerStatusText", ""))
+		_monologue.tooltip_text = _monologue.text
 		_reason.text = ""
-		_page_advance.visible = false
-		_page_advance.disabled = true
+		_reason.tooltip_text = ""
+		_reason.visible = false
 		_status.visible = false
-		return
-	_rebuild_pages(
-		String(content.get("monologueText", "")),
-		String(content.get("reasonText", ""))
-	)
-	_render_current_page()
-
-
-func _render_current_page() -> void:
-	if _content_pages.is_empty():
-		_monologue.text = ""
-		_reason.text = ""
-		_page_advance.visible = false
-		_status.visible = true
-		_status.text = _player_status_text()
-		return
-	var page := _content_pages[_page_index]
-	_monologue.text = String(page.get("monologue", ""))
-	_reason.text = String(page.get("reason", ""))
-	var has_next_page := _page_index < _content_pages.size() - 1
-	if _content_pages.size() > 1 and has_next_page:
-		_status.visible = false
-		_page_advance.visible = true
-		_page_advance.disabled = false
-		_page_advance.text = "第 %d / %d 页 · 确认继续" % [
-			_page_index + 1,
-			_content_pages.size(),
-		]
-	else:
-		if _page_advance.has_focus():
-			_focus_exit_if_available()
-		_page_advance.visible = false
-		_page_advance.disabled = true
-		_status.visible = true
-		_status.text = (
-			"第 %d / %d 页 · 摘要完整"
-			% [_page_index + 1, _content_pages.size()]
-			if _content_pages.size() > 1
-			else _player_status_text()
+		_fit_label_text(
+			_monologue,
+			_body_font,
+			BODY_FONT_SIZE,
+			MONOLOGUE_MIN_FONT_SIZE,
+			_last_layout.get("monologue", REFERENCE_MONOLOGUE_RECT) as Rect2,
 		)
+		return
+	var monologue_text := String(content.get("monologueText", "")).strip_edges()
+	var reason_text := String(content.get("reasonText", "")).strip_edges()
+	var phase := String(_render_data.get("phase", ""))
+	_monologue.text = (
+		"“%s”" % monologue_text
+		if phase == "ready" and not monologue_text.is_empty()
+		else monologue_text
+	)
+	_monologue.tooltip_text = monologue_text
+	_reason.visible = not reason_text.is_empty()
+	_reason.text = (
+		"为什么会这样想\n%s" % reason_text
+		if _reason.visible
+		else ""
+	)
+	_reason.tooltip_text = reason_text
+	var player_status := _player_status_text()
+	_status.visible = not player_status.is_empty()
+	_status.text = player_status
+	_fit_label_text(
+		_monologue,
+		_body_font,
+		BODY_FONT_SIZE,
+		MONOLOGUE_MIN_FONT_SIZE,
+		_last_layout.get("monologue", REFERENCE_MONOLOGUE_RECT) as Rect2,
+	)
+	if _reason.visible:
+		_fit_label_text(
+			_reason,
+			_reason_font,
+			BODY_FONT_SIZE,
+			REASON_MIN_FONT_SIZE,
+			_last_layout.get("reason", REFERENCE_REASON_RECT) as Rect2,
+		)
+
+
+func _fit_label_text(
+	label: Label,
+	font: Font,
+	preferred_size: int,
+	minimum_size: int,
+	target_rect: Rect2,
+) -> void:
+	var available_width := maxf(1.0, target_rect.size.x)
+	var available_height := maxf(1.0, target_rect.size.y)
+	var selected_size := minimum_size
+	for candidate_size: int in range(preferred_size, minimum_size - 1, -1):
+		var measured := font.get_multiline_string_size(
+			label.text,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			available_width,
+			candidate_size,
+			-1,
+		)
+		if measured.y <= available_height:
+			selected_size = candidate_size
+			break
+	label.add_theme_font_size_override("font_size", selected_size)
 
 
 func _player_status_text() -> String:
@@ -1383,18 +1295,9 @@ func _player_status_text() -> String:
 
 func _focus_render_default() -> void:
 	var focus_owner := get_viewport().gui_get_focus_owner()
-	if (
-		focus_owner == _page_advance
-		and _page_advance.visible
-		and not _page_advance.disabled
-	):
-		return
 	if focus_owner == _retry and _retry.visible and not _retry.disabled:
 		return
 	if focus_owner == _exit and _exit.visible and not _exit.disabled:
-		return
-	if _page_advance.visible and not _page_advance.disabled:
-		_page_advance.grab_focus()
 		return
 	_focus_exit_if_available()
 
@@ -1402,66 +1305,6 @@ func _focus_render_default() -> void:
 func _focus_exit_if_available() -> void:
 	if _exit.visible and not _exit.disabled:
 		_exit.grab_focus()
-
-
-func _wrap_text(
-	text_value: String,
-	font: Font,
-	font_size: int,
-	max_width: float
-) -> Array[String]:
-	var lines: Array[String] = []
-	var current := ""
-	for index: int in text_value.length():
-		var character := text_value.substr(index, 1)
-		if character == "\n":
-			if not current.is_empty():
-				lines.append(current)
-				current = ""
-			continue
-		var proposed := current + character
-		var width := font.get_string_size(
-			proposed,
-			HORIZONTAL_ALIGNMENT_LEFT,
-			-1,
-			font_size
-		).x
-		if current.is_empty() or width <= max_width:
-			current = proposed
-			continue
-		if _is_closing_punctuation(character) and current.length() > 1:
-			var carry := current.substr(current.length() - 1, 1)
-			current = current.substr(0, current.length() - 1)
-			lines.append(current)
-			current = carry + character
-			continue
-		lines.append(current)
-		current = character
-	if not current.is_empty():
-		lines.append(current)
-	return lines
-
-
-func _group_lines(lines: Array[String], max_lines: int) -> Array[String]:
-	var pages: Array[String] = []
-	if lines.is_empty():
-		return pages
-	var page_count := ceili(float(lines.size()) / float(max_lines))
-	var base_count := floori(float(lines.size()) / float(page_count))
-	var remainder := lines.size() % page_count
-	var cursor := 0
-	for page_index: int in page_count:
-		var line_count := base_count + (1 if page_index < remainder else 0)
-		var page_lines: Array[String] = []
-		for local_index: int in line_count:
-			page_lines.append(lines[cursor + local_index])
-		cursor += line_count
-		pages.append("\n".join(page_lines))
-	return pages
-
-
-func _is_closing_punctuation(character: String) -> bool:
-	return "，。！？；：、）》】」』…—".contains(character)
 
 
 func _submit_action(action_key: String, expected_intent: StringName) -> bool:
@@ -1528,8 +1371,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("ui_accept"):
-		if not _exit.has_focus() and not _retry.has_focus():
-			advance_page()
 		get_viewport().set_input_as_handled()
 		return
 	get_viewport().set_input_as_handled()
@@ -1577,7 +1418,6 @@ func _update_layout_for_viewport(viewport_size: Vector2) -> void:
 	_apply_rect(_monologue, _last_layout["monologue"] as Rect2)
 	_apply_rect(_reason, _last_layout["reason"] as Rect2)
 	_apply_rect(_status, _last_layout["status"] as Rect2)
-	_apply_rect(_page_advance, _last_layout["status"] as Rect2)
 	_apply_rect(_retry, _last_layout["retry"] as Rect2)
 	_apply_rect(_exit, _last_layout["exit"] as Rect2)
 	_safe_overlay.set_rects(_last_layout)

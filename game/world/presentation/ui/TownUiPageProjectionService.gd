@@ -983,7 +983,6 @@ func _begin_inner_observation_generation(
 			"generationStatus": "generating",
 			"content": {
 				"contentKind": "resident_current_focus",
-				"whisperText": "",
 				"monologueText": "",
 				"reasonText": "",
 				"playerStatusText": "正在读取想法…",
@@ -1108,11 +1107,6 @@ func _on_inner_observation_result(
 		if content_value is Dictionary
 		else {}
 	)
-	if result_status == "ready":
-		if String(
-			content.get("playerStatusText", "")
-		).strip_edges().is_empty():
-			content["playerStatusText"] = "当前想法已读取。"
 	_inner_observation_state["content"] = content
 	_inner_observation_state["phase"] = (
 		"ready" if result_status == "ready" else "failed"
@@ -1178,7 +1172,6 @@ func _publish_inner_observation(
 			if open
 			else {
 				"contentKind": "resident_current_focus",
-				"whisperText": "",
 				"monologueText": "",
 				"reasonText": "",
 				"playerStatusText": "",

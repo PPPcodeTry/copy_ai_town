@@ -36,6 +36,9 @@ const MAX_ERROR_HISTORY := 128
 const DEFAULT_AVATAR_PERSON_ID := "person_7f3a91c2d8e4"
 const DEFAULT_AVATAR_NAME := "旅行者"
 const INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS := 720
+const INNER_OBSERVATION_CURRENT_THOUGHT_DISPLAY_CHARS := 220
+const INNER_OBSERVATION_NEXT_PLAN_DISPLAY_CHARS := 120
+const INNER_OBSERVATION_REASON_DISPLAY_CHARS := 100
 const INNER_OBSERVATION_FORBIDDEN_PLAYER_TERMS: Array[String] = [
 	"system prompt",
 	"systemprompt",
@@ -1175,24 +1178,15 @@ func _public_inner_observation_snapshot(
 			_resident_name_by_id.get(resident_id, "")
 		).strip_edges(),
 		"confirmedWorldRevision": current_revision,
-		"currentFocus": _inner_observation_player_text(
-			memory.get("current_focus"),
+		"currentThought": _inner_observation_player_text(
+			memory.get("current_inner_thought"),
 			INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS,
 		),
 		"nextPlan": _inner_observation_player_text(
 			memory.get("next_plan"),
 			INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS,
 		),
-		"currentJudgment": _inner_observation_player_text(
-			memory.get("current_judgment"),
-			INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS,
-		),
-		"memoryCertainties": (memory.get("memory_certainties", []) as Array).duplicate(),
-		"memoryDoubts": (memory.get("memory_doubts", []) as Array).duplicate(),
-		"memoryContradictions": (
-			memory.get("memory_contradictions", []) as Array
-		).duplicate(),
-		"publicBasis": (memory.get("public_basis", []) as Array).duplicate(),
+		"reasonBasis": (memory.get("public_basis", []) as Array).duplicate(),
 	}
 
 
@@ -1200,46 +1194,46 @@ func _inner_observation_ready_result(
 	snapshot: Dictionary,
 	request_id: String,
 ) -> Dictionary:
-	var current_focus := _inner_observation_player_text(
-		snapshot.get("currentFocus"),
+	var current_thought := _inner_observation_player_text(
+		snapshot.get("currentThought"),
 		INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS,
+	)
+	current_thought = _inner_observation_complete_excerpt(
+		current_thought,
+		INNER_OBSERVATION_CURRENT_THOUGHT_DISPLAY_CHARS,
 	)
 	var next_plan := _inner_observation_player_text(
 		snapshot.get("nextPlan"),
 		INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS,
 	)
-	var judgment := _inner_observation_player_text(
-		snapshot.get("currentJudgment"),
-		INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS,
+	next_plan = _inner_observation_complete_excerpt(
+		next_plan,
+		INNER_OBSERVATION_NEXT_PLAN_DISPLAY_CHARS,
 	)
 	var monologue_parts: Array[String] = []
 	var seen := {}
-	_append_unique_inner_line(monologue_parts, seen, "此刻在意：", current_focus)
-	_append_unique_inner_line(monologue_parts, seen, "接下来：", next_plan)
-	_append_unique_inner_line(monologue_parts, seen, "当前判断：", judgment)
-	_append_unique_inner_values(monologue_parts, seen, snapshot.get("memoryCertainties", []), "更加确信：")
-	_append_unique_inner_values(monologue_parts, seen, snapshot.get("memoryDoubts", []), "存疑：")
-	_append_unique_inner_values(monologue_parts, seen, snapshot.get("memoryContradictions", []), "矛盾：")
-	# 当前动作可能暂时覆盖 currentFocus，但相关的正式记忆仍是居民
-	# 正在依据的主观内容。只读内心页保留这一至两条公开依据，避免
-	# 玩家刚改写的记忆只在记忆页可见、内心页却退回到无关动作文字。
-	_append_unique_inner_values(monologue_parts, seen, snapshot.get("publicBasis", []), "依据：")
-	var reason_parts: Array[String] = []
-	_append_unique_inner_values(reason_parts, seen, snapshot.get("publicBasis", []), "依据：")
+	_append_unique_inner_paragraph(monologue_parts, seen, current_thought)
+	_append_unique_inner_paragraph(monologue_parts, seen, next_plan)
 	var empty := monologue_parts.is_empty()
+	var reason_text := ""
+	if not empty:
+		reason_text = _first_distinct_inner_reason(
+			snapshot.get("reasonBasis", []),
+			seen,
+			monologue_parts,
+		)
 	return {
 		"residentId": String(snapshot.get("residentId", "")),
 		"requestId": request_id,
 		"status": "ready",
 		"content": {
 			"contentKind": "resident_current_focus",
-			"whisperText": "",
 			"monologueText": "\n\n".join(monologue_parts),
-			"reasonText": "\n".join(reason_parts),
+			"reasonText": reason_text,
 			"playerStatusText": (
-				"当前没有明确想法。"
+				"此刻似乎没有特别在意的事。"
 				if empty
-				else "当前想法已读取。"
+				else ""
 			),
 			"empty": empty,
 			"fallbackUsed": false,
@@ -1249,27 +1243,9 @@ func _inner_observation_ready_result(
 	}
 
 
-func _append_unique_inner_values(
+func _append_unique_inner_paragraph(
 	target: Array[String],
 	seen: Dictionary,
-	values: Variant,
-	prefix: String,
-) -> void:
-	if typeof(values) != TYPE_ARRAY:
-		return
-	for value: Variant in values as Array:
-		_append_unique_inner_line(
-			target,
-			seen,
-			prefix,
-			_inner_observation_player_text(value, INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS),
-		)
-
-
-func _append_unique_inner_line(
-	target: Array[String],
-	seen: Dictionary,
-	prefix: String,
 	text: String,
 ) -> void:
 	var normalized := text.strip_edges()
@@ -1279,7 +1255,104 @@ func _append_unique_inner_line(
 	if seen.has(key):
 		return
 	seen[key] = true
-	target.append("%s%s" % [prefix, normalized])
+	target.append(normalized)
+
+
+func _first_distinct_inner_reason(
+	values: Variant,
+	seen: Dictionary,
+	monologue_parts: Array[String],
+) -> String:
+	if typeof(values) != TYPE_ARRAY:
+		return ""
+	# public_basis 已按时间从新到旧排列。原因只取当前最相关的一条，
+	# 不再把记忆状态和整份历史列表暴露给玩家。
+	for value: Variant in values as Array:
+		var text := _inner_observation_player_text(
+			value,
+			INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS,
+		)
+		text = _inner_observation_complete_excerpt(
+			text,
+			INNER_OBSERVATION_REASON_DISPLAY_CHARS,
+		)
+		var key := text.to_lower().replace(" ", "").replace("\n", "")
+		if (
+			not text.is_empty()
+			and not seen.has(key)
+			and _inner_reason_matches_monologue(text, monologue_parts)
+		):
+			return text
+	return ""
+
+
+func _inner_reason_matches_monologue(
+	reason_text: String,
+	monologue_parts: Array[String],
+) -> bool:
+	var reason_key := _inner_observation_relation_key(reason_text)
+	if reason_key.length() < 2:
+		return false
+	for paragraph: String in monologue_parts:
+		var paragraph_key := _inner_observation_relation_key(paragraph)
+		if paragraph_key.is_empty():
+			continue
+		if reason_key.contains(paragraph_key) or paragraph_key.contains(reason_key):
+			return true
+		var shared_pairs := {}
+		for index: int in range(reason_key.length() - 1):
+			var pair := reason_key.substr(index, 2)
+			if paragraph_key.contains(pair):
+				shared_pairs[pair] = true
+				if shared_pairs.size() >= 2:
+					return true
+	return false
+
+
+func _inner_observation_relation_key(text: String) -> String:
+	var result := text.to_lower().strip_edges()
+	for separator: String in [
+		" ",
+		"\t",
+		"\r",
+		"\n",
+		"，",
+		"。",
+		"！",
+		"？",
+		"：",
+		"；",
+		",",
+		".",
+		"!",
+		"?",
+		":",
+		";",
+		"“",
+		"”",
+		"\"",
+		"'",
+	]:
+		result = result.replace(separator, "")
+	return result
+
+
+func _inner_observation_complete_excerpt(
+	text: String,
+	maximum_characters: int,
+) -> String:
+	var normalized := text.strip_edges()
+	if normalized.length() <= maximum_characters:
+		return normalized
+	# 只在完整句子边界收短内容，不用省略号掩盖被截断的半句话。
+	var last_sentence_end := -1
+	for index: int in range(mini(normalized.length(), maximum_characters)):
+		if "。！？!?；;".contains(normalized.substr(index, 1)):
+			last_sentence_end = index + 1
+	if last_sentence_end > 0:
+		return normalized.left(last_sentence_end).strip_edges()
+	# 单句本身很长时保留完整句子，交由页面自适应字号，避免改变原意。
+	return normalized
 
 
 func _inner_observation_player_text(
