@@ -33,6 +33,36 @@ const CONTENT_SLOT_PATH := (
 const BUTTON_ROOT := (
 	RUNTIME_ASSET_ROOT + "/base_ninepatch/buttons"
 )
+const SUCCESS_BUTTON_ROOT := (
+	RUNTIME_ASSET_ROOT + "/base_ninepatch/buttons_success"
+)
+const CUSTOM_SUCCESS_BUTTON_PATH := (
+	SUCCESS_BUTTON_ROOT + "/button_success_normal_v2.png"
+)
+const CUSTOM_SECONDARY_BUTTON_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/base_ninepatch/buttons_secondary/button_secondary_normal_v2.png"
+)
+const CUSTOM_LOADING_BUTTON_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/base_ninepatch/buttons_loading/button_loading_v2.png"
+)
+const CUSTOM_SECTION_ROOT := (
+	RUNTIME_ASSET_ROOT + "/composite/custom_sections"
+)
+const CUSTOM_CONNECTION_ROW_PATH := (
+	CUSTOM_SECTION_ROOT + "/custom_connection_row_v2.png"
+)
+const CUSTOM_CONNECTION_TWO_ROW_PATH := (
+	CUSTOM_SECTION_ROOT + "/custom_connection_two_row_v3.png"
+)
+const CUSTOM_MODEL_ADD_ROW_PATH := (
+	CUSTOM_SECTION_ROOT + "/custom_model_add_row_v2.png"
+)
+const STATUS_LOADING_PLATE_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/status_strips/status_loading_v2.png"
+)
 const PROVIDER_CARD_ROOT := (
 	RUNTIME_ASSET_ROOT + "/composite/provider_cards"
 )
@@ -54,6 +84,24 @@ const PAGINATION_LEFT_PATH := (
 )
 const MEDALLION_ROOT := (
 	RUNTIME_ASSET_ROOT + "/icons/provider_medallions"
+)
+const CUSTOM_MODEL_DELETE_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/actions/custom_model_delete_v1.png"
+)
+const CUSTOM_KEY_ACTION_ROOT := (
+	RUNTIME_ASSET_ROOT + "/icons/custom_key_actions"
+)
+const CUSTOM_KEY_SAVE_PATH := (
+	CUSTOM_KEY_ACTION_ROOT + "/custom_connection_save_key_v1.png"
+)
+const CUSTOM_KEY_REVEAL_PATH := (
+	CUSTOM_KEY_ACTION_ROOT + "/custom_connection_reveal_v1.png"
+)
+const CUSTOM_KEY_DELETE_PATH := (
+	CUSTOM_KEY_ACTION_ROOT + "/custom_connection_delete_key_v1.png"
+)
+const PROVIDER_CHECKING_CONNECTION_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/status/provider_checking_connection_v1.png"
 )
 const PROVIDER_CLOCK_HANDS_PATH := (
 	RUNTIME_ASSET_ROOT + "/icons/header/provider_clock_hands_v1.png"
@@ -205,6 +253,17 @@ static func runtime_assets_ready() -> bool:
 		PROVIDER_CARD_DISABLED_PATH,
 		PAGINATION_LEFT_PATH,
 		"%s/provider_medallion_success_v1.png" % MEDALLION_ROOT,
+		CUSTOM_SUCCESS_BUTTON_PATH,
+		CUSTOM_SECONDARY_BUTTON_PATH,
+		CUSTOM_LOADING_BUTTON_PATH,
+		CUSTOM_CONNECTION_ROW_PATH,
+		CUSTOM_CONNECTION_TWO_ROW_PATH,
+		CUSTOM_MODEL_ADD_ROW_PATH,
+		STATUS_LOADING_PLATE_PATH,
+		PROVIDER_CHECKING_CONNECTION_PATH,
+		CUSTOM_KEY_SAVE_PATH,
+		CUSTOM_KEY_REVEAL_PATH,
+		CUSTOM_KEY_DELETE_PATH,
 		PROVIDER_CLOCK_HANDS_PATH,
 		PROVIDER_TOGGLE_OFF_PATH,
 		PROVIDER_TOGGLE_ON_PATH,
@@ -378,7 +437,26 @@ static func input_style(state: String) -> StyleBox:
 	return style
 
 
-static func button_style(_variant: String, state: String) -> StyleBox:
+static func button_style(variant: String, state: String) -> StyleBox:
+	if variant in ["success", "secondary", "loading"]:
+		var asset_path := CUSTOM_SUCCESS_BUTTON_PATH
+		if state == "disabled" or variant == "loading":
+			asset_path = CUSTOM_LOADING_BUTTON_PATH
+		elif variant == "secondary":
+			asset_path = CUSTOM_SECONDARY_BUTTON_PATH
+		var generated_style := _texture_style(
+			asset_path,
+			[44, 36, 44, 36],
+			[16, 12, 16, 12],
+		)
+		if generated_style is StyleBoxTexture:
+			var textured := generated_style as StyleBoxTexture
+			match state:
+				"hover", "focus":
+					textured.modulate_color = Color("fff4c7")
+				"pressed":
+					textured.modulate_color = Color("d8c18e")
+		return generated_style
 	var asset_id := "button_normal"
 	match state:
 		"hover", "focus":
@@ -400,17 +478,70 @@ static func provider_toggle_texture(enabled: bool) -> Texture2D:
 	)
 
 
-static func provider_identity_medallion(provider_id: String) -> Texture2D:
+static func provider_identity_medallion(
+	provider_id: String,
+	custom_group := false,
+) -> Texture2D:
 	var asset_id := "provider_medallion_network_v1.png"
-	if provider_id == "deepseek":
+	if custom_group:
+		asset_id = "provider_medallion_custom_model_v1.png"
+	elif provider_id == "deepseek":
 		asset_id = "provider_medallion_success_v1.png"
 	elif provider_id == "kimi":
 		asset_id = "provider_medallion_auth_v1.png"
 	return _texture("%s/%s" % [MEDALLION_ROOT, asset_id])
 
 
+static func custom_model_delete_texture() -> Texture2D:
+	return _texture(CUSTOM_MODEL_DELETE_PATH)
+
+
+static func custom_key_save_texture() -> Texture2D:
+	return _texture(CUSTOM_KEY_SAVE_PATH)
+
+
+static func custom_key_reveal_texture() -> Texture2D:
+	return _texture(CUSTOM_KEY_REVEAL_PATH)
+
+
+static func custom_key_delete_texture() -> Texture2D:
+	return _texture(CUSTOM_KEY_DELETE_PATH)
+
+
+static func provider_checking_connection_texture() -> Texture2D:
+	return _texture(PROVIDER_CHECKING_CONNECTION_PATH)
+
+
+static func provider_loading_status_texture() -> Texture2D:
+	return _texture(STATUS_LOADING_PLATE_PATH)
+
+
+static func custom_section_texture(section_id: String) -> Texture2D:
+	match section_id:
+		"custom_connection_two_row":
+			return _texture(CUSTOM_CONNECTION_TWO_ROW_PATH)
+		"custom_model_add":
+			return _texture(CUSTOM_MODEL_ADD_ROW_PATH)
+		_:
+			return _texture(CUSTOM_CONNECTION_ROW_PATH)
+
+
 static func empty_style() -> StyleBoxEmpty:
 	return StyleBoxEmpty.new()
+
+
+static func custom_input_overlay_style(focused := false) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color.TRANSPARENT
+	style.content_margin_left = 18.0
+	style.content_margin_top = 8.0
+	style.content_margin_right = 18.0
+	style.content_margin_bottom = 8.0
+	if focused:
+		style.border_color = HONEY
+		style.set_border_width_all(2)
+		style.set_corner_radius_all(3)
+	return style
 
 
 static func focus_style() -> StyleBoxFlat:

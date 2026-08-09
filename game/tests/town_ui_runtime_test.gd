@@ -3797,6 +3797,7 @@ func _scenario_formal_ui_runtime_contract() -> void:
 	_test_public_error_copy_contract()
 	_test_provider_composite_source_provenance_contract()
 	_test_provider_settings_error_copy_contract()
+	await _test_provider_model_assignment_return_contract()
 	_test_visible_error_label_contract()
 	_test_world_intro_empty_view_model_contract()
 	return
@@ -3988,6 +3989,174 @@ func _test_provider_settings_error_copy_contract() -> void:
 		"模型设置桌面正式页不得泄露内部错误码、消息或详情",
 	)
 	composite.free()
+
+
+func _test_provider_model_assignment_return_contract() -> void:
+	var provider_scene := ResourceLoader.load(
+		"res://ui/provider_settings/ProviderSettingsScreen.tscn"
+	) as PackedScene
+	var provider_screen := (
+		provider_scene.instantiate() as Control
+		if provider_scene != null
+		else null
+	)
+	_expect(provider_screen != null, "模型设置页可进入居民模型重新分配流程")
+	if provider_screen == null:
+		return
+	root.add_child(provider_screen)
+	provider_screen.set("_last_model_deletion", {
+		"providerId": "ollama",
+		"apiModel": "qwen3:8b",
+	})
+	var blocked_vm := _provider_input_stability_view_model(2)
+	blocked_vm["status"] = "rejected"
+	blocked_vm["operation"] = {
+		"requestId": "delete-in-use",
+		"intent": "provider_settings.delete_api_model",
+		"status": "rejected",
+		"submittedAtMsec": 1,
+		"completedAtMsec": 2,
+	}
+	blocked_vm["error"] = {
+		"kind": "unavailable",
+		"code": "PROVIDER_API_MODEL_IN_USE",
+		"retryable": false,
+		"message": "请先重新分配居民模型。",
+		"details": ["resident-a", "resident-b"],
+	}
+	_expect(
+		bool(provider_screen.call("apply_view_model", blocked_vm)),
+		"占用中的自定义模型会显示重新分配入口",
+	)
+	var routed := {"intent": "", "payload": {}}
+	provider_screen.intent_requested.connect(func(
+		intent: StringName,
+		payload: Dictionary,
+	) -> void:
+		routed["intent"] = String(intent)
+		routed["payload"] = payload.duplicate(true)
+	)
+	provider_screen.call("_open_blocked_model_assignment")
+	_expect_equal(
+		String(routed.get("intent", "")),
+		"provider_settings.open_model_assignment",
+		"去分配模型只发出页面路由意图，不误派发给设置服务",
+	)
+	_expect_equal(
+		(routed.get("payload", {}) as Dictionary).get("modelId"),
+		"qwen3:8b",
+		"重新分配路由保留被占用模型",
+	)
+	_expect_equal(
+		((routed.get("payload", {}) as Dictionary).get(
+			"residentIds",
+			[],
+		) as Array).size(),
+		2,
+		"重新分配路由携带受影响居民",
+	)
+	root.remove_child(provider_screen)
+	provider_screen.free()
+
+	var assignment_scene := ResourceLoader.load(
+		"res://ui/resident_model_assignment/ResidentModelAssignmentScreen.tscn"
+	) as PackedScene
+	var assignment_page := (
+		assignment_scene.instantiate() as Control
+		if assignment_scene != null
+		else null
+	)
+	_expect(assignment_page != null, "居民模型分配页支持返回模型设置模式")
+	if assignment_page != null:
+		assignment_page.set("return_to_provider_settings", true)
+		root.add_child(assignment_page)
+		await process_frame
+		var modal_confirm := assignment_page.find_child(
+			"ResponsiveModalStart",
+			true,
+			false,
+		) as Button
+		var responsive_apply := assignment_page.find_child(
+			"ApplyDraftButton",
+			true,
+			false,
+		) as Button
+		_expect(
+			modal_confirm != null and modal_confirm.text == "确认并返回",
+			"返回模式完成确认不再显示开始游戏",
+		)
+		_expect(
+			responsive_apply != null
+			and responsive_apply.text == "确认并返回模型设置",
+			"返回模式底部动作明确返回模型设置",
+		)
+		assignment_page.set("_view_model", {
+			"data": {"formalReady": true},
+			"operation": {"status": "idle"},
+		})
+		var presentation := assignment_page.call(
+			"_presentation_view_model"
+		) as Dictionary
+		_expect(
+			bool((presentation.get("data", {}) as Dictionary).get(
+				"returnToProviderSettings",
+				false,
+			)),
+			"返回模式传入 1920 组合页面",
+		)
+		root.remove_child(assignment_page)
+		assignment_page.free()
+
+	var runtime_adapter := AdapterHarness.new()
+	root.add_child(runtime_adapter)
+	var runtime_host := HOST_SCRIPT.new() as Control
+	runtime_adapter.world_menu_host = runtime_host
+	var bound := runtime_host.call(
+		"bind_town_ui_adapter",
+		runtime_adapter,
+	) as Dictionary
+	root.add_child(runtime_host)
+	_expect(bool(bound.get("ok", false)), "正式运行页接入分配返回流程")
+	runtime_host.call(
+		"_on_self_dispatching_page_intent",
+		&"provider_settings.open_model_assignment",
+		{
+			"modelId": "qwen3:8b",
+			"residentIds": ["resident-a"],
+		},
+		&"provider_settings",
+	)
+	await process_frame
+	await process_frame
+	_expect_equal(
+		runtime_host.call("current_route"),
+		&"resident_model_assignment",
+		"正式运行页从模型设置打开居民模型分配页",
+	)
+	var routed_assignment := runtime_host.get("_active_page") as Control
+	_expect(
+		is_instance_valid(routed_assignment)
+		and bool(routed_assignment.get("return_to_provider_settings")),
+		"模型设置来源会启用确认返回模式",
+	)
+	runtime_host.call(
+		"_on_self_dispatching_page_intent",
+		&"resident_model_assignment.back",
+		{},
+		&"resident_model_assignment",
+	)
+	await process_frame
+	await process_frame
+	_expect_equal(
+		runtime_host.call("current_route"),
+		&"provider_settings",
+		"居民模型分配返回动作回到模型设置",
+	)
+	runtime_host.call("close_page", false)
+	root.remove_child(runtime_host)
+	runtime_host.free()
+	root.remove_child(runtime_adapter)
+	runtime_adapter.free()
 
 
 

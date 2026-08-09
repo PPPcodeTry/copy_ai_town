@@ -309,6 +309,8 @@ func dispatch(intent: Variant, payload: Dictionary = {}) -> Dictionary:
 			result = _delete_key(payload)
 		"provider_settings.save_base_url":
 			result = _save_base_url(payload)
+		"provider_settings.save_connection":
+			result = _save_connection(payload)
 		"provider_settings.save_api_model":
 			result = _save_api_model(payload)
 		"provider_settings.delete_api_model":
@@ -657,7 +659,7 @@ func _save_key(payload: Dictionary) -> Dictionary:
 	var previous_key := String(_credential_keys.get(provider_id, ""))
 	var had_previous_key := _credential_keys.has(provider_id)
 	var credential_result := (
-		_credential_store.call("save_api_key", provider_id, api_key) as Dictionary
+		_credential_store.save_api_key(provider_id, api_key) as Dictionary
 	)
 	if not bool(credential_result.get("ok", false)):
 		return credential_result
@@ -763,6 +765,81 @@ func _save_base_url(payload: Dictionary) -> Dictionary:
 		"Provider 地址已更新。",
 		provider_id,
 	)
+
+
+func _save_connection(payload: Dictionary) -> Dictionary:
+	var provider_result := _required_canonical_id(payload, "providerId")
+	if not bool(provider_result.get("ok", false)):
+		return _failure("PROVIDER_SETTINGS_PROVIDER_REQUIRED", false)
+	var provider_id := String(provider_result.get("value", ""))
+	var confirmed_provider := _provider_from_confirmed(provider_id)
+	if confirmed_provider.is_empty():
+		return _failure("PROVIDER_SETTINGS_PROVIDER_UNKNOWN", false)
+	var endpoint_value: Variant = payload.get("baseUrl", "")
+	var api_key_value: Variant = payload.get("apiKey", "")
+	if typeof(endpoint_value) != TYPE_STRING or typeof(api_key_value) != TYPE_STRING:
+		return _failure("PROVIDER_BASE_URL_INVALID", false)
+	var endpoint := endpoint_value as String
+	var api_key := api_key_value as String
+	if endpoint != endpoint.strip_edges():
+		return _failure("PROVIDER_BASE_URL_INVALID", false)
+	if not endpoint.is_empty() and not _base_url_scheme_is_allowed(endpoint):
+		return _failure("PROVIDER_BASE_URL_INVALID", false)
+	if api_key != api_key.strip_edges():
+		return _failure("PROVIDER_API_KEY_REQUIRED", false)
+	if (
+		_provider_auth_required(confirmed_provider)
+		and api_key.is_empty()
+		and not _has_saved_key(provider_id)
+	):
+		return _failure("PROVIDER_API_KEY_REQUIRED", false)
+
+	var previous_key := String(_credential_keys.get(provider_id, ""))
+	var had_previous_key := _credential_keys.has(provider_id)
+	var api_key_ref := ""
+	if not api_key.is_empty():
+		var credential_result := (
+			_credential_store.save_api_key(provider_id, api_key) as Dictionary
+		)
+		if not bool(credential_result.get("ok", false)):
+			return credential_result
+		_credential_keys[provider_id] = api_key
+		api_key_ref = String(credential_result.get(
+			"apiKeyRef",
+			"secure_store.llm.%s.api_key" % provider_id,
+		))
+
+	var candidate := _stored_config.duplicate(true)
+	var providers := candidate.get("providers", {}) as Dictionary
+	var provider := (providers.get(provider_id, {}) as Dictionary).duplicate(true)
+	if endpoint.is_empty():
+		provider.erase("endpoint")
+	else:
+		provider["endpoint"] = endpoint
+	provider.erase("api_key")
+	if not api_key_ref.is_empty():
+		provider["apiKeyRef"] = api_key_ref
+	provider["enabled"] = true
+	providers[provider_id] = provider
+	candidate["providers"] = providers
+	candidate["selectedProviderId"] = provider_id
+	var persisted := _persist_candidate_reconfigure_and_reload(
+		candidate,
+		"连接设置已保存。",
+		provider_id,
+	)
+	if bool(persisted.get("ok", false)):
+		return persisted
+	if not api_key.is_empty():
+		var restored := _restore_credential(
+			provider_id,
+			had_previous_key,
+			previous_key,
+		)
+		if not bool(restored.get("ok", false)):
+			return restored
+	_apply_provider_configuration()
+	return persisted
 
 
 func _save_api_model(payload: Dictionary) -> Dictionary:
@@ -1503,6 +1580,7 @@ func _actions(data: Dictionary) -> Dictionary:
 		"saveKey": _action("provider_settings.save_key", has_providers),
 		"deleteKey": _action("provider_settings.delete_key", has_providers),
 		"saveBaseUrl": _action("provider_settings.save_base_url", has_providers),
+		"saveConnection": _action("provider_settings.save_connection", has_providers),
 		"saveApiModel": _action("provider_settings.save_api_model", has_providers),
 		"deleteApiModel": _action("provider_settings.delete_api_model", has_providers),
 		"discoverModels": _action("provider_settings.discover_models", has_providers),

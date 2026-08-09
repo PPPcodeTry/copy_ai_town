@@ -44,7 +44,11 @@ var _draft_api_model := ""
 var _draft_provider_id := ""
 var _discard_confirmation: FormalDialog
 var _delete_model_confirmation: FormalDialog
+var _delete_model_blocked_dialog: FormalDialog
+var _delete_model_blocked_revision := -1
 var _pending_model_deletion: Dictionary = {}
+var _last_model_deletion: Dictionary = {}
+var _blocked_model_assignment_context: Dictionary = {}
 var _pending_provider_selection: Dictionary = {}
 var _discard_confirmation_action := ""
 var _layout_profile := ""
@@ -73,6 +77,7 @@ func _ready() -> void:
 	_build_background()
 	_build_discard_confirmation()
 	_build_delete_model_confirmation()
+	_build_delete_model_blocked_dialog()
 	if _view_model.is_empty():
 		_view_model = _empty_view_model()
 		_render_data = (
@@ -123,6 +128,24 @@ func _build_delete_model_confirmation() -> void:
 	add_child(_delete_model_confirmation)
 
 
+func _build_delete_model_blocked_dialog() -> void:
+	if is_instance_valid(_delete_model_blocked_dialog):
+		return
+	_delete_model_blocked_dialog = FormalDialog.new()
+	_delete_model_blocked_dialog.name = "DeleteCustomModelBlocked"
+	_delete_model_blocked_dialog.title = "暂时无法删除"
+	_delete_model_blocked_dialog.dialog_text = (
+		"仍有居民正在使用这个模型。请先在居民模型分配页面为他们更换模型，再回来删除。"
+	)
+	_delete_model_blocked_dialog.ok_button_text = "去分配模型"
+	_delete_model_blocked_dialog.cancel_button_text = "知道了"
+	_delete_model_blocked_dialog.semantic_kind = "error"
+	_delete_model_blocked_dialog.confirmed.connect(
+		_open_blocked_model_assignment
+	)
+	add_child(_delete_model_blocked_dialog)
+
+
 func _request_delete_custom_model(provider_id: String, api_model: String) -> void:
 	if provider_id.is_empty() or api_model.is_empty():
 		return
@@ -141,8 +164,18 @@ func _confirm_delete_custom_model() -> void:
 	if _pending_model_deletion.is_empty():
 		return
 	var payload := _pending_model_deletion.duplicate(true)
+	_last_model_deletion = payload.duplicate(true)
 	_pending_model_deletion.clear()
 	_dispatch_intent(&"provider_settings.delete_api_model", payload)
+
+
+func _open_blocked_model_assignment() -> void:
+	if _blocked_model_assignment_context.is_empty():
+		return
+	_dispatch_intent(
+		&"provider_settings.open_model_assignment",
+		_blocked_model_assignment_context.duplicate(true),
+	)
 
 
 func _show_discard_confirmation(
@@ -266,6 +299,7 @@ func apply_view_model(view_model: Dictionary) -> bool:
 		_render_data = _last_confirmed_data.duplicate(true)
 	_view_model = view_model.duplicate(true)
 	_current_revision = incoming_revision
+	_present_delete_model_blocked_error(view_model, incoming_revision)
 	var operation := view_model.get("operation", {}) as Dictionary
 	var operation_intent := String(operation.get("intent", ""))
 	var operation_status_text := String(operation.get("status", ""))
@@ -296,6 +330,15 @@ func apply_view_model(view_model: Dictionary) -> bool:
 			_draft_base_url = str(selected.get("baseUrl", ""))
 		elif (
 			operation_status_text == "success"
+			and operation_intent == "provider_settings.save_connection"
+		):
+			_draft_base_url = str(selected.get("baseUrl", ""))
+			_draft_key = ""
+			_draft_key_baseline = ""
+			_draft_key_dirty = false
+			_show_key = false
+		elif (
+			operation_status_text == "success"
 			and operation_intent == "provider_settings.save_api_model"
 		):
 			_draft_api_model = ""
@@ -317,6 +360,40 @@ func apply_view_model(view_model: Dictionary) -> bool:
 		_show_key = false
 	_queue_layout_rebuild()
 	return true
+
+
+func _present_delete_model_blocked_error(
+	view_model: Dictionary,
+	revision: int,
+) -> void:
+	if revision == _delete_model_blocked_revision:
+		return
+	var error_value: Variant = view_model.get("error", null)
+	if not error_value is Dictionary:
+		return
+	var error_data := error_value as Dictionary
+	if String(error_data.get("code", "")) != "PROVIDER_API_MODEL_IN_USE":
+		return
+	var operation := view_model.get("operation", {}) as Dictionary
+	if String(operation.get("intent", "")) != "provider_settings.delete_api_model":
+		return
+	_delete_model_blocked_revision = revision
+	if is_instance_valid(_delete_model_blocked_dialog):
+		var resident_ids := (
+			error_data.get("details", []) as Array
+		).duplicate(true)
+		var model_id := String(_last_model_deletion.get("apiModel", ""))
+		var provider_id := String(_last_model_deletion.get("providerId", ""))
+		_blocked_model_assignment_context = {
+			"providerId": provider_id,
+			"modelId": model_id,
+			"residentIds": resident_ids,
+		}
+		_delete_model_blocked_dialog.dialog_text = (
+			"“%s”仍分配给 %d 位居民。\n请先为这些居民更换模型，再回来删除。"
+			% [model_id, resident_ids.size()]
+		)
+		_delete_model_blocked_dialog.popup_centered()
 
 
 func current_revision() -> int:
@@ -2065,8 +2142,12 @@ func _build_status_section(provider: Dictionary) -> Control:
 		84 if _layout_profile == "desktop_wide" else 56,
 		84 if _layout_profile == "desktop_wide" else 56
 	)
-	status_icon.texture = ProviderTheme.medallion_texture(
-		str(connection.get("status", "not_configured"))
+	status_icon.texture = (
+		ProviderTheme.provider_checking_connection_texture()
+		if _operation_loading()
+		else ProviderTheme.medallion_texture(
+			str(connection.get("status", "not_configured"))
+		)
 	)
 	status_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	status_icon.stretch_mode = (
@@ -2077,6 +2158,8 @@ func _build_status_section(provider: Dictionary) -> Control:
 	status_icon.add_to_group("provider_settings_icon_owner")
 	status_icon.set_meta("gate_id", "connection_status_icon")
 	row.add_child(status_icon)
+	if _operation_loading():
+		_animate_checking_status_icon(status_icon)
 	var status_column := VBoxContainer.new()
 	status_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_column.add_theme_constant_override("separation", 4)
@@ -2090,7 +2173,11 @@ func _build_status_section(provider: Dictionary) -> Control:
 	_status_label.custom_minimum_size.y = _line_slot_height()
 	status_column.add_child(_status_label)
 	var message := _label(
-		_operation_message(operation, connection, error_data),
+		(
+			"正在等待 %s 响应" % _checking_provider_name(provider)
+			if _operation_loading()
+			else _operation_message(operation, connection, error_data)
+		),
 		_body_font_size(),
 		ProviderTheme.INK_MUTED,
 		"connection_status_message"
@@ -2129,6 +2216,27 @@ func _build_status_section(provider: Dictionary) -> Control:
 		_operation_loading(),
 	)
 	return panel
+
+
+func _animate_checking_status_icon(icon: TextureRect) -> void:
+	if icon == null or not icon.is_inside_tree():
+		return
+	icon.pivot_offset = icon.size * 0.5
+	var tween := icon.create_tween()
+	tween.set_loops()
+	tween.set_trans(Tween.TRANS_SINE)
+	tween.set_ease(Tween.EASE_IN_OUT)
+	tween.tween_property(icon, "modulate:a", 0.66, 0.48)
+	tween.parallel().tween_property(icon, "scale", Vector2(1.04, 1.04), 0.48)
+	tween.tween_property(icon, "modulate:a", 1.0, 0.48)
+	tween.parallel().tween_property(icon, "scale", Vector2.ONE, 0.48)
+
+
+func _checking_provider_name(provider: Dictionary) -> String:
+	var display_name := String(
+		provider.get("displayName", provider.get("providerId", "模型服务"))
+	).strip_edges()
+	return display_name.replace("（本地）", "").strip_edges()
 
 
 func _detail_divider() -> HSeparator:
@@ -2310,6 +2418,9 @@ func _dispatch_intent(
 		return
 	var envelope := payload.duplicate(true)
 	envelope["revision"] = _current_revision
+	if intent == &"provider_settings.open_model_assignment":
+		intent_requested.emit(intent, envelope)
+		return
 	if _adapter != null and _adapter.has_method("dispatch"):
 		_adapter.call("dispatch", intent, envelope)
 	intent_requested.emit(intent, envelope)

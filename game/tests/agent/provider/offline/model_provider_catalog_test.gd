@@ -566,6 +566,48 @@ func _test_settings_service_custom_model_flow() -> void:
 		request_host,
 	) as Dictionary
 	_expect_equal(bound.get("ok"), true, "settings service binds the real provider runtime")
+	var saved_local_connection := settings.call(
+		"dispatch",
+		"provider_settings.save_connection",
+		{
+			"providerId": "ollama",
+			"baseUrl": "http://localhost:11434/v1",
+			"apiKey": "",
+		},
+	) as Dictionary
+	_expect_equal(
+		saved_local_connection.get("ok"),
+		true,
+		"local custom connection saves without an API key",
+	)
+	var saved_remote_connection := settings.call(
+		"dispatch",
+		"provider_settings.save_connection",
+		{
+			"providerId": "openai-compatible",
+			"baseUrl": "https://compatible.example/v1",
+			"apiKey": "temporary-test-key",
+		},
+	) as Dictionary
+	_expect_equal(
+		saved_remote_connection.get("ok"),
+		true,
+		"remote custom connection saves its address and key together",
+	)
+	var saved_remote_provider := _provider_from_view_model(
+		settings.call("get_view_model") as Dictionary,
+		"openai-compatible",
+	)
+	_expect_equal(
+		saved_remote_provider.get("baseUrl"),
+		"https://compatible.example/v1",
+		"combined connection save projects the normalized address",
+	)
+	_expect_equal(
+		(saved_remote_provider.get("key", {}) as Dictionary).get("saved"),
+		true,
+		"combined connection save reports only masked credential state",
+	)
 	var saved_model := settings.call("dispatch", "provider_settings.save_api_model", {
 		"providerId": "302-ai",
 		"apiModel": "vendor/model-a",

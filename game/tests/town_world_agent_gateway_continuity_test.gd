@@ -85,6 +85,9 @@ class ImmediateDecisionAgent:
 class ProviderServiceStub:
 	extends RefCounted
 
+	func validate_resident_bindings(_bindings: Variant) -> Dictionary:
+		return {"ok": true, "errorCode": "", "retryable": false}
+
 	func create_provider_for_resident(_binding: Dictionary) -> Dictionary:
 		return {"ok": true, "provider": null}
 
@@ -337,6 +340,7 @@ class FailingMemoryAgent:
 func _initialize() -> void:
 	_test_null_conversation_snapshot_is_not_an_avatar_turn()
 	_test_duplicate_display_names_route_by_id()
+	_test_runtime_resident_bindings_can_be_replaced_atomically()
 	_test_inner_observation_accepts_newer_read_only_world_revision()
 	_test_memory_read_failures_are_structured()
 	_test_memory_intervention_uses_world_time_and_agent_contract()
@@ -869,6 +873,64 @@ func _test_duplicate_display_names_route_by_id() -> void:
 		normalized.get("ok"),
 		true,
 		"Gateway preserves Aya's stable-ID authority when display names repeat",
+	)
+	gateway.free()
+
+
+func _test_runtime_resident_bindings_can_be_replaced_atomically() -> void:
+	var gateway: Node = GATEWAY.new()
+	gateway.set("_session_active", true)
+	gateway.set("_provider_service", ProviderServiceStub.new())
+	gateway.set("_resident_identities", [
+		{"residentId": "resident-a", "residentName": "小林"},
+		{"residentId": "resident-b", "residentName": "小苏"},
+	] as Array[Dictionary])
+	var bindings := [
+		{
+			"residentId": "resident-a",
+			"llmBinding": {
+				"mode": "model",
+				"providerId": "ollama",
+				"modelId": "qwen3:8b",
+			},
+		},
+		{
+			"residentId": "resident-b",
+			"llmBinding": {
+				"mode": "model",
+				"providerId": "deepseek",
+				"modelId": "deepseek-chat",
+			},
+		},
+	]
+	var updated := gateway.call(
+		"update_resident_bindings",
+		bindings,
+	) as Dictionary
+	_expect(bool(updated.get("ok", false)), "运行中的居民模型绑定可整体更新")
+	_expect_equal(
+		((gateway.get("_bindings_by_id") as Dictionary).get(
+			"resident-a",
+			{},
+		) as Dictionary).get("llmBinding"),
+		bindings[0].get("llmBinding"),
+		"Gateway 立即使用更新后的居民模型",
+	)
+	var before_invalid := (
+		gateway.get("_bindings_by_id") as Dictionary
+	).duplicate(true)
+	var rejected := gateway.call(
+		"update_resident_bindings",
+		[bindings[0]],
+	) as Dictionary
+	_expect(
+		not bool(rejected.get("ok", false)),
+		"缺少居民的绑定更新会被拒绝",
+	)
+	_expect_equal(
+		gateway.get("_bindings_by_id"),
+		before_invalid,
+		"失败的绑定更新不会留下半套状态",
 	)
 	gateway.free()
 
