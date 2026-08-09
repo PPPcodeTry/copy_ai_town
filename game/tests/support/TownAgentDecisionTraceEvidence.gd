@@ -31,6 +31,8 @@ static func classify(trace: Dictionary) -> Dictionary:
 			kind = INTERNAL_RETRY
 		else:
 			kind = PROVIDER_FAILED
+	elif submission.is_empty() and not action.is_empty() and not String(action.get("type", "")).strip_edges().is_empty():
+		kind = INVALID_SUCCESS
 	elif not submission.is_empty() and not bool(submission.get("ok", false)):
 		kind = WORLD_REJECTED
 	elif not action.is_empty() and not String(action.get("type", "")).strip_edges().is_empty():

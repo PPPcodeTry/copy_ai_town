@@ -43,6 +43,10 @@ func _initialize() -> void:
 		{"agentResult": {"ok": true, "decision": {}}, "worldSubmission": {"ok": true}},
 		TRACE_EVIDENCE.INVALID_SUCCESS,
 	)
+	_expect_kind(
+		{"agentResult": {"ok": true, "decision": {"action": {"type": "去"}}}},
+		TRACE_EVIDENCE.INVALID_SUCCESS,
+	)
 	_finish_suite("AGENT_DECISION_TRACE_EVIDENCE_PASS")
 
 
