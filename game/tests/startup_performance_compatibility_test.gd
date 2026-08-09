@@ -109,6 +109,11 @@ func _run() -> void:
 			null,
 			"startup screen does not instantiate formal map runtime layers",
 		)
+		_expect_equal(
+			startup.find_child("AmbientResidentLayer", true, false),
+			null,
+			"startup screen does not create a dormant resident layer",
+		)
 		var weather := startup.get_node_or_null("WeatherOverlay") as ColorRect
 		_expect(
 			weather != null and not weather.visible,
