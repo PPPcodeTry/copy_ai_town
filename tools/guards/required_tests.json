@@ -38,6 +38,14 @@
   {
     "id": "res://tests/town_world_action_type_registry_test.gd",
     "min_checks": 66
+  },
+  {
+    "id": "res://tests/session_save_continue_roundtrip_test.gd",
+    "min_checks": 28
+  },
+  {
+    "id": "res://tests/windows_directory_cleanup_test.gd",
+    "min_checks": 22
   }
  ]
 }

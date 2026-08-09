@@ -8,7 +8,7 @@
 tools/guards/run_guards.sh
 ```
 
-## 四个守卫
+## 五个守卫
 
 | 脚本 | 判定 | 基线/清单 |
 |---|---|---|
@@ -16,6 +16,7 @@ tools/guards/run_guards.sh
 | `dynamic_call_scan.py` | 白名单外新增动态调用即失败 | `dynamic_call_baseline.json` + `dynamic_call_whitelist.json` |
 | `zero_reference_scan.py` | 白名单/基线外新零引用候选即失败 | `zero_reference_baseline.json` + `zero_reference_whitelist.json` |
 | `required_tests_check.py` | 必须存在的测试缺失、重复注册、checks=N 未钉住即失败 | `required_tests.json` |
+| `cross_platform_text_check.py` | 文本统一以 LF 检出，字节摘要约束不受 Windows 换行转换影响 | `.gitattributes` + 白模冻结清单 |
 
 ## 动态调用清单制要点
 
