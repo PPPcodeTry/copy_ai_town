@@ -63,6 +63,7 @@ var _secondary_label: Label
 var _tertiary_label: Label
 var _safe_area_capture_mode := false
 var _safe_area_capture_overlay: Control
+var _layout_queued := false
 
 
 func _ready() -> void:
@@ -84,8 +85,8 @@ func _ready() -> void:
 	_selected_font.spacing_space = 0
 	_selected_font.variation_embolden = 0.8
 	_build_interface()
-	resized.connect(_apply_layout)
-	get_viewport().size_changed.connect(_apply_layout)
+	resized.connect(_queue_layout)
+	get_viewport().size_changed.connect(_queue_layout)
 	_apply_layout()
 	if _adapter != null:
 		_refresh_from_adapter()
@@ -767,6 +768,7 @@ func _draw_safe_area_capture_overlay(canvas: Control) -> void:
 
 func _apply_layout() -> void:
 	if _canvas == null:
+		_layout_queued = false
 		return
 	var viewport_size := get_viewport_rect().size
 	# Do not inherit a stale page rect from a previously sized Host. The image,
@@ -779,6 +781,14 @@ func _apply_layout() -> void:
 	)
 	_canvas.scale = Vector2.ONE * scale_factor
 	_canvas.position = (viewport_size - DESIGN_SIZE * scale_factor) * 0.5
+	_layout_queued = false
+
+
+func _queue_layout() -> void:
+	if _layout_queued:
+		return
+	_layout_queued = true
+	_apply_layout.call_deferred()
 
 
 func _refresh_from_adapter() -> void:

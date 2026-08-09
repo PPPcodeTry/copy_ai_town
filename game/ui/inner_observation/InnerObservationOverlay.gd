@@ -1433,7 +1433,7 @@ func _layout_for_viewport(viewport_size: Vector2) -> Dictionary:
 		return _reference_layout(viewport_size)
 	if physical_size.x >= 1280 and physical_size.y >= 720:
 		return _stable_1280_layout(viewport_size)
-	return {"profile": "unsupported_resolution", "rects": {}}
+	return _scaled_1280_layout(viewport_size)
 
 
 func _reference_layout(viewport_size: Vector2) -> Dictionary:
@@ -1508,6 +1508,29 @@ func _stable_1280_layout(
 				offset,
 			),
 	}
+	return {
+		"profile": "stable_1280x720",
+		"rects": _snap_rects(rects),
+	}
+
+
+func _scaled_1280_layout(viewport_size: Vector2) -> Dictionary:
+	var base := _stable_1280_layout(Vector2(1280, 720))
+	var base_rects := base.get("rects", {}) as Dictionary
+	var scale_factor := minf(
+		viewport_size.x / 1280.0,
+		viewport_size.y / 720.0,
+	)
+	var offset := (
+		viewport_size - Vector2(1280, 720) * scale_factor
+	) * 0.5
+	var rects := {}
+	for key: String in base_rects:
+		var rect := base_rects[key] as Rect2
+		rects[key] = Rect2(
+			offset + rect.position * scale_factor,
+			rect.size * scale_factor,
+		)
 	return {
 		"profile": "stable_1280x720",
 		"rects": _snap_rects(rects),

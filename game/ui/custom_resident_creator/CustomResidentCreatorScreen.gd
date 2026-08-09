@@ -310,10 +310,6 @@ func _ensure_interface() -> void:
 		visible = true
 		return
 	_build_interface()
-	if not resized.is_connected(_apply_responsive_layout):
-		resized.connect(_apply_responsive_layout)
-	if not get_viewport().size_changed.is_connected(_apply_responsive_layout):
-		get_viewport().size_changed.connect(_apply_responsive_layout)
 	_apply_responsive_layout()
 	visible = true
 

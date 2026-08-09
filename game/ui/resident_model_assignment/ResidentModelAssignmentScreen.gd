@@ -89,6 +89,7 @@ var _provider_auto_refresh_attempts := 0
 var _provider_auto_refresh_dispatching := false
 var _provider_auto_refresh_exhausted := false
 var _completion_modal_open := false
+var _layout_queued := false
 
 var _page_scroll: ScrollContainer
 var _native_root: Control
@@ -143,8 +144,8 @@ func _ready() -> void:
 	_build_interface()
 	_build_exit_confirmation()
 	_build_provider_auto_refresh_timer()
-	resized.connect(_apply_responsive_layout)
-	get_viewport().size_changed.connect(_apply_responsive_layout)
+	resized.connect(_queue_responsive_layout)
+	get_viewport().size_changed.connect(_queue_responsive_layout)
 	_apply_responsive_layout()
 	if _adapter != null:
 		_refresh_from_adapter()
@@ -1500,8 +1501,17 @@ func _intent_binding(binding: Dictionary) -> Dictionary:
 
 func _apply_responsive_layout() -> void:
 	if not is_node_ready():
+		_layout_queued = false
 		return
 	_apply_responsive_layout_for_size(get_viewport_rect().size)
+	_layout_queued = false
+
+
+func _queue_responsive_layout() -> void:
+	if _layout_queued:
+		return
+	_layout_queued = true
+	_apply_responsive_layout.call_deferred()
 
 
 func _apply_responsive_layout_for_size(viewport_size: Vector2) -> void:

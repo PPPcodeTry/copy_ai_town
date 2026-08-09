@@ -961,6 +961,8 @@ func _layout_indoor_back_button() -> void:
 	)
 	var shell_size := HUD_REFERENCE_SIZE * uniform_scale
 	var shell_origin := (viewport_size - shell_size) * 0.5
+	if viewport_size.x / viewport_size.y >= HUD_REFERENCE_SIZE.x / HUD_REFERENCE_SIZE.y:
+		shell_origin.x = 0.0
 	_indoor_back_button.position = (
 		shell_origin + INDOOR_BACK_REFERENCE_POSITION * uniform_scale
 	).round()

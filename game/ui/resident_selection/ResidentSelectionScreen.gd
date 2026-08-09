@@ -381,11 +381,7 @@ func apply_view_model(snapshot: Dictionary) -> bool:
 		_build_page()
 		_refresh_all()
 		_focus_resident(_focused_index, false)
-		if not get_viewport().size_changed.is_connected(_apply_responsive_layout):
-			get_viewport().size_changed.connect(_apply_responsive_layout)
-		if not resized.is_connected(_apply_responsive_layout):
-			resized.connect(_apply_responsive_layout)
-		_apply_responsive_layout()
+		_queue_responsive_layout()
 		_start_connection_animation()
 	return true
 

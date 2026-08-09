@@ -743,10 +743,7 @@ func _restore_input_focus_state(input_focus_state: Dictionary) -> void:
 
 
 func _use_composite_desktop(viewport_size: Vector2) -> bool:
-	if viewport_size.x < 1280.0 or viewport_size.y < 720.0:
-		return false
-	var aspect_ratio := viewport_size.x / viewport_size.y
-	return aspect_ratio >= 1.55 and aspect_ratio <= (16.0 / 9.0 + 0.01)
+	return viewport_size.x >= 1280.0 and viewport_size.y >= 720.0
 
 
 func _rebuild_composite_desktop(viewport_size: Vector2) -> void:

@@ -1577,20 +1577,16 @@ func _select_layout_mode(viewport_size: Vector2) -> LayoutMode:
 	var profile_size := viewport_size
 	if _layout_profile_size_override.x > 0.0:
 		profile_size = _layout_profile_size_override
-	elif get_viewport() == get_tree().root:
-		var physical_size := DisplayServer.window_get_size()
-		if physical_size.x > 0 and physical_size.y > 0:
-			profile_size = Vector2(physical_size)
 	var aspect := profile_size.x / maxf(1.0, profile_size.y)
-	if aspect < 0.9:
-		return LayoutMode.COMPACT_PORTRAIT
-	if profile_size.y < 420.0 and profile_size.x >= 560.0:
-		return LayoutMode.COMPACT_LANDSCAPE
 	if (
 		profile_size.x >= 1180.0
 		and profile_size.y >= 720.0
 	):
 		return LayoutMode.WIDE
+	if aspect < 0.9:
+		return LayoutMode.COMPACT_PORTRAIT
+	if profile_size.y < 420.0 and profile_size.x >= 560.0:
+		return LayoutMode.COMPACT_LANDSCAPE
 	if aspect > 2.0:
 		return LayoutMode.COMPACT_LANDSCAPE
 	if profile_size.x >= 560.0:

@@ -1547,9 +1547,9 @@ func _apply_layout() -> void:
 	var scale_factor := minf(
 		1.0,
 		minf(
-			maxf(0.5, (viewport.x - 32.0) / BASE_SIZE.x),
-			maxf(0.5, (viewport.y - 32.0) / BASE_SIZE.y)
-		)
+			maxf(0.01, (viewport.x - 32.0) / BASE_SIZE.x),
+			maxf(0.01, (viewport.y - 32.0) / BASE_SIZE.y),
+		),
 	)
 	_stage.scale = Vector2.ONE * scale_factor
 	_stage.position = Vector2(
