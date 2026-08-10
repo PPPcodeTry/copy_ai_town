@@ -44,10 +44,13 @@ var _draft_api_model := ""
 var _draft_provider_id := ""
 var _discard_confirmation: FormalDialog
 var _delete_model_confirmation: FormalDialog
+var _delete_connection_confirmation: FormalDialog
 var _delete_model_blocked_dialog: FormalDialog
 var _delete_model_blocked_revision := -1
 var _pending_model_deletion: Dictionary = {}
 var _last_model_deletion: Dictionary = {}
+var _pending_connection_deletion: Dictionary = {}
+var _last_connection_deletion: Dictionary = {}
 var _blocked_model_assignment_context: Dictionary = {}
 var _pending_provider_selection: Dictionary = {}
 var _discard_confirmation_action := ""
@@ -77,6 +80,7 @@ func _ready() -> void:
 	_build_background()
 	_build_discard_confirmation()
 	_build_delete_model_confirmation()
+	_build_delete_connection_confirmation()
 	_build_delete_model_blocked_dialog()
 	if _view_model.is_empty():
 		_view_model = _empty_view_model()
@@ -152,6 +156,27 @@ func _build_delete_model_blocked_dialog() -> void:
 	add_child(_delete_model_blocked_dialog)
 
 
+func _build_delete_connection_confirmation() -> void:
+	if is_instance_valid(_delete_connection_confirmation):
+		return
+	_delete_connection_confirmation = FormalDialog.new()
+	_delete_connection_confirmation.name = "DeleteCompatibleConnectionConfirmation"
+	_delete_connection_confirmation.title = "删除这个兼容连接？"
+	_delete_connection_confirmation.ok_button_text = "删除连接"
+	_delete_connection_confirmation.cancel_button_text = "取消"
+	_delete_connection_confirmation.semantic_kind = "warning"
+	_delete_connection_confirmation.semantic_icon = (
+		ProviderTheme.custom_model_delete_blocked_texture()
+	)
+	_delete_connection_confirmation.confirmed.connect(
+		_confirm_delete_compatible_connection
+	)
+	_delete_connection_confirmation.canceled.connect(func() -> void:
+		_pending_connection_deletion.clear()
+	)
+	add_child(_delete_connection_confirmation)
+
+
 func _request_delete_custom_model(provider_id: String, api_model: String) -> void:
 	if provider_id.is_empty() or api_model.is_empty():
 		return
@@ -173,6 +198,34 @@ func _confirm_delete_custom_model() -> void:
 	_last_model_deletion = payload.duplicate(true)
 	_pending_model_deletion.clear()
 	_dispatch_intent(&"provider_settings.delete_api_model", payload)
+
+
+func _request_delete_compatible_connection(
+	provider_id: String,
+	display_name: String,
+) -> void:
+	if provider_id.is_empty():
+		return
+	_pending_connection_deletion = {
+		"providerId": provider_id,
+		"displayName": display_name,
+	}
+	_delete_connection_confirmation.dialog_text = (
+		"将删除“%s”及其模型配置。删除后无法恢复。" % display_name
+	)
+	_delete_connection_confirmation.popup_centered()
+
+
+func _confirm_delete_compatible_connection() -> void:
+	if _pending_connection_deletion.is_empty():
+		return
+	var payload := _pending_connection_deletion.duplicate(true)
+	_last_connection_deletion = payload.duplicate(true)
+	_pending_connection_deletion.clear()
+	_dispatch_intent(
+		&"provider_settings.delete_compatible_connection",
+		{"providerId": String(payload.get("providerId", ""))},
+	)
 
 
 func _open_blocked_model_assignment() -> void:
@@ -378,26 +431,47 @@ func _present_delete_model_blocked_error(
 	if not error_value is Dictionary:
 		return
 	var error_data := error_value as Dictionary
-	if String(error_data.get("code", "")) != "PROVIDER_API_MODEL_IN_USE":
+	var error_code := String(error_data.get("code", ""))
+	if error_code not in ["PROVIDER_API_MODEL_IN_USE", "PROVIDER_CONNECTION_IN_USE"]:
 		return
 	var operation := view_model.get("operation", {}) as Dictionary
-	if String(operation.get("intent", "")) != "provider_settings.delete_api_model":
+	var operation_intent := String(operation.get("intent", ""))
+	if operation_intent not in [
+		"provider_settings.delete_api_model",
+		"provider_settings.delete_compatible_connection",
+	]:
 		return
 	_delete_model_blocked_revision = revision
 	if is_instance_valid(_delete_model_blocked_dialog):
 		var resident_ids := (
 			error_data.get("details", []) as Array
 		).duplicate(true)
-		var model_id := String(_last_model_deletion.get("apiModel", ""))
-		var provider_id := String(_last_model_deletion.get("providerId", ""))
+		var connection_delete := error_code == "PROVIDER_CONNECTION_IN_USE"
+		var model_id := (
+			""
+			if connection_delete
+			else String(_last_model_deletion.get("apiModel", ""))
+		)
+		var provider_id := String(
+			_last_connection_deletion.get("providerId", "")
+			if connection_delete
+			else _last_model_deletion.get("providerId", "")
+		)
 		_blocked_model_assignment_context = {
 			"providerId": provider_id,
 			"modelId": model_id,
 			"residentIds": resident_ids,
 		}
 		_delete_model_blocked_dialog.dialog_text = (
-			"“%s”仍分配给 %d 位居民。\n请先为这些居民更换模型，再回来删除。"
-			% [model_id, resident_ids.size()]
+			(
+				"这个连接仍分配给 %d 位居民。\n请先为这些居民更换模型，再回来删除。"
+				% resident_ids.size()
+			)
+			if connection_delete
+			else (
+				"“%s”仍分配给 %d 位居民。\n请先为这些居民更换模型，再回来删除。"
+				% [model_id, resident_ids.size()]
+			)
 		)
 		_delete_model_blocked_dialog.popup_centered()
 
@@ -944,6 +1018,7 @@ func _sync_composite_controls() -> void:
 		false,
 	) as Button
 	_base_url_edit = _composite_desktop.base_url_edit
+	_api_model_edit = _composite_desktop.api_model_edit
 	_status_label = _composite_desktop.status_label
 	_check_button = _composite_desktop.check_button
 	_formal_badge = _composite_desktop.formal_badge
@@ -980,6 +1055,11 @@ func _on_composite_ui_action(
 			_request_delete_custom_model(
 				str(payload.get("providerId", "")),
 				str(payload.get("apiModel", "")),
+			)
+		&"ui.request_delete_compatible_connection":
+			_request_delete_compatible_connection(
+				str(payload.get("providerId", "")),
+				str(payload.get("displayName", "兼容接口")),
 			)
 		&"ui.toggle_key_visibility":
 			_toggle_key_visibility(_selected_provider_id)
@@ -1944,12 +2024,17 @@ func _build_api_model_editor(provider: Dictionary) -> Control:
 	discover.disabled = (
 		not _action_enabled("discoverModels")
 		or _operation_loading()
+		or not bool(provider.get("modelCatalogSupported", false))
 		or (
 			bool(provider.get("authRequired", true))
 			and not bool((provider.get("key", {}) as Dictionary).get("saved", false))
 		)
 	)
-	discover.tooltip_text = "从服务读取模型列表，失败时仍可手动填写"
+	discover.tooltip_text = (
+		"当前服务需要手动填写推理接入点 ID"
+		if not bool(provider.get("modelCatalogSupported", false))
+		else "从服务读取模型列表，失败时仍可手动填写"
+	)
 	discover.pressed.connect(func() -> void:
 		_dispatch_intent(
 			&"provider_settings.discover_models",
@@ -1958,6 +2043,16 @@ func _build_api_model_editor(provider: Dictionary) -> Control:
 	)
 	row.add_child(discover)
 	var selected_model := str(provider.get("apiModel", ""))
+	var selected_model_is_custom := false
+	for model_value: Variant in provider.get("models", []) as Array:
+		if (
+			model_value is Dictionary
+			and str((model_value as Dictionary).get("modelId", "")) == selected_model
+		):
+			selected_model_is_custom = bool(
+				(model_value as Dictionary).get("custom", false)
+			)
+			break
 	var delete := _button(
 		"删除当前",
 		"danger",
@@ -1968,6 +2063,7 @@ func _build_api_model_editor(provider: Dictionary) -> Control:
 		not _action_enabled("deleteApiModel")
 		or _operation_loading()
 		or selected_model.is_empty()
+		or not selected_model_is_custom
 	)
 	delete.tooltip_text = "删除当前选中的自定义模型"
 	delete.pressed.connect(func() -> void:
@@ -2504,25 +2600,45 @@ func _find_provider(provider_id: String) -> Dictionary:
 
 
 func _custom_providers() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
+	var discovered: Array[Dictionary] = []
 	for provider_value: Variant in _render_data.get("providers", []) as Array:
 		if not provider_value is Dictionary:
 			continue
 		var provider := provider_value as Dictionary
-		if bool(provider.get("customModels", false)):
-			result.append(provider)
+		if _provider_belongs_to_custom_group(provider):
+			discovered.append(provider)
+	var result: Array[Dictionary] = []
+	for preset_id: String in [
+		"ollama",
+		"lm-studio",
+		"302-ai",
+		"openai-compatible",
+	]:
+		for provider: Dictionary in discovered:
+			if str(provider.get("providerId", "")) == preset_id:
+				result.append(provider)
+				break
+	for provider: Dictionary in discovered:
+		if str(provider.get("providerId", "")) in [
+			"ollama",
+			"lm-studio",
+			"302-ai",
+			"openai-compatible",
+		]:
+			continue
+		result.append(provider)
 	return result
 
 
 func _visible_providers() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
+	var official_providers: Array[Dictionary] = []
 	var custom_group: Dictionary = {}
 	for provider_value: Variant in _render_data.get("providers", []) as Array:
 		if not provider_value is Dictionary:
 			continue
 		var provider := provider_value as Dictionary
-		if not bool(provider.get("customModels", false)):
-			result.append(provider)
+		if not _provider_belongs_to_custom_group(provider):
+			official_providers.append(provider)
 			continue
 		if (
 			custom_group.is_empty()
@@ -2533,8 +2649,31 @@ func _visible_providers() -> Array[Dictionary]:
 		custom_group["displayName"] = CUSTOM_MODEL_GROUP_NAME
 		custom_group["customGroup"] = true
 		custom_group["customConnections"] = _custom_providers()
+	var result: Array[Dictionary] = []
+	for leading_provider_id: String in ["deepseek", "volcengine-ark"]:
+		for provider: Dictionary in official_providers:
+			if str(provider.get("providerId", "")) == leading_provider_id:
+				result.append(provider)
+				break
+	if not custom_group.is_empty():
 		result.append(custom_group)
+	for provider: Dictionary in official_providers:
+		if str(provider.get("providerId", "")) in ["deepseek", "volcengine-ark"]:
+			continue
+		result.append(provider)
 	return result
+
+
+func _provider_belongs_to_custom_group(provider: Dictionary) -> bool:
+	if provider.has("customGroup"):
+		return bool(provider.get("customGroup", false))
+	var provider_id := str(provider.get("providerId", ""))
+	return provider_id in [
+		"openai-compatible",
+		"302-ai",
+		"ollama",
+		"lm-studio",
+	] or provider_id.begins_with("openai-compatible-")
 
 
 func _action_enabled(action_key: String) -> bool:

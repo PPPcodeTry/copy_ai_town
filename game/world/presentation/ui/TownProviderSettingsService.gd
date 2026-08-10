@@ -21,6 +21,8 @@ const REQUIRED_PROVIDER_METHODS: Array[String] = [
 ]
 const HOST_ROUTING_REQUIRED := "PROVIDER_SETTINGS_HOST_ROUTING_REQUIRED"
 const TEST_NO_NETWORK_ENV := "AI_TOWN_PROVIDER_TEST_NO_NETWORK"
+const COMPATIBLE_PROFILE_TYPE := "openai-compatible-profile"
+const COMPATIBLE_PROFILE_PREFIX := "openai-compatible-"
 const PROVIDER_DISPLAY_NAMES := {
 	"302-ai": "302.AI",
 	"deepseek": "DeepSeek",
@@ -61,10 +63,10 @@ const MODEL_CAPABILITIES := {
 var _provider_service: Object
 var _request_host: Node
 var _store: RefCounted = CONFIG_STORE.new()
-var _credential_store: RefCounted = CREDENTIAL_STORE.new()
+var _credential_store: TownProviderCredentialStore = CREDENTIAL_STORE.new()
 var _credential_keys: Dictionary = {}
 var _stored_config: Dictionary = {
-	"schemaVersion": 1,
+	"schemaVersion": 2,
 	"selectedProviderId": "",
 	"selectedModelByProvider": {},
 	"providers": {},
@@ -88,7 +90,7 @@ func configure_store(path: String) -> Dictionary:
 		return configured
 	var credential_path := "%s.credentials.enc" % path.get_basename()
 	var credential_configured := (
-		_credential_store.call("configure", credential_path) as Dictionary
+		_credential_store.configure(credential_path) as Dictionary
 	)
 	if not bool(credential_configured.get("ok", false)):
 		return credential_configured
@@ -269,7 +271,7 @@ func reveal_saved_api_key(provider_id_value: Variant) -> Dictionary:
 	if _provider_from_confirmed(provider_id).is_empty():
 		return _failure("PROVIDER_SETTINGS_PROVIDER_UNKNOWN", false)
 	var revealed := (
-		_credential_store.call("api_key", provider_id) as Dictionary
+		_credential_store.api_key(provider_id) as Dictionary
 	)
 	if not bool(revealed.get("ok", false)):
 		return _failure(
@@ -313,6 +315,10 @@ func dispatch(intent: Variant, payload: Dictionary = {}) -> Dictionary:
 			result = _save_base_url(payload)
 		"provider_settings.save_connection":
 			result = _save_connection(payload)
+		"provider_settings.create_compatible_connection":
+			result = _create_compatible_connection()
+		"provider_settings.delete_compatible_connection":
+			result = _delete_compatible_connection(payload)
 		"provider_settings.save_api_model":
 			result = _save_api_model(payload)
 		"provider_settings.delete_api_model":
@@ -431,6 +437,7 @@ func _load_public_snapshot() -> Dictionary:
 				if health_dirty
 				else String(model.get("healthStatus", "unavailable"))
 			),
+			"custom": bool(model.get("custom", false)),
 		})
 	var providers: Array[Dictionary] = []
 	var available_count := 0
@@ -455,6 +462,10 @@ func _load_public_snapshot() -> Dictionary:
 		var has_saved_key := _has_saved_key(provider_id)
 		var auth_required := bool(source.get("authRequired", true))
 		var custom_models := bool(source.get("customModels", false))
+		var custom_group := bool(source.get("customGroup", false))
+		var model_catalog_supported := bool(
+			source.get("modelCatalogSupported", false)
+		)
 		var api_models := _stored_api_models(stored_provider)
 		var selected_models := _stored_config.get("selectedModelByProvider", {}) as Dictionary
 		var selected_model_id := String(
@@ -482,14 +493,23 @@ func _load_public_snapshot() -> Dictionary:
 			available_count += 1
 		providers.append({
 			"providerId": provider_id,
-			"displayName": String(PROVIDER_DISPLAY_NAMES.get(
-				provider_id,
-				source.get("label", provider_id),
+			"displayName": String(stored_provider.get(
+				"displayName",
+				PROVIDER_DISPLAY_NAMES.get(
+					provider_id,
+					source.get("label", provider_id),
+				),
 			)),
 			"enabled": enabled,
 			"external": bool(source.get("external", false)),
 			"authRequired": auth_required,
 			"customModels": custom_models,
+			"customGroup": custom_group,
+			"modelCatalogSupported": model_catalog_supported,
+			"deletableConnection": _is_dynamic_compatible_profile(
+				provider_id,
+				stored_provider,
+			),
 			"key": {
 				"saved": has_saved_key,
 				"maskedValue": _masked_key(
@@ -708,7 +728,7 @@ func _delete_key(payload: Dictionary) -> Dictionary:
 	var previous_key := String(_credential_keys.get(provider_id, ""))
 	var had_previous_key := _credential_keys.has(provider_id)
 	var credential_result := (
-		_credential_store.call("delete_api_key", provider_id) as Dictionary
+		_credential_store.delete_api_key(provider_id) as Dictionary
 	)
 	if not bool(credential_result.get("ok", false)):
 		return credential_result
@@ -769,6 +789,94 @@ func _save_base_url(payload: Dictionary) -> Dictionary:
 	)
 
 
+func _create_compatible_connection() -> Dictionary:
+	var candidate := _stored_config.duplicate(true)
+	var providers := candidate.get("providers", {}) as Dictionary
+	var index := 2
+	var provider_id := "%s%d" % [COMPATIBLE_PROFILE_PREFIX, index]
+	while providers.has(provider_id):
+		index += 1
+		provider_id = "%s%d" % [COMPATIBLE_PROFILE_PREFIX, index]
+	providers[provider_id] = {
+		"enabled": true,
+		"connectionType": COMPATIBLE_PROFILE_TYPE,
+		"displayName": "兼容接口 %d" % index,
+		"authRequired": true,
+		"apiModels": [],
+	}
+	candidate["providers"] = providers
+	candidate["selectedProviderId"] = provider_id
+	var persisted := _persist_candidate_reconfigure_and_reload(
+		candidate,
+		"新的兼容连接已建立，请填写地址和 API Key。",
+		provider_id,
+	)
+	if bool(persisted.get("ok", false)):
+		_selected_provider_id = provider_id
+	return persisted
+
+
+func _delete_compatible_connection(payload: Dictionary) -> Dictionary:
+	var provider_result := _required_canonical_id(payload, "providerId")
+	if not bool(provider_result.get("ok", false)):
+		return _failure("PROVIDER_SETTINGS_PROVIDER_REQUIRED", false)
+	var provider_id := String(provider_result.get("value", ""))
+	var providers := _stored_config.get("providers", {}) as Dictionary
+	var stored_provider := providers.get(provider_id, {}) as Dictionary
+	if not _is_dynamic_compatible_profile(provider_id, stored_provider):
+		return _failure("PROVIDER_CONNECTION_DELETE_FORBIDDEN", false)
+	for api_model: String in _stored_api_models(stored_provider):
+		if not _provider_service.has_method("resident_ids_using_model"):
+			continue
+		var resident_ids_value: Variant = _provider_service.resident_ids_using_model(
+			provider_id,
+			api_model,
+		)
+		if resident_ids_value is Array and not (resident_ids_value as Array).is_empty():
+			return _failure(
+				"PROVIDER_CONNECTION_IN_USE",
+				false,
+				"这个连接仍有居民正在使用，请先重新分配居民模型。",
+				resident_ids_value,
+			)
+	var previous_key := String(_credential_keys.get(provider_id, ""))
+	var had_previous_key := _credential_keys.has(provider_id)
+	var credential_result := (
+		_credential_store.delete_api_key(provider_id) as Dictionary
+	)
+	if not bool(credential_result.get("ok", false)):
+		return credential_result
+	_credential_keys.erase(provider_id)
+	var candidate := _stored_config.duplicate(true)
+	var candidate_providers := candidate.get("providers", {}) as Dictionary
+	candidate_providers.erase(provider_id)
+	candidate["providers"] = candidate_providers
+	var selected_models := (
+		candidate.get("selectedModelByProvider", {}) as Dictionary
+	)
+	selected_models.erase(provider_id)
+	candidate["selectedModelByProvider"] = selected_models
+	if String(candidate.get("selectedProviderId", "")) == provider_id:
+		candidate["selectedProviderId"] = "openai-compatible"
+	var persisted := _persist_candidate_reconfigure_and_reload(
+		candidate,
+		"兼容连接已删除。",
+		provider_id,
+	)
+	if bool(persisted.get("ok", false)):
+		_discovered_models_by_provider.erase(provider_id)
+		return persisted
+	var restored := _restore_credential(
+		provider_id,
+		had_previous_key,
+		previous_key,
+	)
+	if not bool(restored.get("ok", false)):
+		return restored
+	_apply_provider_configuration()
+	return persisted
+
+
 func _save_connection(payload: Dictionary) -> Dictionary:
 	var provider_result := _required_canonical_id(payload, "providerId")
 	if not bool(provider_result.get("ok", false)):
@@ -818,6 +926,8 @@ func _save_connection(payload: Dictionary) -> Dictionary:
 		provider.erase("endpoint")
 	else:
 		provider["endpoint"] = endpoint
+	if _is_dynamic_compatible_profile(provider_id, provider) and not endpoint.is_empty():
+		provider["displayName"] = _compatible_display_name(endpoint)
 	provider.erase("api_key")
 	if not api_key_ref.is_empty():
 		provider["apiKeyRef"] = api_key_ref
@@ -948,6 +1058,12 @@ func _discover_models(payload: Dictionary, request_id: String) -> Dictionary:
 	var provider := _provider_from_confirmed(provider_id)
 	if provider.is_empty() or not bool(provider.get("customModels", false)):
 		return _failure("PROVIDER_MODEL_CATALOG_UNSUPPORTED", false)
+	if not bool(provider.get("modelCatalogSupported", false)):
+		return _failure(
+			"PROVIDER_MODEL_CATALOG_UNSUPPORTED",
+			false,
+			"当前服务需要手动填写模型或推理接入点 ID。",
+		)
 	if not bool(provider.get("enabled", true)):
 		return _failure("PROVIDER_DISABLED", false)
 	if _provider_auth_required(provider) and not _has_saved_key(provider_id):
@@ -1264,7 +1380,7 @@ func _load_stored_config() -> Dictionary:
 	if not _stored_config.get("providers", {}) is Dictionary:
 		_stored_config["providers"] = {}
 	var loaded_credentials := (
-		_credential_store.call("load_keys") as Dictionary
+		_credential_store.load_keys() as Dictionary
 	)
 	if not bool(loaded_credentials.get("ok", false)):
 		return loaded_credentials
@@ -1347,9 +1463,22 @@ func _provider_configs_for_runtime() -> Dictionary:
 			(_stored_config.get("providers", {}) as Dictionary).get(provider_id, {})
 			as Dictionary
 		)
-		if not bool(source.get("enabled", true)):
+		var dynamic_profile := (
+			String(source.get("connectionType", ""))
+			== COMPATIBLE_PROFILE_TYPE
+		)
+		if not bool(source.get("enabled", true)) and not dynamic_profile:
 			continue
 		var config: Dictionary = {}
+		if dynamic_profile:
+			config["connection_type"] = COMPATIBLE_PROFILE_TYPE
+			config["display_name"] = String(
+				source.get("displayName", "兼容接口")
+			)
+			config["api_key_required"] = bool(
+				source.get("authRequired", true)
+			)
+			config["disabled"] = not bool(source.get("enabled", true))
 		var api_key := String(_credential_keys.get(provider_id, "")).strip_edges()
 		if not api_key.is_empty():
 			config["api_key"] = api_key
@@ -1381,8 +1510,7 @@ func _migrate_plaintext_credentials() -> Dictionary:
 		if plaintext_key.is_empty():
 			continue
 		var saved := (
-			_credential_store.call(
-				"save_api_key",
+			_credential_store.save_api_key(
 				provider_id,
 				plaintext_key,
 			) as Dictionary
@@ -1588,6 +1716,14 @@ func _actions(data: Dictionary) -> Dictionary:
 		"deleteKey": _action("provider_settings.delete_key", has_providers),
 		"saveBaseUrl": _action("provider_settings.save_base_url", has_providers),
 		"saveConnection": _action("provider_settings.save_connection", has_providers),
+		"createCompatibleConnection": _action(
+			"provider_settings.create_compatible_connection",
+			has_providers,
+		),
+		"deleteCompatibleConnection": _action(
+			"provider_settings.delete_compatible_connection",
+			has_providers,
+		),
 		"saveApiModel": _action("provider_settings.save_api_model", has_providers),
 		"deleteApiModel": _action("provider_settings.delete_api_model", has_providers),
 		"discoverModels": _action("provider_settings.discover_models", has_providers),
@@ -1685,6 +1821,37 @@ func _canonical_id_is_valid(value: String) -> bool:
 	return not value.is_empty() and value == value.strip_edges()
 
 
+func _is_dynamic_compatible_profile(
+	provider_id: String,
+	provider: Dictionary,
+) -> bool:
+	return (
+		provider_id.begins_with(COMPATIBLE_PROFILE_PREFIX)
+		and String(provider.get("connectionType", ""))
+		== COMPATIBLE_PROFILE_TYPE
+	)
+
+
+func _compatible_display_name(endpoint: String) -> String:
+	var remainder := endpoint.strip_edges()
+	if remainder.begins_with("https://"):
+		remainder = remainder.trim_prefix("https://")
+	elif remainder.begins_with("http://"):
+		remainder = remainder.trim_prefix("http://")
+	var authority := remainder.split("/", false)[0]
+	var host := authority
+	if authority.begins_with("["):
+		var bracket := authority.find("]")
+		if bracket >= 0:
+			host = authority.left(bracket + 1)
+	elif authority.contains(":"):
+		host = authority.get_slice(":", 0)
+	if host.is_empty():
+		return "兼容接口"
+	var label := "兼容 · %s" % host
+	return label.left(48)
+
+
 func _restore_credential(
 	provider_id: String,
 	had_previous_key: bool,
@@ -1693,8 +1860,7 @@ func _restore_credential(
 	var restored: Dictionary
 	if had_previous_key:
 		restored = (
-			_credential_store.call(
-				"save_api_key",
+			_credential_store.save_api_key(
 				provider_id,
 				previous_key,
 			) as Dictionary
@@ -1703,7 +1869,7 @@ func _restore_credential(
 			_credential_keys[provider_id] = previous_key
 	else:
 		restored = (
-			_credential_store.call("delete_api_key", provider_id) as Dictionary
+				_credential_store.delete_api_key(provider_id) as Dictionary
 		)
 		if bool(restored.get("ok", false)):
 			_credential_keys.erase(provider_id)
@@ -1773,6 +1939,12 @@ func _player_message_for_error_code(code: String) -> String:
 			return "服务没有返回可用模型，请手动填写模型 ID。"
 		"PROVIDER_MODEL_CATALOG_INVALID", "PROVIDER_MODEL_CATALOG_REQUEST_FAILED":
 			return "暂时无法读取模型列表，请检查地址后重试，或手动填写模型 ID。"
+		"PROVIDER_MODEL_CATALOG_UNSUPPORTED":
+			return "当前服务需要手动填写模型或推理接入点 ID。"
+		"PROVIDER_CONNECTION_IN_USE":
+			return "这个连接仍在被居民使用，请先重新分配居民模型。"
+		"PROVIDER_CONNECTION_DELETE_FORBIDDEN":
+			return "内置连接不能删除。"
 		"PROVIDER_DISABLED":
 			return "当前 Provider 已停用。请先启用，再检查连接。"
 		"PROVIDER_BASE_URL_INVALID":

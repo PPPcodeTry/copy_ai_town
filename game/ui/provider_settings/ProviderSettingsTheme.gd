@@ -22,17 +22,21 @@ const COMPOSITE_DYNAMIC_CARD_BACKGROUND_PATH := (
 	RUNTIME_ASSET_ROOT
 	+ "/composite/page_shell/provider_settings_page_dynamic_cards_v2.png"
 )
+const STANDARD_BACKGROUND_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/page_shell/provider_settings_standard_v4.png"
+)
 const CUSTOM_LOCAL_BACKGROUND_PATH := (
 	RUNTIME_ASSET_ROOT
-	+ "/composite/page_shell/provider_settings_custom_local_v3.png"
+	+ "/composite/page_shell/provider_settings_custom_local_v4.png"
 )
 const CUSTOM_302_BACKGROUND_PATH := (
 	RUNTIME_ASSET_ROOT
-	+ "/composite/page_shell/provider_settings_custom_302_v3.png"
+	+ "/composite/page_shell/provider_settings_custom_302_v4.png"
 )
 const CUSTOM_COMPATIBLE_BACKGROUND_PATH := (
 	RUNTIME_ASSET_ROOT
-	+ "/composite/page_shell/provider_settings_custom_compatible_v3.png"
+	+ "/composite/page_shell/provider_settings_custom_compatible_v4.png"
 )
 const SECTION_FRAME_PATH := (
 	RUNTIME_ASSET_ROOT
@@ -41,6 +45,10 @@ const SECTION_FRAME_PATH := (
 const CONTENT_SLOT_PATH := (
 	RUNTIME_ASSET_ROOT
 	+ "/base_ninepatch/content_slot/content_slot_v1.png"
+)
+const CUSTOM_INPUT_FIELD_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/base_ninepatch/custom_input_field/custom_input_field_v1.png"
 )
 const BUTTON_ROOT := (
 	RUNTIME_ASSET_ROOT + "/base_ninepatch/buttons"
@@ -63,14 +71,26 @@ const EXACT_BUTTON_ROOT := RUNTIME_ASSET_ROOT + "/exact_buttons"
 const SAVE_CONNECTION_DISABLED_PATH := (
 	EXACT_BUTTON_ROOT + "/save_connection_disabled_v3.png"
 )
+const SAVE_CONNECTION_NORMAL_PATH := (
+	EXACT_BUTTON_ROOT + "/save_connection_normal_v4.png"
+)
 const DISCOVER_MODELS_DISABLED_PATH := (
 	EXACT_BUTTON_ROOT + "/discover_models_disabled_v3.png"
+)
+const DISCOVER_MODELS_NORMAL_PATH := (
+	EXACT_BUTTON_ROOT + "/discover_models_normal_v4.png"
 )
 const ADD_MODEL_DISABLED_PATH := (
 	EXACT_BUTTON_ROOT + "/add_model_disabled_v3.png"
 )
+const ADD_MODEL_NORMAL_PATH := (
+	EXACT_BUTTON_ROOT + "/add_model_normal_v4.png"
+)
 const CHECK_CONNECTION_LOADING_PATH := (
-	EXACT_BUTTON_ROOT + "/check_connection_loading_v3.png"
+	EXACT_BUTTON_ROOT + "/check_connection_loading_v4.png"
+)
+const CHECK_CONNECTION_NORMAL_PATH := (
+	EXACT_BUTTON_ROOT + "/check_connection_normal_v4.png"
 )
 const CUSTOM_SECTION_ROOT := (
 	RUNTIME_ASSET_ROOT + "/composite/custom_sections"
@@ -106,21 +126,24 @@ const STATUS_LOADING_PLATE_PATH := (
 )
 const STATUS_SUCCESS_CUSTOM_PATH := (
 	RUNTIME_ASSET_ROOT
-	+ "/composite/status_strips/status_success_custom_v3.png"
+	+ "/composite/status_strips/status_success_custom_v4.png"
 )
 const STATUS_LOADING_CUSTOM_PATH := (
 	RUNTIME_ASSET_ROOT
-	+ "/composite/status_strips/status_loading_custom_v3.png"
+	+ "/composite/status_strips/status_loading_custom_v5.png"
 )
 const STATUS_ERROR_CUSTOM_PATH := (
 	RUNTIME_ASSET_ROOT
-	+ "/composite/status_strips/status_error_custom_v3.png"
+	+ "/composite/status_strips/status_error_custom_v4.png"
 )
 const PROVIDER_CARD_ROOT := (
 	RUNTIME_ASSET_ROOT + "/composite/provider_cards"
 )
 const PROVIDER_CARD_SELECTED_PATH := (
 	PROVIDER_CARD_ROOT + "/provider_card_selected_v1.png"
+)
+const PROVIDER_CARD_NEUTRAL_PATH := (
+	PROVIDER_CARD_ROOT + "/provider_card_neutral_v2.png"
 )
 const PROVIDER_CARD_AUTH_ERROR_PATH := (
 	PROVIDER_CARD_ROOT + "/provider_card_auth_error_v1.png"
@@ -161,6 +184,24 @@ const CUSTOM_MODEL_DELETE_BLOCKED_PATH := (
 )
 const PROVIDER_CLOCK_HANDS_PATH := (
 	RUNTIME_ASSET_ROOT + "/icons/header/provider_clock_hands_v1.png"
+)
+const PROVIDER_BACK_ARROW_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/header/provider_back_arrow_v1.png"
+)
+const PROVIDER_FORMAL_SUCCESS_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/status/provider_formal_success_v1.png"
+)
+const PROVIDER_FORMAL_LOADING_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/status/provider_checking_connection_v1.png"
+)
+const PROVIDER_FORMAL_ERROR_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/status/provider_formal_error_v1.png"
+)
+const PROVIDER_AVAILABLE_INDICATOR_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/status/provider_available_indicator_v1.png"
+)
+const CUSTOM_CONNECTION_CHEVRON_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/actions/custom_connection_chevron_v1.png"
 )
 const PROVIDER_TOGGLE_ROOT := RUNTIME_ASSET_ROOT + "/controls/toggles"
 const PROVIDER_TOGGLE_OFF_PATH := (
@@ -297,16 +338,19 @@ static func runtime_assets_ready() -> bool:
 	for path: String in [
 		PAGE_SHELL_PATH,
 		COMPOSITE_DYNAMIC_CARD_BACKGROUND_PATH,
+		STANDARD_BACKGROUND_PATH,
 		CUSTOM_LOCAL_BACKGROUND_PATH,
 		CUSTOM_302_BACKGROUND_PATH,
 		CUSTOM_COMPATIBLE_BACKGROUND_PATH,
 		SECTION_FRAME_PATH,
 		CONTENT_SLOT_PATH,
+		CUSTOM_INPUT_FIELD_PATH,
 		"%s/button_normal_v1.png" % BUTTON_ROOT,
 		"%s/button_hover_v1.png" % BUTTON_ROOT,
 		"%s/button_pressed_v1.png" % BUTTON_ROOT,
 		"%s/button_disabled_v1.png" % BUTTON_ROOT,
 		PROVIDER_CARD_SELECTED_PATH,
+		PROVIDER_CARD_NEUTRAL_PATH,
 		PROVIDER_CARD_AUTH_ERROR_PATH,
 		PROVIDER_CARD_NETWORK_ERROR_PATH,
 		PROVIDER_CARD_DISABLED_PATH,
@@ -316,9 +360,13 @@ static func runtime_assets_ready() -> bool:
 		CUSTOM_SECONDARY_BUTTON_PATH,
 		CUSTOM_LOADING_BUTTON_PATH,
 		SAVE_CONNECTION_DISABLED_PATH,
+		SAVE_CONNECTION_NORMAL_PATH,
 		DISCOVER_MODELS_DISABLED_PATH,
+		DISCOVER_MODELS_NORMAL_PATH,
 		ADD_MODEL_DISABLED_PATH,
+		ADD_MODEL_NORMAL_PATH,
 		CHECK_CONNECTION_LOADING_PATH,
+		CHECK_CONNECTION_NORMAL_PATH,
 		CUSTOM_CONNECTION_ROW_PATH,
 		CUSTOM_CONNECTION_TWO_ROW_PATH,
 		CUSTOM_MODEL_ADD_ROW_PATH,
@@ -336,6 +384,11 @@ static func runtime_assets_ready() -> bool:
 		CUSTOM_KEY_REVEAL_PATH,
 		CUSTOM_KEY_DELETE_PATH,
 		PROVIDER_CLOCK_HANDS_PATH,
+		PROVIDER_BACK_ARROW_PATH,
+		PROVIDER_FORMAL_SUCCESS_PATH,
+		PROVIDER_FORMAL_ERROR_PATH,
+		PROVIDER_AVAILABLE_INDICATOR_PATH,
+		CUSTOM_CONNECTION_CHEVRON_PATH,
 		PROVIDER_TOGGLE_OFF_PATH,
 		PROVIDER_TOGGLE_ON_PATH,
 	]:
@@ -346,7 +399,9 @@ static func runtime_assets_ready() -> bool:
 
 static func composite_background_path(provider: Dictionary) -> String:
 	if not bool(provider.get("customGroup", false)):
-		return COMPOSITE_DYNAMIC_CARD_BACKGROUND_PATH
+		return STANDARD_BACKGROUND_PATH
+	if bool(provider.get("deletableConnection", false)):
+		return CUSTOM_COMPATIBLE_BACKGROUND_PATH
 	match str(provider.get("providerId", "")):
 		"302-ai":
 			return CUSTOM_302_BACKGROUND_PATH
@@ -409,10 +464,8 @@ static func provider_card_style(
 	tone: String,
 	state: String
 ) -> StyleBox:
-	var asset_path := PROVIDER_CARD_AUTH_ERROR_PATH
-	if state == "disabled":
-		asset_path = PROVIDER_CARD_DISABLED_PATH
-	elif selected:
+	var asset_path := PROVIDER_CARD_NEUTRAL_PATH
+	if selected:
 		asset_path = PROVIDER_CARD_SELECTED_PATH
 	elif tone == "disabled":
 		asset_path = PROVIDER_CARD_DISABLED_PATH
@@ -555,17 +608,34 @@ static func button_style(variant: String, state: String) -> StyleBox:
 	)
 
 
-static func exact_action_button_style(action_id: String) -> StyleBox:
+static func exact_action_button_style(
+	action_id: String,
+	state: String = "disabled",
+) -> StyleBox:
 	var asset_path := ""
 	match action_id:
 		"custom_connection_save":
-			asset_path = SAVE_CONNECTION_DISABLED_PATH
+			asset_path = (
+				SAVE_CONNECTION_DISABLED_PATH
+				if state == "disabled"
+				else SAVE_CONNECTION_NORMAL_PATH
+			)
 		"api_model_discover":
-			asset_path = DISCOVER_MODELS_DISABLED_PATH
+			asset_path = (
+				DISCOVER_MODELS_DISABLED_PATH
+				if state == "disabled"
+				else DISCOVER_MODELS_NORMAL_PATH
+			)
 		"api_model_add":
-			asset_path = ADD_MODEL_DISABLED_PATH
+			asset_path = (
+				ADD_MODEL_DISABLED_PATH
+				if state == "disabled"
+				else ADD_MODEL_NORMAL_PATH
+			)
 		"check_connection_loading":
 			asset_path = CHECK_CONNECTION_LOADING_PATH
+		"check_connection_normal":
+			asset_path = CHECK_CONNECTION_NORMAL_PATH
 		_:
 			return button_style("loading", "disabled")
 	# 四张状态图按各自按钮框的实际宽高比生成，整图缩放可保留完整边框。
@@ -610,6 +680,28 @@ static func custom_key_delete_texture() -> Texture2D:
 
 static func provider_checking_connection_texture() -> Texture2D:
 	return _texture(PROVIDER_CHECKING_CONNECTION_PATH)
+
+
+static func provider_back_arrow_texture() -> Texture2D:
+	return _texture(PROVIDER_BACK_ARROW_PATH)
+
+
+static func provider_formal_status_texture(tone: String) -> Texture2D:
+	match tone:
+		"loading":
+			return _texture(PROVIDER_FORMAL_LOADING_PATH)
+		"error", "warning":
+			return _texture(PROVIDER_FORMAL_ERROR_PATH)
+		_:
+			return _texture(PROVIDER_FORMAL_SUCCESS_PATH)
+
+
+static func provider_available_indicator_texture() -> Texture2D:
+	return _texture(PROVIDER_AVAILABLE_INDICATOR_PATH)
+
+
+static func custom_connection_chevron_texture() -> Texture2D:
+	return _texture(CUSTOM_CONNECTION_CHEVRON_PATH)
 
 
 static func custom_model_delete_blocked_texture() -> Texture2D:
@@ -712,7 +804,9 @@ static func composite_selected_font(token: String) -> Font:
 	variation.base_font = base_font
 	variation.spacing_glyph = 2
 	variation.spacing_space = 0
-	variation.variation_embolden = 0.8
+	# 选中态只通过颜色表达，字重继续服从主菜单的全局字体规范。
+	# 额外加粗会让中英文宽度变化，造成模型卡文字相对底板横向漂移。
+	variation.variation_embolden = MAIN_MENU_EMBOLDEN
 	_font_cache[cache_key] = variation
 	return variation
 
@@ -736,6 +830,14 @@ static func transparent_hit_style(state: String) -> StyleBoxFlat:
 
 static func transparent_input_style() -> StyleBoxEmpty:
 	return StyleBoxEmpty.new()
+
+
+static func custom_input_field_style() -> StyleBox:
+	return _texture_style(
+		CUSTOM_INPUT_FIELD_PATH,
+		[20, 14, 20, 14],
+		[18, 8, 18, 8],
+	)
 
 
 static func tone_color(tone: String) -> Color:

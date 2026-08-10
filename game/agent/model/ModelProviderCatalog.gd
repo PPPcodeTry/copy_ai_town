@@ -95,8 +95,8 @@ func _register_openai_compatible_preset(
 	default_endpoint: String,
 	auth_required: bool,
 	factory: Callable,
-) -> void:
-	register_provider({
+) -> Dictionary:
+	var provider_result := register_provider({
 		"id": provider_id,
 		"label": label,
 		"transport_label": transport_label,
@@ -104,8 +104,12 @@ func _register_openai_compatible_preset(
 		"auth_required": auth_required,
 		"default_endpoint": default_endpoint,
 		"custom_models": true,
+		"custom_group": true,
+		"model_catalog_supported": true,
 	}, factory)
-	register_model({
+	if provider_result.get("ok") != true:
+		return provider_result
+	var model_result := register_model({
 		"id": "custom",
 		"label": "自定义模型",
 		"provider_id": provider_id,
@@ -113,6 +117,34 @@ func _register_openai_compatible_preset(
 		"input_modalities": ["text"],
 		"runtime_modalities_configurable": true,
 	})
+	if model_result.get("ok") != true:
+		return model_result
+	return {"ok": true, "descriptor": provider_result.get("descriptor", {})}
+
+
+func register_openai_compatible_profile(
+	provider_id: String,
+	label: String,
+	default_endpoint := "",
+	auth_required := true,
+) -> Dictionary:
+	var normalized_id := provider_id.strip_edges()
+	var normalized_label := label.strip_edges()
+	if normalized_id.is_empty() or normalized_label.is_empty():
+		return {"ok": false, "errors": ["兼容连接名称和 ID 不能为空"]}
+	return _register_openai_compatible_preset(
+		normalized_id,
+		normalized_label,
+		"%s OpenAI-compatible API" % normalized_label,
+		default_endpoint.strip_edges(),
+		auth_required,
+		_create_dynamic_openai_compatible.bind(
+			normalized_id,
+			normalized_label,
+			default_endpoint.strip_edges(),
+			auth_required,
+		),
+	)
 
 
 func register_provider(descriptor: Dictionary, factory: Callable, make_default := false) -> Dictionary:
@@ -242,7 +274,11 @@ func create_provider(provider_id: String, request_host: Node = null, config: Dic
 	if resolved_config.has("model"):
 		var configured_model_id := String(resolved_config.get("model", ""))
 		var provider_models: Dictionary = _model_descriptors_by_provider.get(provider_id, {})
-		if not provider_models.has(configured_model_id):
+		var provider_descriptor := descriptor(provider_id)
+		if (
+			not provider_models.has(configured_model_id)
+			and not bool(provider_descriptor.get("custom_models", false))
+		):
 			return {"ok": false, "errors": ["未知模型：%s" % configured_model_id]}
 	if not resolved_config.has("model"):
 		var provider_default_model := default_model_id(provider_id)
@@ -350,6 +386,29 @@ func _create_kimi(request_host: Node, config: Dictionary) -> RefCounted:
 
 func _create_openai_compatible(request_host: Node, config: Dictionary) -> RefCounted:
 	return GenericOpenAICompatibleModelProviderScript.new(request_host, null, config)
+
+
+func _create_dynamic_openai_compatible(
+	request_host: Node,
+	config: Dictionary,
+	provider_id: String,
+	provider_label: String,
+	default_endpoint: String,
+	auth_required: bool,
+) -> RefCounted:
+	return GenericOpenAICompatibleModelProviderScript.new(
+		request_host,
+		null,
+		_compatible_preset_config(config, {
+			"provider_id": provider_id,
+			"provider_label": provider_label,
+			"transport_label": "%s OpenAI-compatible API" % provider_label,
+			"default_endpoint": default_endpoint,
+			"api_key_required": auth_required,
+			"api_key_environment": "",
+			"timeout_seconds": 60.0,
+		}),
+	)
 
 
 func _create_302_ai(request_host: Node, config: Dictionary) -> RefCounted:

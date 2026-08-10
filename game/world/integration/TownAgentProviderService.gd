@@ -10,6 +10,7 @@ const CAPABILITY_MODES: Array[String] = ["development", "formal"]
 const FAKE_PROVIDER_ID := "fake"
 const MAX_SAFE_INTEGER := 9007199254740991
 const HEALTH_PROBE_MAX_TOKENS := 256
+const COMPATIBLE_PROFILE_TYPE := "openai-compatible-profile"
 const PUBLIC_USAGE_FIELDS: Array[String] = [
 	"prompt_tokens",
 	"completion_tokens",
@@ -72,6 +73,9 @@ func configure(config_value: Variant, request_host_value: Variant = null) -> Dic
 	var source := source_value as String
 	var allow_fake := (allow_fake_value as bool) and mode == "development"
 	var provider_configs := (configs_value as Dictionary).duplicate(true)
+	var catalog_result := _rebuild_catalog_for_configs(provider_configs)
+	if not bool(catalog_result.get("ok", false)):
+		return catalog_result
 	if (
 		_configured
 		and _capability_mode == mode
@@ -144,6 +148,10 @@ func get_health_snapshot() -> Dictionary:
 			"authRequired": bool(descriptor.get("auth_required", true)),
 			"defaultBaseUrl": String(descriptor.get("default_endpoint", "")),
 			"customModels": bool(descriptor.get("custom_models", false)),
+			"customGroup": bool(descriptor.get("custom_group", false)),
+			"modelCatalogSupported": bool(
+				descriptor.get("model_catalog_supported", false)
+			),
 		})
 	return {
 		"ok": true,
@@ -220,6 +228,7 @@ func _model_health_projection(model: Dictionary) -> Dictionary:
 		"errorCode": String(health.get("errorCode", "")),
 		"retryable": bool(health.get("retryable", false)),
 		"healthStatus": String(health.get("status", "unavailable")),
+		"custom": bool(model.get("custom", false)),
 	}
 	for boolean_key in ["deprecated", "default_for_provider"]:
 		var boolean_value: Variant = model.get(boolean_key)
@@ -1046,14 +1055,19 @@ func _catalog_create_model(
 	):
 		var resolved_config := config.duplicate(true)
 		resolved_config["api_model"] = model_id
+		resolved_config["model"] = model_id
 		resolved_config.erase("api_models")
-		var creation := _catalog.create_model(
+		var creation := _catalog.create_provider(
 			provider_id,
-			"custom",
 			request_host,
 			resolved_config,
 		) as Dictionary
 		if bool(creation.get("ok", false)):
+			var provider_descriptor := (
+				creation.get("descriptor", {}) as Dictionary
+			).duplicate(true)
+			provider_descriptor["model_id"] = model_id
+			creation["provider_descriptor"] = provider_descriptor
 			creation["model_descriptor"] = _dynamic_model_descriptor(
 				provider_id,
 				model_id,
@@ -1101,6 +1115,38 @@ func _dynamic_model_descriptor(provider_id: String, model_id: String) -> Diction
 		"runtime_modalities_configurable": true,
 		"custom": true,
 	}
+
+
+func _rebuild_catalog_for_configs(provider_configs: Dictionary) -> Dictionary:
+	# 测试可注入自己的 catalog；只重建正式目录实例。
+	if _catalog == null or _catalog.get_script() != CATALOG:
+		return {"ok": true, "errorCode": "", "retryable": false}
+	var rebuilt := CATALOG.new()
+	for provider_id_value: Variant in provider_configs.keys():
+		var provider_id := String(provider_id_value).strip_edges()
+		var config_value: Variant = provider_configs.get(provider_id_value)
+		if not config_value is Dictionary:
+			continue
+		var config := config_value as Dictionary
+		if String(config.get("connection_type", "")) != COMPATIBLE_PROFILE_TYPE:
+			continue
+		var display_name := String(
+			config.get("display_name", "兼容接口")
+		).strip_edges()
+		var registered := rebuilt.register_openai_compatible_profile(
+			provider_id,
+			display_name,
+			String(config.get("endpoint", "")).strip_edges(),
+			bool(config.get("api_key_required", true)),
+		) as Dictionary
+		if not bool(registered.get("ok", false)):
+			return _failure(
+				"PROVIDER_DYNAMIC_CONNECTION_INVALID",
+				false,
+				registered.get("errors", []) as Array,
+			)
+	_catalog = rebuilt
+	return {"ok": true, "errorCode": "", "retryable": false}
 
 
 func _changed_provider_ids(previous: Dictionary, current: Dictionary) -> Array[String]:

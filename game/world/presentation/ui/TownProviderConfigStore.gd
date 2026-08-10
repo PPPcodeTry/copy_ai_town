@@ -9,7 +9,7 @@ const PROVIDER_STORE_FILES := preload(
 	"res://world/presentation/ui/TownProviderStoreFiles.gd"
 )
 const DEFAULT_PATH := "user://provider_settings.json"
-const SCHEMA_VERSION := 1
+const SCHEMA_VERSION := 2
 const PLAINTEXT_CREDENTIAL_KEYS := [
 	"apikey",
 	"apikeyvalue",
@@ -25,6 +25,9 @@ const PROVIDER_CONFIG_KEYS := [
 	"endpoint",
 	"apiModels",
 	"api_key",
+	"connectionType",
+	"displayName",
+	"authRequired",
 ]
 
 var _path := DEFAULT_PATH
@@ -68,7 +71,7 @@ func save_config(config_value: Variant) -> Dictionary:
 		var input_schema: Variant = config.get("schemaVersion")
 		if (
 			typeof(input_schema) != TYPE_INT
-			or int(input_schema) != SCHEMA_VERSION
+			or int(input_schema) not in [1, SCHEMA_VERSION]
 		):
 			return _failure("PROVIDER_CONFIG_SCHEMA_UNSUPPORTED")
 	var normalized := config.duplicate(true)
@@ -140,12 +143,15 @@ func _read_validated_config(
 	if not parsed is Dictionary:
 		return _failure("PROVIDER_CONFIG_INVALID")
 	var config := (parsed as Dictionary).duplicate(true)
-	var disk_schema: Variant = config.get("schemaVersion")
+	var disk_schema: Variant = config.get("schemaVersion", 1)
 	if (
 		typeof(disk_schema) == TYPE_FLOAT
 		and is_finite(float(disk_schema))
-		and float(disk_schema) == float(SCHEMA_VERSION)
+		and float(disk_schema) == floorf(float(disk_schema))
 	):
+		disk_schema = int(disk_schema)
+		config["schemaVersion"] = disk_schema
+	if typeof(disk_schema) == TYPE_INT and int(disk_schema) == 1:
 		config["schemaVersion"] = SCHEMA_VERSION
 	config = _migrate_legacy_custom_model(config)
 	var validation := _validate_config(config, allow_legacy_plaintext)
@@ -302,6 +308,24 @@ func _validate_config(
 				):
 					return _failure("PROVIDER_CONFIG_INVALID")
 				known_models[model_value] = true
+		if provider.has("connectionType"):
+			var connection_type: Variant = provider.get("connectionType")
+			if (
+				typeof(connection_type) != TYPE_STRING
+				or connection_type != "openai-compatible-profile"
+			):
+				return _failure("PROVIDER_CONFIG_INVALID")
+		if provider.has("displayName"):
+			var display_name: Variant = provider.get("displayName")
+			if (
+				typeof(display_name) != TYPE_STRING
+				or not _display_name_is_valid(display_name as String)
+			):
+				return _failure("PROVIDER_CONFIG_INVALID")
+		if provider.has("authRequired") and typeof(
+			provider.get("authRequired")
+		) != TYPE_BOOL:
+			return _failure("PROVIDER_CONFIG_INVALID")
 	if not _json_safe(config):
 		return _failure("PROVIDER_CONFIG_INVALID")
 	return _success()
@@ -313,6 +337,20 @@ func _provider_config_shape_is_valid(provider: Dictionary) -> bool:
 			typeof(key_value) != TYPE_STRING
 			or key_value not in PROVIDER_CONFIG_KEYS
 		):
+			return false
+	return true
+
+
+func _display_name_is_valid(display_name: String) -> bool:
+	if (
+		display_name.is_empty()
+		or display_name != display_name.strip_edges()
+		or display_name.length() > 48
+	):
+		return false
+	for character: String in display_name:
+		var codepoint := character.unicode_at(0)
+		if codepoint < 32 or codepoint == 127:
 			return false
 	return true
 

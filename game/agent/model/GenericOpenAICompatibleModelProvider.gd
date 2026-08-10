@@ -65,6 +65,8 @@ func get_provider_descriptor() -> Dictionary:
 	descriptor["auth_required"] = _api_key_required()
 	descriptor["default_endpoint"] = _default_endpoint()
 	descriptor["custom_models"] = true
+	descriptor["custom_group"] = true
+	descriptor["model_catalog_supported"] = true
 	return descriptor
 
 

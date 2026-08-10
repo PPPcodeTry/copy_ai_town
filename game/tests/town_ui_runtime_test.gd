@@ -1282,6 +1282,9 @@ const UiViewModel := preload("res://ui/common/AiTownUiViewModel.gd")
 const ProviderSettingsCompositeDesktop := preload(
 	"res://ui/provider_settings/composite/ProviderSettingsCompositeDesktop.gd"
 )
+const ProviderSettingsTheme := preload(
+	"res://ui/provider_settings/ProviderSettingsTheme.gd"
+)
 const REQUIRED_FORMAL_PATHS: Array[String] = [
 	"res://ui/startup/StartupScreen.tscn",
 	"res://ui/startup/StartupLoadGameScreen.tscn",
@@ -3796,6 +3799,7 @@ func _scenario_formal_ui_runtime_contract() -> void:
 			)
 	_test_public_error_copy_contract()
 	_test_provider_composite_source_provenance_contract()
+	_test_provider_custom_asset_contract()
 	_test_provider_settings_error_copy_contract()
 	await _test_provider_model_assignment_return_contract()
 	_test_visible_error_label_contract()
@@ -3865,6 +3869,34 @@ func _test_provider_composite_source_provenance_contract() -> void:
 		and is_equal_approx(float(source_size[0]), 1672.0)
 		and is_equal_approx(float(source_size[1]), 941.0),
 		"模型设置合成参考保留来源尺寸",
+	)
+
+
+func _test_provider_custom_asset_contract() -> void:
+	_expect(
+		ProviderSettingsTheme.runtime_assets_ready(),
+		"模型设置正式页所需独立图像资产必须全部可加载",
+	)
+	_expect(
+		ProviderSettingsTheme.STATUS_LOADING_CUSTOM_PATH.ends_with(
+			"status_loading_custom_v5.png"
+		),
+		"检查中状态使用无时钟的三节点正式底板",
+	)
+	_expect(
+		ProviderSettingsTheme.PROVIDER_FORMAL_LOADING_PATH.ends_with(
+			"provider_checking_connection_v1.png"
+		),
+		"页头检查动画复用三节点连接图标，不显示时钟",
+	)
+	_expect_equal(
+		ProviderSettingsTheme.composite_background_path({
+			"providerId": "openai-compatible-2",
+			"customGroup": true,
+			"deletableConnection": true,
+		}),
+		ProviderSettingsTheme.CUSTOM_COMPATIBLE_BACKGROUND_PATH,
+		"新增中转连接使用同时容纳 Base URL 与 API Key 的正式底板",
 	)
 
 

@@ -45,19 +45,20 @@ func _provider_request_options() -> Dictionary:
 	return {"thinking": {"type": "disabled"}}
 
 
+func get_provider_descriptor() -> Dictionary:
+	var descriptor := super.get_provider_descriptor()
+	descriptor["custom_models"] = true
+	descriptor["custom_group"] = false
+	descriptor["model_catalog_supported"] = false
+	return descriptor
+
+
 func validate_configuration() -> Array[String]:
 	var errors := super.validate_configuration()
-	var model_id := String(_config.get("model", DEFAULT_MODEL))
-	if not _supports_model(model_id):
-		errors.append("方舟 Provider 不支持模型：%s" % model_id)
+	var model_id := String(_config.get("model", DEFAULT_MODEL)).strip_edges()
+	if model_id.is_empty():
+		errors.append("缺少火山方舟模型或推理接入点 ID")
 	return errors
-
-
-func _supports_model(model_id: String) -> bool:
-	for descriptor: Dictionary in MODEL_DESCRIPTORS:
-		if descriptor.get("id") == model_id:
-			return true
-	return false
 
 
 func _api_key_environment_names() -> Array[String]:

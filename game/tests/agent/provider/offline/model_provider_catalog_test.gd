@@ -349,6 +349,8 @@ func _initialize() -> void:
 	}) as Dictionary
 	_expect_equal(unknown_modality.get("ok"), false, "unknown input modalities are rejected")
 	_test_compatible_runtime_models()
+	_test_volcengine_custom_endpoint_model()
+	_test_multiple_compatible_connections()
 	_test_provider_health_isolation()
 	_test_local_endpoint_and_model_persistence()
 	_test_settings_service_custom_model_flow()
@@ -420,6 +422,192 @@ func _test_compatible_runtime_models() -> void:
 				model_id,
 				"the resident's real wire model reaches the provider",
 			)
+
+
+func _test_volcengine_custom_endpoint_model() -> void:
+	var service: RefCounted = ProviderServiceScript.new()
+	var configured := service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"volcengine-ark": {
+				"api_key": "temporary-ark-key",
+				"api_models": ["ep-player-custom-model"],
+				"api_model": "ep-player-custom-model",
+			},
+		},
+	}) as Dictionary
+	_expect_equal(
+		configured.get("ok"),
+		true,
+		"Ark accepts a player-entered inference endpoint id",
+	)
+	var custom_model := {}
+	for model: Dictionary in service.call("list_available_models"):
+		if (
+			String(model.get("providerId", "")) == "volcengine-ark"
+			and String(model.get("modelId", "")) == "ep-player-custom-model"
+		):
+			custom_model = model
+			break
+	_expect_equal(
+		custom_model.get("custom"),
+		true,
+		"Ark projects the player-entered endpoint as a removable custom card",
+	)
+	service.set("_health_by_target", {
+		"volcengine-ark|ep-player-custom-model": {
+			"providerId": "volcengine-ark",
+			"modelId": "ep-player-custom-model",
+			"status": "available",
+			"errorCode": "",
+			"retryable": false,
+		},
+	})
+	var created := service.call("create_provider_for_resident", {
+		"residentId": "ark-custom-resident",
+		"llmBinding": {
+			"mode": "model",
+			"providerId": "volcengine-ark",
+			"modelId": "ep-player-custom-model",
+		},
+	}) as Dictionary
+	_expect_equal(
+		created.get("ok"),
+		true,
+		"an Ark custom endpoint can be assigned to a resident",
+	)
+	if bool(created.get("ok", false)):
+		_expect_equal(
+			created.get("provider").call("get_provider_descriptor").get("model_id"),
+			"ep-player-custom-model",
+			"the Ark custom endpoint id reaches the actual request provider",
+		)
+
+
+func _test_multiple_compatible_connections() -> void:
+	DirAccess.make_dir_recursive_absolute(
+		ProjectSettings.globalize_path(CONFIG_TEST_ROOT),
+	)
+	var request_host := Node.new()
+	var provider_service: RefCounted = ProviderServiceScript.new()
+	var settings: RefCounted = SettingsServiceScript.new()
+	var configured := settings.call(
+		"configure_store",
+		"%s/multiple-compatible-settings.json" % CONFIG_TEST_ROOT,
+	) as Dictionary
+	_expect_equal(
+		configured.get("ok"),
+		true,
+		"multiple compatible connection store is configured",
+	)
+	var bound := settings.call(
+		"bind_provider_service",
+		provider_service,
+		request_host,
+	) as Dictionary
+	_expect_equal(bound.get("ok"), true, "multiple compatible connection runtime binds")
+	var created_first := settings.call(
+		"dispatch",
+		"provider_settings.create_compatible_connection",
+		{},
+	) as Dictionary
+	_expect_equal(created_first.get("ok"), true, "the first extra relay connection can be created")
+	var first_id := String(
+		(settings.call("get_view_model") as Dictionary).get("data", {}).get(
+			"selectedProviderId",
+			"",
+		)
+	)
+	var saved_first := settings.call(
+		"dispatch",
+		"provider_settings.save_connection",
+		{
+			"providerId": first_id,
+			"baseUrl": "https://relay-one.example/v1",
+			"apiKey": "temporary-relay-one-key",
+		},
+	) as Dictionary
+	_expect_equal(saved_first.get("ok"), true, "the first relay keeps its own address and key")
+	var first_model := settings.call(
+		"dispatch",
+		"provider_settings.save_api_model",
+		{"providerId": first_id, "apiModel": "shared/model"},
+	) as Dictionary
+	_expect_equal(first_model.get("ok"), true, "the first relay saves its own model card")
+	var created_second := settings.call(
+		"dispatch",
+		"provider_settings.create_compatible_connection",
+		{},
+	) as Dictionary
+	_expect_equal(created_second.get("ok"), true, "a second extra relay connection can be created")
+	var second_id := String(
+		(settings.call("get_view_model") as Dictionary).get("data", {}).get(
+			"selectedProviderId",
+			"",
+		)
+	)
+	_expect(
+		not first_id.is_empty() and not second_id.is_empty() and first_id != second_id,
+		"each relay connection receives a stable independent identity",
+	)
+	var saved_second := settings.call(
+		"dispatch",
+		"provider_settings.save_connection",
+		{
+			"providerId": second_id,
+			"baseUrl": "https://relay-two.example/v1",
+			"apiKey": "temporary-relay-two-key",
+		},
+	) as Dictionary
+	_expect_equal(saved_second.get("ok"), true, "the second relay keeps a different address and key")
+	var second_model := settings.call(
+		"dispatch",
+		"provider_settings.save_api_model",
+		{"providerId": second_id, "apiModel": "shared/model"},
+	) as Dictionary
+	_expect_equal(second_model.get("ok"), true, "different relays may expose the same wire model id")
+	var projected_first := _provider_from_view_model(
+		settings.call("get_view_model") as Dictionary,
+		first_id,
+	)
+	var projected_second := _provider_from_view_model(
+		settings.call("get_view_model") as Dictionary,
+		second_id,
+	)
+	_expect_equal(projected_first.get("customGroup"), true, "the first relay stays inside Custom Models")
+	_expect_equal(projected_second.get("customGroup"), true, "the second relay stays inside Custom Models")
+	provider_service.set("_bindings_by_resident_id", {
+		"resident-relay": {
+			"mode": "model",
+			"providerId": second_id,
+			"modelId": "shared/model",
+		},
+	})
+	var blocked_delete := settings.call(
+		"dispatch",
+		"provider_settings.delete_compatible_connection",
+		{"providerId": second_id},
+	) as Dictionary
+	_expect_equal(
+		blocked_delete.get("errorCode"),
+		"PROVIDER_CONNECTION_IN_USE",
+		"a relay connection assigned to a resident cannot be deleted",
+	)
+	provider_service.set("_bindings_by_resident_id", {})
+	var deleted := settings.call(
+		"dispatch",
+		"provider_settings.delete_compatible_connection",
+		{"providerId": second_id},
+	) as Dictionary
+	_expect_equal(deleted.get("ok"), true, "an unused relay connection can be deleted")
+	_expect_equal(
+		_provider_from_view_model(settings.call("get_view_model"), second_id).is_empty(),
+		true,
+		"deleting one relay preserves the others and removes only its card",
+	)
+	request_host.free()
 
 
 func _test_provider_health_isolation() -> void:
@@ -705,6 +893,12 @@ func _test_custom_model_ui_grouping() -> void:
 		"providers": [
 			{"providerId": "deepseek", "displayName": "DeepSeek"},
 			{
+				"providerId": "volcengine-ark",
+				"displayName": "火山方舟",
+				"customModels": true,
+				"customGroup": false,
+			},
+			{
 				"providerId": "openai-compatible",
 				"displayName": "其他兼容接口",
 				"customModels": true,
@@ -722,16 +916,24 @@ func _test_custom_model_ui_grouping() -> void:
 		],
 	})
 	var visible: Array[Dictionary] = screen._visible_providers()
-	_expect_equal(visible.size(), 2, "compatible services collapse into one player-facing group")
+	_expect_equal(visible.size(), 3, "compatible services collapse into one player-facing group")
 	_expect_equal(
-		visible[1].get("displayName"),
+		visible[2].get("displayName"),
 		"自定义模型",
 		"the player-facing custom group hides the OpenAI Compatible name",
 	)
 	_expect_equal(
-		visible[1].get("providerId"),
+		visible[2].get("providerId"),
 		"ollama",
 		"the grouped card keeps the selected custom connection active",
+	)
+	var visible_names: Array[String] = []
+	for provider: Dictionary in visible:
+		visible_names.append(String(provider.get("displayName", "")))
+	_expect_equal(
+		visible_names,
+		["DeepSeek", "火山方舟", "自定义模型"],
+		"the Custom Models card keeps its stable position near the leading providers",
 	)
 	_expect_equal(
 		(screen._use_composite_desktop(Vector2(1920, 1080))),
@@ -739,9 +941,17 @@ func _test_custom_model_ui_grouping() -> void:
 		"1920 desktop keeps the formal composite provider settings layout",
 	)
 	_expect_equal(
-		(visible[1].get("customConnections", []) as Array).size(),
+		(visible[2].get("customConnections", []) as Array).size(),
 		3,
 		"the custom model group preserves every compatible connection",
+	)
+	var custom_connection_ids: Array[String] = []
+	for provider: Dictionary in visible[2].get("customConnections", []) as Array:
+		custom_connection_ids.append(String(provider.get("providerId", "")))
+	_expect_equal(
+		custom_connection_ids,
+		["ollama", "lm-studio", "openai-compatible"],
+		"the custom connection selector keeps the approved local-first order",
 	)
 	screen.free()
 	var assignment := ResidentAssignmentServiceScript.new()
