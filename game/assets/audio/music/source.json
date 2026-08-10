@@ -312,33 +312,6 @@
         ],
         "thirdPartyInputCheck": "pending"
       }
-    },
-    {
-      "file": "music_town_cover_loop.ogg",
-      "role": "title_cover",
-      "title": "Town Daylife Groove V4",
-      "sourceType": "original_project_candidate",
-      "sourceNote": "Copied from the locally accepted V4 candidate; the candidate work file is intentionally excluded from this runtime PR. Re-encoded from the original WAV to OGG Vorbis (q5) in 2026-08 to cut bundle size ~90%.",
-      "durationSeconds": 75.652812,
-      "sampleRate": 44100,
-      "channels": 2,
-      "sha256": "9ce3a915901a5c855ec7e2ef2838e86a4459415a563570dc2391effaecdad30c",
-      "usageStatus": "internal_and_project_use"
-    },
-    {
-      "file": "music_town_sleep_loop.ogg",
-      "role": "release_safe_sleep_fallback",
-      "title": "Still Night",
-      "sourceType": "original_procedural_synthesis",
-      "generator": "project_procedural_synthesis",
-      "sourceNote": "Re-encoded from the original WAV to OGG Vorbis (q5) in 2026-08 to cut bundle size ~90%.",
-      "durationSeconds": 192.0,
-      "sampleRate": 32000,
-      "channels": 2,
-      "sha256": "b88f23642e586cb683d616c6448e0588d75753fe6860750cab9fca22458d7bfb",
-      "generatedAt": "2026-07-28T18:34:00+08:00",
-      "usageStatus": "release_safe_project_original",
-      "design": "Sparse felt piano, warm sustained strings, soft pads, rare harp, no vocals, percussion, swing, blues scale, or borrowed melody."
     }
   ]
 }

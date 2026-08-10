@@ -4,7 +4,6 @@ extends Node
 const SOUND_LIBRARY := preload("res://audio/TownProceduralSoundLibrary.gd")
 const SETTINGS_PATH := "user://audio_settings.cfg"
 const SETTINGS_SECTION := "audio"
-const COVER_MUSIC_PATH := "res://assets/audio/music/music_town_cover_loop.ogg"
 const DAYLIFE_MUSIC_PATHS := [
 	"res://assets/audio/music/music_town_daylife_gathering.wav",
 	"res://assets/audio/music/music_town_daylife_market.wav",
@@ -28,7 +27,6 @@ const SLEEP_MUSIC_PATHS := [
 	"res://assets/audio/music/music_town_sleep_belltower_01.wav",
 	"res://assets/audio/music/music_town_sleep_belltower_02.wav",
 ]
-const SLEEP_FALLBACK_MUSIC_PATH := "res://assets/audio/music/music_town_sleep_loop.ogg"
 const RAIN_AMBIENCE_PATH := "res://assets/audio/ambience/amb_town_rain_loop.ogg"
 const SLEEP_NOISE_PATH := (
 	"res://assets/audio/ambience/amb_sleep_soft_white_noise_loop.wav"
@@ -489,9 +487,8 @@ func _load_audio_settings() -> void:
 
 
 func _build_music_players() -> void:
-	# The title only needs its own compact cover track. Town music is loaded the
-	# first time its time/weather route is entered instead of decoding every
-	# day, night, rain, thunderstorm and sleep track before the first frame.
+	# The title loads only the daytime playlist. Night, rain, thunderstorm and
+	# sleep tracks are still deferred until their routes are entered.
 	_music_stream_pools.clear()
 	for index in 2:
 		var player := AudioStreamPlayer.new()
@@ -534,21 +531,15 @@ func _ensure_music_pool_loaded(music_id: String) -> void:
 		return
 	var streams: Array[AudioStream] = []
 	if music_id == "cover":
-		var cover_stream := _load_music_stream(COVER_MUSIC_PATH, true)
-		if cover_stream != null:
-			streams.append(cover_stream)
+		streams = _load_music_pool(DAYLIFE_MUSIC_PATHS)
+	elif music_id == "day" and _music_stream_pools.has("cover"):
+		# 主菜单与晴天白天共用同一组流，进入小镇时不重复载入四首音乐。
+		streams = _music_stream_pools.get("cover", []) as Array[AudioStream]
 	else:
 		streams = _load_music_pool(
 			_music_paths(music_id),
 			music_id == "sleep",
 		)
-		if music_id == "sleep" and streams.is_empty():
-			var fallback_sleep := _load_music_stream(
-				SLEEP_FALLBACK_MUSIC_PATH,
-				true,
-			)
-			if fallback_sleep != null:
-				streams.append(fallback_sleep)
 	_music_stream_pools[music_id] = streams
 
 

@@ -18,7 +18,7 @@ func _run() -> void:
 
 	var cover := audio.call("debug_snapshot") as Dictionary
 	_expect_equal(cover.get("musicId"), "cover", "startup uses its own cover music")
-	_expect_equal(cover.get("musicPoolSize"), 1, "startup loads only the compact cover track")
+	_expect_equal(cover.get("musicPoolSize"), 4, "startup cycles the four approved daytime tracks")
 	_expect_equal(cover.get("frontendMode"), true, "startup begins in cover mode")
 	_expect_equal(
 		cover.get("loadedMusicPoolIds"),
@@ -41,8 +41,7 @@ func _run() -> void:
 		false,
 		"startup leaves thunder audio unloaded",
 	)
-	for music_path: String in [
-		"res://assets/audio/music/music_town_cover_loop.ogg",
+	var expected_music_paths := PackedStringArray([
 		"res://assets/audio/music/music_town_daylife_gathering.wav",
 		"res://assets/audio/music/music_town_daylife_market.wav",
 		"res://assets/audio/music/music_town_daylife_corner_opening.wav",
@@ -56,15 +55,34 @@ func _run() -> void:
 		"res://assets/audio/music/music_town_thunderstorm_after_rain_02.wav",
 		"res://assets/audio/music/music_town_sleep_belltower_01.wav",
 		"res://assets/audio/music/music_town_sleep_belltower_02.wav",
-	]:
+	])
+	for music_path: String in expected_music_paths:
 		_expect(
 			FileAccess.file_exists(music_path),
 			"collaboration music is bundled: %s" % music_path,
 		)
+	var bundled_music_paths := PackedStringArray()
+	for file_name: String in DirAccess.get_files_at("res://assets/audio/music"):
+		if file_name.get_extension().to_lower() in ["wav", "ogg", "mp3"]:
+			bundled_music_paths.append("res://assets/audio/music/%s" % file_name)
+	expected_music_paths.sort()
+	bundled_music_paths.sort()
+	_expect_equal(
+		bundled_music_paths,
+		expected_music_paths,
+		"music directory contains only the approved formal tracks",
+	)
 	_expect_equal(
 		cover.get("baseAmbienceId"),
 		"",
 		"cover mode does not leak the Town environment bed",
+	)
+	var first_cover_variant := int(cover.get("musicVariantIndex", -1))
+	audio.call("_switch_music", "cover", true)
+	var next_cover := audio.call("debug_snapshot") as Dictionary
+	_expect(
+		int(next_cover.get("musicVariantIndex", -1)) != first_cover_variant,
+		"title daytime playlist does not immediately repeat the same track",
 	)
 
 	audio.call(
@@ -154,6 +172,7 @@ func _run() -> void:
 	)
 	var awake := audio.call("debug_snapshot") as Dictionary
 	_expect_equal(awake.get("musicId"), "day", "07:00 returns to daytime music")
+	_expect_equal(awake.get("musicPoolSize"), 4, "Town daytime reuses the title playlist")
 	_expect_equal(awake.get("sleepTime"), false, "07:00 leaves sleep time")
 	_expect_equal(awake.get("sleepNoiseId"), "", "07:00 fades out white noise")
 
