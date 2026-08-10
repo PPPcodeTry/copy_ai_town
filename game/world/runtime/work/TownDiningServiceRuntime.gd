@@ -383,12 +383,16 @@ static func _send_home(world, resident_id: String, reason: String) -> bool:
 		resident["validDecisionId"] = ""
 		resident["pendingWake"] = {}
 		resident["wakeDispatchQueued"] = false
+	# advance() 可能一次推进多个分钟，但关餐结算仍按当前 tick 逐分钟执行。
+	# 路线必须从本次结算分钟开始计时；直接读取环境时钟会拿到这次
+	# advance 的最终分钟，让已经领餐的居民在食堂原地停留到未来时刻。
+	var settlement_minute := int(world._authoritative_absolute_minute())
 	var prepared := world._prepare_go_action(
 		resident,
 		{
 			"action_id": "dining-close-home:%s:%d" % [
 				resident_id,
-				int(world._environment.get_absolute_minute()),
+				settlement_minute,
 			],
 			"type": "去",
 			"place": home_place,
@@ -401,6 +405,7 @@ static func _send_home(world, resident_id: String, reason: String) -> bool:
 	var action := (
 		prepared.get("action", {}) as Dictionary
 	).duplicate(true)
+	action["startedAbsoluteMinute"] = settlement_minute
 	resident["currentAction"] = action
 	(resident.get("usedActionIds", {}) as Dictionary)[
 		String(action.get("action_id", ""))
