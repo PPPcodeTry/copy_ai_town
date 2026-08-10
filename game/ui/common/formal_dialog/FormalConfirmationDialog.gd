@@ -44,6 +44,7 @@ var ok_button_text := "确认"
 var cancel_button_text := "取消"
 var semantic_kind := "warning"
 var semantic_icon: Texture2D
+var custom_content_frame_texture: Texture2D
 
 var _veil: ColorRect
 var _stage: Control
@@ -263,6 +264,11 @@ func _apply_copy() -> void:
 	_cancel_button.text = cancel_button_text
 	_confirm_button.text = ok_button_text
 	_icon.texture = _semantic_icon()
+	_input_frame.texture = (
+		custom_content_frame_texture
+		if custom_content_frame_texture != null
+		else INPUT_TEXTURE
+	)
 	_layout_content()
 
 

@@ -31,6 +31,12 @@ const REQUIRED_PROVIDER_SERVICE_METHODS: Array[String] = [
 # burst bounded, but give a normal town enough lanes to keep living.
 const MAX_CONCURRENT_MODEL_REQUESTS := 6
 const RESERVED_AVATAR_CONVERSATION_REQUEST_SLOTS := 1
+# 本地推理通常由一张显卡或一颗 CPU 串行处理。允许两个普通居民继续推进，
+# 再给玩家对话留一个独立位置；其余请求保留在 World 待处理队列中，
+# 不会因为排队而触发可见的连续性兜底。
+const MAX_CONCURRENT_LOCAL_MODEL_REQUESTS := 3
+const MAX_CONCURRENT_LOCAL_ORDINARY_REQUESTS := 2
+const LOCAL_MODEL_PROVIDER_IDS: Array[String] = ["ollama", "lm-studio"]
 const MAX_DECISION_ATTEMPTS := 2
 const MAX_ERROR_HISTORY := 128
 const DEFAULT_AVATAR_PERSON_ID := "person_7f3a91c2d8e4"
@@ -447,6 +453,18 @@ func _select_dispatchable_requests(
 			continue
 		projected[inflight_decision_id] = true
 	var projected_ordinary_count := _ordinary_inflight_count()
+	var projected_local_count := 0
+	var projected_local_ordinary_count := 0
+	for inflight_decision_id: Variant in projected:
+		var inflight := _inflight.get(inflight_decision_id, {}) as Dictionary
+		var inflight_resident_id := String(inflight.get("residentId", ""))
+		if not _resident_uses_local_model(inflight_resident_id):
+			continue
+		projected_local_count += 1
+		if not _wake_is_avatar_conversation_turn(
+			inflight.get("wakePacket", {}) as Dictionary
+		):
+			projected_local_ordinary_count += 1
 	var request_limit := requests.size()
 	if max_requests >= 0:
 		request_limit = mini(request_limit, max_requests)
@@ -469,8 +487,24 @@ func _select_dispatchable_requests(
 			projected_ordinary_count
 			+ (1 if request_is_ordinary else 0)
 		)
+		var request_uses_local_model := _resident_uses_local_model(
+			String(request.get("residentId", ""))
+		)
+		var next_local_count := (
+			projected_local_count + (1 if request_uses_local_model else 0)
+		)
+		var next_local_ordinary_count := (
+			projected_local_ordinary_count
+			+ (1 if request_uses_local_model and request_is_ordinary else 0)
+		)
 		if (
 			next_total > MAX_CONCURRENT_MODEL_REQUESTS
+			or next_local_count > MAX_CONCURRENT_LOCAL_MODEL_REQUESTS
+			or (
+				request_uses_local_model
+				and next_local_ordinary_count
+				> MAX_CONCURRENT_LOCAL_ORDINARY_REQUESTS
+			)
 			or (
 				not has_pending_avatar_conversation
 				and next_ordinary_count
@@ -482,11 +516,19 @@ func _select_dispatchable_requests(
 			continue
 		projected[decision_id] = true
 		projected_ordinary_count = next_ordinary_count
+		projected_local_count = next_local_count
+		projected_local_ordinary_count = next_local_ordinary_count
 		selected.append(request)
 	return {
 		"selected": selected,
 		"overflow": overflow,
 	}
+
+
+func _resident_uses_local_model(resident_id: String) -> bool:
+	var binding := _bindings_by_id.get(resident_id, {}) as Dictionary
+	var llm_binding := binding.get("llmBinding", {}) as Dictionary
+	return String(llm_binding.get("providerId", "")) in LOCAL_MODEL_PROVIDER_IDS
 
 
 func _mark_superseded_inflight_for_request(

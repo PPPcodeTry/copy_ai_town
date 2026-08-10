@@ -20,6 +20,7 @@ const SOURCE_SIZE := Vector2(1672.0, 941.0)
 const REFERENCE_VIEWPORT := Vector2(1920.0, 1080.0)
 const MINIMUM_TOUCH_SIZE := Vector2(48.0, 48.0)
 const CLOCK_HANDS_RECT := Rect2(795.0, 49.0, 82.0, 82.0)
+const ASSET_PATH := ProviderTheme.COMPOSITE_DYNAMIC_CARD_BACKGROUND_PATH
 const CONTRACT_PATH := (
 	"res://assets/ui/provider_settings/composite_reference/"
 	+ "provider_settings_page_composite_user_reference_v1_contract.json"
@@ -160,7 +161,8 @@ func configure(
 
 func _build() -> void:
 	var provider := _find_provider(_selected_provider_id)
-	var background_path := ProviderTheme.composite_background_path(provider)
+	# 自定义模型只新增顶部连接下拉；页面其余区域继续使用原版模型设置底图。
+	var background_path := ASSET_PATH
 	var texture := ResourceLoader.load(
 		background_path,
 		"Texture2D",
@@ -328,15 +330,21 @@ func _build_header(board: Control, board_rect: Rect2) -> void:
 		str(_data.get("pageTitle", "模型设置")),
 		ProviderTheme.COMPOSITE_INK
 	)
+	var custom_layout := bool(
+		_find_provider(_selected_provider_id).get("customGroup", false)
+	)
 	var formal_tone := _formal_status_tone()
 	formal_badge = _add_slot_label(
 		header,
 		header_rect,
 		"formal_status",
 		_formal_status_text(),
-		_tone_color(formal_tone)
+		(
+			_tone_color(formal_tone)
+			if custom_layout
+			else ProviderTheme.COMPOSITE_WARNING
+		)
 	)
-	_add_formal_status_icon(header, header_rect, formal_tone)
 	var back := _hit_button(
 		header,
 		header_rect,
@@ -347,7 +355,6 @@ func _build_header(board: Control, board_rect: Rect2) -> void:
 		"ui.provider-settings.composite.back-control.v1"
 	)
 	back.tooltip_text = "返回"
-	_add_back_arrow(back)
 	back.pressed.connect(func() -> void:
 		ui_action.emit(&"provider_settings.back", {})
 	)
@@ -453,11 +460,6 @@ func _build_provider_selector(
 			provider.get("connection", {}) as Dictionary
 		)
 		_apply_provider_card_skin(card, provider, connection)
-		if (
-			provider_id != _selected_provider_id
-			and str(connection.get("status", "")) == "available"
-		):
-			_add_provider_available_indicator(card, card_rect)
 		_add_provider_identity_medallion(
 			card,
 			card_rect,
@@ -593,8 +595,8 @@ func _build_provider_detail(
 		return
 	_build_selected_header(provider, detail_rect)
 	if bool(provider.get("customGroup", false)):
-		_build_custom_connection_section(provider, detail_rect)
-		_build_custom_model_add_section(provider, detail_rect)
+		_build_key_section(provider, detail_rect)
+		_build_base_url_section(provider, detail_rect)
 	else:
 		_build_key_section(provider, detail_rect)
 		_build_base_url_section(provider, detail_rect)
@@ -669,32 +671,22 @@ func _build_custom_connection_selector(
 	var target_rect := _scaled_rect(
 		_rect(slot.get("wellRect", slot.get("rect", [])))
 	)
-	var selector := OptionButton.new()
+	var connections := provider.get("customConnections", []) as Array
+	var selected_name := "自定义模型"
+	for connection_value: Variant in connections:
+		var connection := connection_value as Dictionary
+		if str(connection.get("providerId", "")) == str(
+			provider.get("providerId", "")
+		):
+			selected_name = str(connection.get("displayName", "兼容接口"))
+			break
+	var selector := Button.new()
 	selector.name = "CustomConnectionSelector"
 	_place(selector, target_rect, region_rect)
 	selector.focus_mode = Control.FOCUS_ALL
-	selector.clip_text = true
-	selector.add_theme_font_override(
-		"font",
-		ProviderTheme.composite_font("body"),
-	)
-	selector.add_theme_font_size_override(
-		"font_size",
-		_scaled_font_size(24),
-	)
-	var chevron := ProviderTheme.custom_connection_chevron_texture()
-	if chevron != null:
-		selector.add_theme_icon_override("arrow", chevron)
-	for color_id: String in [
-		"font_color",
-		"font_hover_color",
-		"font_pressed_color",
-		"font_focus_color",
-	]:
-		selector.add_theme_color_override(
-			color_id,
-			ProviderTheme.COMPOSITE_INK,
-		)
+	selector.mouse_filter = Control.MOUSE_FILTER_STOP
+	selector.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	selector.text = ""
 	for state: String in [
 		"normal",
 		"hover",
@@ -707,6 +699,8 @@ func _build_custom_connection_selector(
 			state,
 			ProviderTheme.transparent_input_style(),
 		)
+	selector.add_theme_constant_override("outline_size", 0)
+	selector.add_theme_constant_override("h_separation", 0)
 	selector.add_to_group("provider_settings_touch_target")
 	selector.set_meta("gate_id", "custom_connection_selector")
 	_register_owner(
@@ -717,88 +711,322 @@ func _build_custom_connection_selector(
 		"composite-transparent-control",
 	)
 	_mark_surface(selector)
-	var selected_index := 0
-	var connections := provider.get("customConnections", []) as Array
-	for index: int in range(connections.size()):
-		var connection := connections[index] as Dictionary
-		selector.add_item(str(connection.get("displayName", "兼容接口")))
-		selector.set_item_metadata(
-			index,
-			str(connection.get("providerId", "")),
-		)
-		if str(connection.get("providerId", "")) == str(
-			provider.get("providerId", "")
-		):
-			selected_index = index
-	if not connections.is_empty():
-		selector.add_separator()
-	var create_index := selector.item_count
-	selector.add_item("＋ 新建兼容连接")
-	selector.set_item_metadata(create_index, {"action": "create"})
-	if bool(provider.get("deletableConnection", false)):
-		var delete_index := selector.item_count
-		selector.add_item("删除当前兼容连接")
-		selector.set_item_metadata(delete_index, {"action": "delete"})
-	if selector.item_count == 0:
-		selector.add_item("自定义模型")
-		selector.disabled = true
-	else:
-		selector.select(selected_index)
-		selector.text = "自定义模型 · %s" % selector.get_item_text(
-			selected_index
-		)
-	selector.item_selected.connect(func(index: int) -> void:
-		var metadata: Variant = selector.get_item_metadata(index)
-		if metadata is Dictionary:
-			selector.select(selected_index)
-			var action := String((metadata as Dictionary).get("action", ""))
-			if action == "create":
-				ui_action.emit(
-					&"provider_settings.create_compatible_connection",
-					{},
-				)
-			elif action == "delete":
-				ui_action.emit(
-					&"ui.request_delete_compatible_connection",
-					{
-						"providerId": str(provider.get("providerId", "")),
-						"displayName": str(provider.get("displayName", "兼容接口")),
-					},
-				)
-			return
-		selector.text = "自定义模型 · %s" % selector.get_item_text(index)
-		ui_action.emit(
-			&"provider_settings.select_provider",
-			{"providerId": str(metadata)},
-		)
-	)
 	owner.add_child(selector)
-	_style_custom_connection_popup(selector)
-
-
-func _style_custom_connection_popup(selector: OptionButton) -> void:
-	var popup := selector.get_popup()
-	for index: int in range(popup.item_count):
-		popup.set_item_as_radio_checkable(index, false)
-		popup.set_item_as_checkable(index, false)
-	popup.add_theme_font_override(
-		"font",
-		ProviderTheme.composite_font("body"),
+	_add_slot_label(
+		owner,
+		region_rect,
+		"selected_provider",
+		"自定义模型 · %s" % selected_name,
+		ProviderTheme.COMPOSITE_INK,
 	)
-	popup.add_theme_font_size_override("font_size", _scaled_font_size(22))
-	popup.add_theme_color_override("font_color", ProviderTheme.COMPOSITE_INK)
-	popup.add_theme_color_override(
-		"font_hover_color",
-		ProviderTheme.COMPOSITE_SUCCESS,
-	)
-	popup.add_theme_stylebox_override(
+	_add_custom_selector_chevron(selector)
+	var dropdown := PopupPanel.new()
+	dropdown.name = "CustomConnectionDropdown"
+	var dropdown_row_count := connections.size() + 1
+	if bool(provider.get("deletableConnection", false)):
+		dropdown_row_count += 2
+	var dropdown_rect := _scaled_rect(Rect2(
+		662.0,
+		274.0,
+		636.0,
+		208.0,
+	))
+	dropdown.add_theme_stylebox_override(
 		"panel",
 		ProviderTheme.custom_dropdown_panel_style(),
 	)
-	popup.add_theme_stylebox_override(
-		"hover",
-		ProviderTheme.custom_dropdown_selected_style(),
+	dropdown.position = Vector2i(dropdown_rect.position.round())
+	dropdown.size = Vector2i(dropdown_rect.size.round())
+	dropdown.unresizable = true
+	dropdown.exclusive = false
+	dropdown.set_meta("gate_id", "custom_connection_dropdown")
+	add_child(dropdown)
+	var scroll := ScrollContainer.new()
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var popup_margin := _scaled_spacing(6.0)
+	scroll.offset_left = popup_margin
+	scroll.offset_top = popup_margin
+	scroll.offset_right = -popup_margin
+	scroll.offset_bottom = -popup_margin
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
+	dropdown.add_child(scroll)
+	var scroll_bar := scroll.get_v_scroll_bar()
+	scroll_bar.custom_minimum_size.x = _scaled_spacing(20.0)
+	scroll_bar.add_theme_constant_override(
+		"minimum_grabber_size",
+		int(_scaled_spacing(48.0)),
 	)
+	for style_name: String in ["scroll", "scroll_focus"]:
+		scroll_bar.add_theme_stylebox_override(
+			style_name,
+			ProviderTheme.custom_dropdown_scroll_track_style(),
+		)
+	for style_name: String in [
+		"grabber",
+		"grabber_highlight",
+		"grabber_pressed",
+	]:
+		scroll_bar.add_theme_stylebox_override(
+			style_name,
+			ProviderTheme.custom_dropdown_scroll_thumb_style(),
+		)
+	var rows := VBoxContainer.new()
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	rows.custom_minimum_size.y = _scaled_spacing(48.0 * dropdown_row_count)
+	rows.add_theme_constant_override("separation", 0)
+	scroll.add_child(rows)
+	for connection_value: Variant in connections:
+		var connection := connection_value as Dictionary
+		_add_custom_selector_row(
+			rows,
+			str(connection.get("displayName", "兼容接口")),
+			str(connection.get("providerId", "")),
+			str(connection.get("providerId", "")) == str(
+				provider.get("providerId", "")
+			),
+			dropdown,
+		)
+	_add_custom_selector_action_row(
+		rows,
+		"＋ 新建兼容连接",
+		"create",
+		provider,
+		dropdown,
+	)
+	if bool(provider.get("deletableConnection", false)):
+		_add_custom_selector_action_row(
+			rows,
+			"重命名当前连接",
+			"rename",
+			provider,
+			dropdown,
+		)
+		_add_custom_selector_action_row(
+			rows,
+			"删除当前兼容连接",
+			"delete",
+			provider,
+			dropdown,
+		)
+	_hide_custom_selector_last_separator(rows)
+	selector.pressed.connect(
+		_toggle_custom_connection_dropdown.bind(dropdown, dropdown_rect)
+	)
+
+
+func _toggle_custom_connection_dropdown(
+	dropdown: PopupPanel,
+	dropdown_rect: Rect2,
+) -> void:
+	if dropdown == null or not is_instance_valid(dropdown):
+		return
+	if dropdown.visible:
+		dropdown.hide()
+		return
+	var popup_rect := Rect2i(
+		Vector2i(dropdown_rect.position.round()),
+		Vector2i(dropdown_rect.size.round()),
+	)
+	dropdown.popup(popup_rect)
+	var first_row := dropdown.find_child(
+		"CustomConnection_*",
+		true,
+		false,
+	) as Control
+	if first_row != null and first_row.focus_mode != Control.FOCUS_NONE:
+		first_row.grab_focus()
+
+
+func _add_custom_selector_chevron(selector: Button) -> void:
+	var texture := ProviderTheme.custom_connection_chevron_texture()
+	if texture == null:
+		return
+	var chevron := TextureRect.new()
+	chevron.name = "CustomConnectionChevron"
+	chevron.position = Vector2(
+		selector.size.x - _scaled_spacing(48.0),
+		(selector.size.y - _scaled_spacing(18.0)) * 0.5,
+	)
+	chevron.size = Vector2(_scaled_spacing(28.0), _scaled_spacing(18.0))
+	chevron.texture = texture
+	chevron.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	chevron.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	chevron.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	chevron.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	selector.add_child(chevron)
+
+
+func _add_custom_selector_row(
+	rows: VBoxContainer,
+	display_name: String,
+	provider_id: String,
+	selected: bool,
+	dropdown: Window,
+) -> void:
+	var row := Button.new()
+	row.name = "CustomConnection_%s" % provider_id
+	row.text = ""
+	row.clip_contents = true
+	row.custom_minimum_size = Vector2(0.0, _scaled_spacing(48.0))
+	row.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_style_custom_selector_row(row, selected)
+	_add_custom_selector_row_label(row, display_name, selected)
+	_add_custom_selector_row_separator(row)
+	if selected:
+		var check := Label.new()
+		check.name = "SelectedCheck"
+		check.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		check.offset_left = -_scaled_spacing(52.0)
+		check.offset_right = -_scaled_spacing(18.0)
+		check.text = "✓"
+		check.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		check.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		check.add_theme_font_override(
+			"font",
+			ProviderTheme.composite_font("body"),
+		)
+		check.add_theme_font_size_override("font_size", _scaled_font_size(24))
+		check.add_theme_color_override(
+			"font_color",
+			ProviderTheme.COMPOSITE_SUCCESS,
+		)
+		check.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(check)
+	row.pressed.connect(func() -> void:
+		dropdown.visible = false
+		ui_action.emit(
+			&"provider_settings.select_provider",
+			{"providerId": provider_id},
+		)
+	)
+	rows.add_child(row)
+
+
+func _add_custom_selector_action_row(
+	rows: VBoxContainer,
+	label: String,
+	action: String,
+	provider: Dictionary,
+	dropdown: Window,
+) -> void:
+	var row := Button.new()
+	row.name = "CustomConnectionAction_%s" % action
+	row.text = ""
+	row.clip_contents = true
+	row.custom_minimum_size = Vector2(0.0, _scaled_spacing(48.0))
+	row.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_style_custom_selector_row(row, false)
+	_add_custom_selector_row_label(row, label, false)
+	_add_custom_selector_row_separator(row)
+	row.pressed.connect(func() -> void:
+		dropdown.visible = false
+		if action == "create":
+			ui_action.emit(
+				&"ui.request_create_compatible_connection",
+				{},
+			)
+		elif action == "rename":
+			ui_action.emit(
+				&"ui.request_rename_compatible_connection",
+				{
+					"providerId": str(provider.get("providerId", "")),
+					"displayName": str(
+						provider.get("displayName", "兼容接口")
+					),
+				},
+			)
+		else:
+			ui_action.emit(
+				&"ui.request_delete_compatible_connection",
+				{
+					"providerId": str(provider.get("providerId", "")),
+					"displayName": str(provider.get("displayName", "兼容接口")),
+				},
+			)
+	)
+	rows.add_child(row)
+
+
+func _add_custom_selector_row_separator(row: Control) -> void:
+	var separator_shadow := ColorRect.new()
+	separator_shadow.name = "RowSeparatorShadow"
+	separator_shadow.anchor_top = 1.0
+	separator_shadow.anchor_right = 1.0
+	separator_shadow.anchor_bottom = 1.0
+	separator_shadow.offset_left = _scaled_spacing(8.0)
+	separator_shadow.offset_top = -_scaled_spacing(2.0)
+	separator_shadow.offset_right = -_scaled_spacing(24.0)
+	separator_shadow.offset_bottom = -_scaled_spacing(1.0)
+	separator_shadow.color = Color("a56e32")
+	separator_shadow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(separator_shadow)
+	var separator_light := ColorRect.new()
+	separator_light.name = "RowSeparatorLight"
+	separator_light.anchor_top = 1.0
+	separator_light.anchor_right = 1.0
+	separator_light.anchor_bottom = 1.0
+	separator_light.offset_left = _scaled_spacing(8.0)
+	separator_light.offset_top = -_scaled_spacing(1.0)
+	separator_light.offset_right = -_scaled_spacing(24.0)
+	separator_light.offset_bottom = 0.0
+	separator_light.color = Color("f2cd9e")
+	separator_light.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(separator_light)
+
+
+func _hide_custom_selector_last_separator(rows: Control) -> void:
+	if rows.get_child_count() <= 0:
+		return
+	var last_row := rows.get_child(rows.get_child_count() - 1) as Control
+	if last_row == null:
+		return
+	for separator_name: String in ["RowSeparatorShadow", "RowSeparatorLight"]:
+		var separator := last_row.get_node_or_null(separator_name) as Control
+		if separator != null:
+			separator.visible = false
+
+
+func _style_custom_selector_row(row: Button, selected: bool) -> void:
+	row.add_theme_font_override("font", ProviderTheme.composite_font("body"))
+	row.add_theme_font_size_override("font_size", _scaled_font_size(22))
+	for color_id: String in [
+		"font_color", "font_hover_color", "font_pressed_color", "font_focus_color",
+	]:
+		row.add_theme_color_override(
+			color_id,
+			ProviderTheme.COMPOSITE_SUCCESS if selected else ProviderTheme.COMPOSITE_INK,
+		)
+	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
+		var style: StyleBox = ProviderTheme.custom_dropdown_neutral_row_style()
+		if selected:
+			style = ProviderTheme.custom_dropdown_selected_style()
+		row.add_theme_stylebox_override(state, style)
+
+
+func _add_custom_selector_row_label(
+	row: Button,
+	text_value: String,
+	selected: bool,
+) -> void:
+	var label := Label.new()
+	label.name = "RowLabel"
+	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	label.offset_left = _scaled_spacing(18.0)
+	label.offset_right = -_scaled_spacing(54.0 if selected else 18.0)
+	label.text = text_value
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.add_theme_font_override("font", ProviderTheme.composite_font("body"))
+	label.add_theme_font_size_override("font_size", _scaled_font_size(20))
+	label.add_theme_color_override(
+		"font_color",
+		ProviderTheme.COMPOSITE_SUCCESS if selected else ProviderTheme.COMPOSITE_INK,
+	)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(label)
 
 
 func _build_custom_connection_section(
@@ -811,6 +1039,7 @@ func _build_custom_connection_section(
 	var provider_id := str(provider.get("providerId", ""))
 	var compatible := (
 		provider_id == "openai-compatible"
+		or provider_id == "ollama-cloud"
 		or bool(provider.get("deletableConnection", false))
 	)
 	var region_rect := _region_rect("api_key_section")
@@ -846,7 +1075,6 @@ func _build_custom_connection_section(
 			CUSTOM_OTHER_BASE_INPUT_RECT,
 			"BaseUrlInput",
 			"custom_base_url_input",
-			true,
 		)
 		_configure_custom_base_url_edit(provider, base_url_edit)
 		_build_custom_connection_label(
@@ -862,7 +1090,6 @@ func _build_custom_connection_section(
 			CUSTOM_OTHER_KEY_INPUT_RECT,
 			"ApiKeyInput",
 			"custom_api_key_input",
-			true,
 		)
 		_configure_custom_key_edit(provider, key_edit)
 		_add_custom_compatible_actions(provider, owner, region_rect)
@@ -954,7 +1181,6 @@ func _build_custom_model_add_section(
 		input_rect,
 		"ApiModelInput",
 		"api_model_input",
-		compatible or str(provider.get("providerId", "")) == "302-ai",
 	)
 	api_model_edit.text = _draft_api_model
 	api_model_edit.placeholder_text = _custom_model_placeholder(provider)
@@ -1488,9 +1714,9 @@ func _custom_action_button(
 	)
 	button.add_theme_font_size_override("font_size", _scaled_font_size(20))
 	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
-		var style: StyleBox = ProviderTheme.exact_action_button_style(
+		var style := ProviderTheme.exact_action_button_style(
 			gate_id,
-			state,
+			"disabled" if state == "disabled" else "normal",
 		)
 		button.add_theme_stylebox_override(
 			state,
@@ -1533,6 +1759,8 @@ func _custom_model_placeholder(provider: Dictionary) -> String:
 	match str(provider.get("providerId", "")):
 		"ollama":
 			return "例如 qwen3:8b"
+		"ollama-cloud":
+			return "例如 gpt-oss:120b"
 		"lm-studio":
 			return "例如 local-model"
 		"302-ai":
@@ -1545,6 +1773,8 @@ func _custom_model_origin_label(provider: Dictionary) -> String:
 	match str(provider.get("providerId", "")):
 		"ollama":
 			return "Ollama · 本地"
+		"ollama-cloud":
+			return "Ollama · 云端"
 		"lm-studio":
 			return "LM Studio · 本地"
 		"302-ai":
@@ -1557,6 +1787,8 @@ func _custom_model_discovery_source_label(provider: Dictionary) -> String:
 	match str(provider.get("providerId", "")):
 		"ollama":
 			return "Ollama"
+		"ollama-cloud":
+			return "Ollama Cloud"
 		"lm-studio":
 			return "LM Studio"
 		"302-ai":
@@ -1636,6 +1868,8 @@ func _build_key_section(
 	provider: Dictionary,
 	detail_rect: Rect2
 ) -> void:
+	var custom_group := bool(provider.get("customGroup", false))
+	var auth_required := bool(provider.get("authRequired", true))
 	var region_rect := _region_rect("api_key_section")
 	var owner := _owner_control(
 		provider_detail,
@@ -1667,14 +1901,16 @@ func _build_key_section(
 	key_edit.secret_character = "•"
 	key_edit.text = _draft_key
 	key_edit.placeholder_text = (
+		"本地服务无需填写"
+		if custom_group and not auth_required
+		else
 		str(key_data.get("maskedValue", "••••••••••••"))
 		if bool(key_data.get("saved", false))
-		else (
-			"本地服务通常无需填写"
-			if not bool(provider.get("authRequired", true))
-			else "请输入 API Key"
-		)
+		else "请输入 API Key"
 	)
+	if custom_group and not auth_required:
+		key_edit.secret = false
+		key_edit.editable = false
 	key_edit.text_changed.connect(func(value: String) -> void:
 		ui_action.emit(&"ui.draft_key", {"value": value})
 		var reveal_button := find_child(
@@ -1688,7 +1924,97 @@ func _build_key_section(
 				and not bool(key_data.get("saved", false))
 			)
 	)
-	_add_key_actions(provider, owner, region_rect)
+	var reveal := _hit_button(
+		owner,
+		region_rect,
+		"show_key",
+		"RevealKeyButton",
+		"key_reveal",
+		"operation_control",
+		"ui.provider-settings.composite.key-reveal.v1"
+	)
+	reveal.disabled = not auth_required or (
+		_draft_key.is_empty()
+		and not bool(key_data.get("saved", false))
+	)
+	reveal.tooltip_text = "隐藏 Key" if _show_key else "显示 Key"
+	reveal.pressed.connect(func() -> void:
+		ui_action.emit(&"ui.toggle_key_visibility", {})
+	)
+	var save := _hit_button(
+		owner,
+		region_rect,
+		"save_key",
+		"SaveKeyButton",
+		"key_save",
+		"operation_control",
+		"ui.provider-settings.composite.key-save.v1"
+	)
+	save.disabled = (
+		(
+			not _action_enabled("saveConnection")
+			or _operation_loading()
+			or (
+				auth_required
+				and _draft_key.is_empty()
+				and not bool(key_data.get("saved", false))
+			)
+		)
+		if custom_group
+		else (
+			_draft_key.is_empty()
+			or not _draft_key_dirty
+			or not _action_enabled("saveKey")
+			or _operation_loading()
+		)
+	)
+	save.tooltip_text = (
+		"保存连接并读取模型" if custom_group else "保存 Key"
+	)
+	save.pressed.connect(func() -> void:
+		if custom_group:
+			ui_action.emit(
+				&"provider_settings.save_connection",
+				{
+					"providerId": str(provider.get("providerId", "")),
+					"baseUrl": (
+						base_url_edit.text
+						if base_url_edit != null
+						else ""
+					),
+					"apiKey": key_edit.text if auth_required else "",
+				},
+			)
+		else:
+			ui_action.emit(
+				&"ui.save_key",
+				{
+					"providerId": str(provider.get("providerId", "")),
+					"apiKey": key_edit.text,
+				}
+			)
+	)
+	var delete := _hit_button(
+		owner,
+		region_rect,
+		"delete_key",
+		"DeleteKeyButton",
+		"key_delete",
+		"operation_control",
+		"ui.provider-settings.composite.key-delete.v1"
+	)
+	delete.disabled = not auth_required or (
+		not _action_enabled("deleteKey")
+		or not bool(key_data.get("saved", false))
+		or _operation_loading()
+	)
+	delete.tooltip_text = "删除 Key"
+	delete.pressed.connect(func() -> void:
+		ui_action.emit(
+			&"provider_settings.delete_key",
+			{"providerId": str(provider.get("providerId", ""))}
+		)
+	)
 
 
 func _add_key_actions(
@@ -1763,6 +2089,7 @@ func _build_base_url_section(
 	provider: Dictionary,
 	detail_rect: Rect2
 ) -> void:
+	var custom_group := bool(provider.get("customGroup", false))
 	var region_rect := _region_rect("base_url_section")
 	var owner := _owner_control(
 		provider_detail,
@@ -1790,18 +2117,28 @@ func _build_base_url_section(
 		"ui.provider-settings.composite.base-url-input.v1"
 	)
 	base_url_edit.text = _draft_base_url
-	base_url_edit.placeholder_text = "留空使用官方默认地址"
+	base_url_edit.placeholder_text = _base_url_placeholder(provider, custom_group)
 	base_url_edit.text_changed.connect(func(value: String) -> void:
 		ui_action.emit(&"ui.draft_base_url", {"value": value})
 	)
 	base_url_edit.text_submitted.connect(func(value: String) -> void:
-		ui_action.emit(
-			&"provider_settings.save_base_url",
-			{
-				"providerId": str(provider.get("providerId", "")),
-				"baseUrl": value,
-			}
-		)
+		if custom_group:
+			ui_action.emit(
+				&"provider_settings.save_connection",
+				{
+					"providerId": str(provider.get("providerId", "")),
+					"baseUrl": value,
+					"apiKey": key_edit.text if key_edit != null else "",
+				},
+			)
+		else:
+			ui_action.emit(
+				&"provider_settings.save_base_url",
+				{
+					"providerId": str(provider.get("providerId", "")),
+					"baseUrl": value,
+				}
+			)
 	)
 	var hidden_save := Button.new()
 	hidden_save.name = "SaveBaseUrlButton"
@@ -1820,6 +2157,27 @@ func _build_base_url_section(
 		)
 	)
 	owner.add_child(hidden_save)
+
+
+func _base_url_placeholder(provider: Dictionary, custom_group: bool) -> String:
+	if not custom_group:
+		var default_url := str(provider.get("defaultBaseUrl", "")).strip_edges()
+		return (
+			"例如 %s" % default_url
+			if not default_url.is_empty()
+			else "请输入服务地址"
+		)
+	match str(provider.get("providerId", "")):
+		"ollama":
+			return "例如 http://127.0.0.1:11434/v1"
+		"ollama-cloud":
+			return "例如 https://ollama.com/api"
+		"lm-studio":
+			return "例如 http://127.0.0.1:1234/v1"
+		"302-ai":
+			return "例如 https://api.302.ai/v1"
+		_:
+			return "例如 https://api.example.com/v1"
 
 
 func _build_standard_dynamic_model_editor(
@@ -1889,10 +2247,16 @@ func _build_models_section(
 	provider: Dictionary,
 	detail_rect: Rect2
 ) -> void:
-	var compatible := str(provider.get("providerId", "")) == "openai-compatible"
-	var dynamic_models := bool(provider.get("customModels", false))
-	var custom_layout := bool(provider.get("customGroup", false))
-	var compact_custom := custom_layout and not compatible
+	var provider_id := str(provider.get("providerId", ""))
+	var auto_catalog_models := (
+		provider_id == "volcengine-ark"
+		or bool(provider.get("customGroup", false))
+	)
+	var dynamic_models := (
+		bool(provider.get("customModels", false))
+		and not auto_catalog_models
+	)
+	var custom_layout := false
 	var region_rect := _region_rect("models_section")
 	var owner := _owner_control(
 		provider_detail,
@@ -1911,10 +2275,8 @@ func _build_models_section(
 		"推理接入点 ID" if dynamic_models and not custom_layout else "模型与能力",
 		ProviderTheme.COMPOSITE_INK,
 		(
-			Rect2(700.0, 600.0, 124.0, 31.0)
-			if compatible
-			else CUSTOM_MODELS_LABEL_RECT
-			if compact_custom
+			CUSTOM_MODELS_LABEL_RECT
+			if custom_layout
 			else Rect2()
 		),
 	)
@@ -1932,10 +2294,8 @@ func _build_models_section(
 		"%d / %d" % [_model_page + 1, page_count],
 		ProviderTheme.COMPOSITE_INK,
 		(
-			Rect2(1245.0, 596.0, 108.0, 34.0)
-			if compatible
-			else CUSTOM_MODEL_PAGE_RECT
-			if compact_custom
+			CUSTOM_MODEL_PAGE_RECT
+			if custom_layout
 			else STANDARD_DYNAMIC_MODEL_PAGE_RECT
 			if dynamic_models
 			else Rect2()
@@ -1950,10 +2310,8 @@ func _build_models_section(
 		false,
 		_model_page <= 0,
 		(
-			Rect2(1190.0, 593.0, 46.0, 42.0)
-			if compatible
-			else CUSTOM_MODEL_PAGE_PREVIOUS_RECT
-			if compact_custom
+			CUSTOM_MODEL_PAGE_PREVIOUS_RECT
+			if custom_layout
 			else STANDARD_DYNAMIC_MODEL_PREVIOUS_RECT
 			if dynamic_models
 			else Rect2()
@@ -1971,10 +2329,8 @@ func _build_models_section(
 		true,
 		_model_page >= page_count - 1,
 		(
-			Rect2(1362.0, 593.0, 46.0, 42.0)
-			if compatible
-			else CUSTOM_MODEL_PAGE_NEXT_RECT
-			if compact_custom
+			CUSTOM_MODEL_PAGE_NEXT_RECT
+			if custom_layout
 			else STANDARD_DYNAMIC_MODEL_NEXT_RECT
 			if dynamic_models
 			else Rect2()
@@ -1989,9 +2345,9 @@ func _build_models_section(
 		var card_rect := (
 			_scaled_rect(Rect2(
 				682.0 if index == 0 else 1066.0,
-				635.0 if compatible else CUSTOM_MODEL_CARD_Y,
+				CUSTOM_MODEL_CARD_Y,
 				363.0,
-				105.0 if compatible else CUSTOM_MODEL_CARD_HEIGHT,
+				CUSTOM_MODEL_CARD_HEIGHT,
 			))
 			if custom_layout
 			else _hit_rect("model_%d" % index)
@@ -2041,11 +2397,11 @@ func _build_models_section(
 			),
 			(
 				Rect2(
-					710.0 if index == 0 else 1109.0,
-					642.0 if compatible else CUSTOM_MODEL_NAME_Y,
-					270.0,
-					38.0,
-				)
+						710.0 if index == 0 else 1109.0,
+						CUSTOM_MODEL_NAME_Y,
+						270.0,
+						38.0,
+					)
 				if custom_layout
 				else Rect2()
 			),
@@ -2057,13 +2413,8 @@ func _build_models_section(
 			(
 				_custom_model_origin_label(provider)
 				if custom_layout
-				else (
-					"火山方舟 · 自定义接入点"
-					if bool(model.get("custom", false))
-					and str(provider.get("providerId", "")) == "volcengine-ark"
-					else _capability_labels(
-						model.get("capabilities", []) as Array
-					)
+				else _capability_labels(
+					model.get("capabilities", []) as Array
 				)
 			),
 			(
@@ -2073,11 +2424,11 @@ func _build_models_section(
 			),
 			(
 				Rect2(
-					710.0 if index == 0 else 1109.0,
-					686.0 if compatible else CUSTOM_MODEL_ORIGIN_Y,
-					305.0,
-					45.0 if compatible else 42.0,
-				)
+						710.0 if index == 0 else 1109.0,
+						CUSTOM_MODEL_ORIGIN_Y,
+						305.0,
+						45.0,
+					)
 				if custom_layout
 				else Rect2()
 			),
@@ -2085,7 +2436,7 @@ func _build_models_section(
 		if bool(model.get("enabled", false)):
 			_apply_selected_model_typography(name_label, "body")
 			_apply_selected_model_typography(capability_label, "small")
-		if bool(model.get("custom", false)):
+		if custom_layout and bool(model.get("custom", false)):
 			_add_custom_model_delete_button(
 				provider,
 				card,
@@ -2126,6 +2477,43 @@ func _build_models_section(
 			Rect2(700.0, 684.0, 708.0, 34.0),
 		)
 		empty_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if models.is_empty() and auto_catalog_models:
+		var catalog_loading := _is_model_catalog_operation(provider) and (
+			str((_view_model.get("operation", {}) as Dictionary).get("status", ""))
+			== "loading"
+		)
+		var catalog_failed := _is_model_catalog_operation(provider) and (
+			str((_view_model.get("operation", {}) as Dictionary).get("status", ""))
+			in ["error", "rejected"]
+		)
+		_add_slot_label(
+			owner,
+			region_rect,
+			"model_0_name",
+			(
+				"正在读取可用模型…"
+				if catalog_loading
+				else "模型读取失败"
+				if catalog_failed
+				else "尚未获取模型"
+			),
+			ProviderTheme.COMPOSITE_MUTED,
+		)
+		_add_slot_label(
+			owner,
+			region_rect,
+			"model_0_capabilities",
+			(
+				"请稍候"
+				if catalog_loading
+				else _public_operation_error_message(
+					_view_model.get("error", {}) as Dictionary
+				)
+				if catalog_failed
+				else "填写并保存 API Key 后自动读取"
+			),
+			ProviderTheme.COMPOSITE_MUTED,
+		)
 	if models.size() == 1 and _model_page == 0:
 		_add_slot_label(
 			owner,
@@ -2133,16 +2521,7 @@ func _build_models_section(
 			"model_1_name",
 			"暂无其他模型",
 			ProviderTheme.COMPOSITE_MUTED,
-			(
-				Rect2(
-					1109.0,
-					642.0 if compatible else CUSTOM_MODEL_NAME_Y,
-					270.0,
-					38.0,
-				)
-				if custom_layout
-				else Rect2()
-			),
+			Rect2(),
 		)
 		_add_slot_label(
 			owner,
@@ -2154,16 +2533,7 @@ func _build_models_section(
 				else "该服务商当前仅提供一个居民模型"
 			),
 			ProviderTheme.COMPOSITE_MUTED,
-			(
-				Rect2(
-					1109.0,
-					686.0 if compatible else CUSTOM_MODEL_ORIGIN_Y,
-					305.0,
-					45.0 if compatible else 42.0,
-				)
-				if custom_layout
-				else Rect2()
-			),
+			Rect2(),
 		)
 
 
@@ -2176,6 +2546,7 @@ func _pagination_button(
 	point_right: bool,
 	disabled: bool,
 	source_rect_override: Rect2 = Rect2(),
+	embedded_well: bool = false,
 ) -> Button:
 	var button := _hit_button_from_rect(
 		parent,
@@ -2196,7 +2567,11 @@ func _pagination_button(
 	var art := TextureRect.new()
 	art.name = "PaginationArt"
 	_apply_visual_rect(art, button)
-	art.texture = ProviderTheme.pagination_texture()
+	art.texture = (
+		ProviderTheme.provider_back_arrow_texture()
+		if embedded_well
+		else ProviderTheme.pagination_texture()
+	)
 	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	art.flip_h = point_right
@@ -2340,24 +2715,53 @@ func _build_connection_section(
 		if typeof(error_value) == TYPE_DICTIONARY
 		else {}
 	)
-	var tone := _operation_tone(
-		str(operation.get("status", "idle")),
-		str(error_data.get("kind", "")),
-		str(connection.get("status", ""))
+	var catalog_operation := _is_model_catalog_operation(provider)
+	var connection_operation := (
+		{"status": "idle"}
+		if catalog_operation
+		else operation
 	)
-	var display_tone := "loading" if _operation_loading() else tone
-	_add_connection_status_plate(
-		owner,
-		region_rect,
-		display_tone,
+	var connection_error_data := {} if catalog_operation else error_data
+	var connection_loading := _operation_loading() and not catalog_operation
+	var custom_layout := false
+	var tone := (
+		_operation_tone(
+			str(connection_operation.get("status", "idle")),
+			str(connection_error_data.get("kind", "")),
+			str(connection.get("status", "")),
+		)
+		if custom_layout
+		else _standard_operation_tone(
+			str(connection_operation.get("status", "idle")),
+			str(connection_error_data.get("kind", "")),
+			str(connection.get("status", "")),
+		)
 	)
+	var display_tone := "loading" if connection_loading else tone
+	if custom_layout:
+		_add_connection_status_plate(
+			owner,
+			region_rect,
+			display_tone,
+		)
 	status_label = _add_slot_label(
 		owner,
 		region_rect,
 		"connection_title",
-		_operation_title(operation, connection, error_data),
+		(
+			_operation_title(
+				connection_operation,
+				connection,
+				connection_error_data,
+			)
+			if custom_layout
+			else _standard_operation_title(
+				connection_operation,
+				connection,
+				connection_error_data,
+			)
+		),
 		_tone_color(display_tone),
-		Rect2(738.0, 765.0, 410.0, 30.0),
 	)
 	var status_message := _add_slot_label(
 		owner,
@@ -2365,48 +2769,59 @@ func _build_connection_section(
 		"connection_message",
 		(
 			"正在等待 %s 响应" % _checking_provider_name(provider)
-			if _operation_loading()
-			else _operation_message(operation, connection, error_data)
+			if custom_layout and connection_loading
+			else _operation_message(
+				connection_operation,
+				connection,
+				connection_error_data,
+			)
 		),
 		ProviderTheme.COMPOSITE_MUTED,
-		Rect2(738.0, 797.0, 410.0, 29.0),
 	)
-	check_button = _hit_button_from_rect(
+	if custom_layout:
+		for label: Label in [status_label, status_message]:
+			label.position.x += _scaled_spacing(28.0)
+			label.size.x = maxf(
+				0.0,
+				label.size.x - _scaled_spacing(28.0),
+			)
+	check_button = _hit_button(
 		owner,
 		region_rect,
-		_scaled_rect(Rect2(1185.0, 758.0, 262.0, 78.0)),
+		"check_connection",
 		"CheckConnectionButton",
 		"check_connection",
 		"operation_control",
-		"ui.provider-settings.composite.check-connection.v1",
-		"composite-transparent-control",
+		"ui.provider-settings.composite.check-connection.v1"
 	)
 	check_button.text = (
 		"检查中…"
-		if _operation_loading()
+		if connection_loading
 		else "重新检查"
-		if tone == "error"
+		if custom_layout and display_tone in ["error", "warning"]
 		else "检查连接"
 	)
+	if custom_layout:
+		for state: String in ["normal", "hover", "pressed", "focus"]:
+			check_button.add_theme_stylebox_override(
+				state,
+				ProviderTheme.exact_action_button_style(
+					"check_connection_normal",
+					"normal",
+				),
+			)
+		check_button.add_theme_stylebox_override(
+			"disabled",
+			ProviderTheme.exact_action_button_style(
+				"check_connection_loading"
+			),
+		)
 	check_button.disabled = (
 		not _action_enabled("checkConnection")
 		or _operation_loading()
 	)
 	check_button.tooltip_text = "检查连接"
-	for state: String in ["normal", "hover", "pressed", "focus"]:
-		check_button.add_theme_stylebox_override(
-			state,
-			ProviderTheme.exact_action_button_style(
-				"check_connection_normal"
-			),
-		)
-	check_button.add_theme_stylebox_override(
-		"disabled",
-		ProviderTheme.exact_action_button_style(
-			"check_connection_loading"
-		),
-	)
-	if _operation_loading():
+	if custom_layout and connection_loading:
 		check_button.add_theme_stylebox_override(
 			"disabled",
 			ProviderTheme.exact_action_button_style(
@@ -2426,7 +2841,87 @@ func _build_connection_section(
 	)
 	ProviderButtonMotion.set_loading_state(
 		check_button,
-		_operation_loading(),
+		connection_loading,
+	)
+
+
+func _is_model_catalog_operation(provider: Dictionary) -> bool:
+	var operation := _view_model.get("operation", {}) as Dictionary
+	var intent := str(operation.get("intent", ""))
+	if str(provider.get("providerId", "")) == "volcengine-ark":
+		return intent in [
+			"provider_settings.save_key",
+			"provider_settings.discover_models",
+		]
+	return (
+		bool(provider.get("customGroup", false))
+		and intent in [
+			"provider_settings.save_connection",
+			"provider_settings.discover_models",
+		]
+	)
+
+
+func _standard_operation_title(
+	operation: Dictionary,
+	connection: Dictionary,
+	error_data: Dictionary,
+) -> String:
+	match str(operation.get("status", "idle")):
+		"loading":
+			return "正在检查连接"
+		"success":
+			return (
+				"开发预览检查通过"
+				if _is_placeholder_data()
+				else "连接检查通过"
+			)
+		"rejected":
+			return "配置需要修正"
+		"error":
+			var connection_label := str(
+				connection.get("label", "")
+			).strip_edges()
+			return (
+				connection_label
+				if not connection_label.is_empty()
+				else "连接检查失败"
+			)
+		"disabled":
+			return (
+				"开发预览不可用"
+				if _is_placeholder_data()
+				else "当前无法检查连接"
+			)
+		_:
+			return str(connection.get("label", "等待检查"))
+
+
+func _standard_operation_tone(
+	operation_status: String,
+	error_kind: String,
+	provider_status: String,
+) -> String:
+	if operation_status == "success" or provider_status == "available":
+		return "success"
+	if operation_status == "disabled":
+		return "disabled"
+	if (
+		operation_status == "rejected"
+		or error_kind == "rate_limit"
+		or provider_status in ["rate_limited", "checking"]
+	):
+		return "warning"
+	if operation_status == "error":
+		return "error"
+	return (
+		"error"
+		if provider_status in [
+			"auth_failed",
+			"timeout",
+			"network_unavailable",
+		]
+		else "warning"
 	)
 
 
@@ -2440,7 +2935,7 @@ func _add_connection_status_plate(
 		return
 	var plate := TextureRect.new()
 	plate.name = "ConnectionStatusPlate"
-	var plate_rect := _scaled_rect(Rect2(662.0, 758.0, 506.0, 78.0))
+	var plate_rect := _scaled_rect(Rect2(662.0, 741.0, 506.0, 94.0))
 	_place(plate, plate_rect, region_rect)
 	plate.texture = texture
 	plate.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -2780,7 +3275,7 @@ func _line_edit_for_slot(
 		Color(ProviderTheme.COMPOSITE_SUCCESS, 0.32)
 	)
 	for state: String in ["normal", "focus", "read_only"]:
-		var style: StyleBox = ProviderTheme.custom_input_field_style()
+		var style: StyleBox = ProviderTheme.transparent_input_style()
 		style.content_margin_left = _scaled_spacing(26.0)
 		style.content_margin_top = _scaled_spacing(4.0)
 		style.content_margin_right = _scaled_spacing(20.0)
@@ -3042,11 +3537,18 @@ func _is_placeholder_data() -> bool:
 
 
 func _formal_status_text() -> String:
-	match str((_view_model.get("operation", {}) as Dictionary).get("status", "idle")):
-		"loading":
-			return "正在检查"
-		"error", "rejected":
-			return "需要处理"
+	var provider := _find_provider(_selected_provider_id)
+	if bool(provider.get("customGroup", false)):
+		match str(
+			(_view_model.get("operation", {}) as Dictionary).get(
+				"status",
+				"idle",
+			)
+		):
+			"loading":
+				return "正在检查"
+			"error", "rejected":
+				return "需要处理"
 	var published := str(
 		_data.get("formalStatusLabel", "")
 	).strip_edges()
@@ -3215,6 +3717,7 @@ func _operation_tone(
 		if provider_status in [
 			"auth_failed",
 			"timeout",
+			"network_error",
 			"network_unavailable",
 		]
 		else "warning"

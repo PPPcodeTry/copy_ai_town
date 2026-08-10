@@ -108,10 +108,18 @@ const CUSTOM_DROPDOWN_ROOT := (
 	RUNTIME_ASSET_ROOT + "/composite/dropdowns"
 )
 const CUSTOM_DROPDOWN_PANEL_PATH := (
-	CUSTOM_DROPDOWN_ROOT + "/custom_connection_dropdown_panel_v1.png"
+	CUSTOM_DROPDOWN_ROOT + "/custom_connection_dropdown_panel_clean_v2.png"
 )
 const CUSTOM_DROPDOWN_SELECTED_PATH := (
 	CUSTOM_DROPDOWN_ROOT + "/custom_connection_dropdown_selected_v1.png"
+)
+const CUSTOM_DROPDOWN_SCROLL_TRACK_PATH := (
+	"res://assets/ui/common/scrollbar/wood_v1/variants/dropdown_short/"
+	+ "scrollbar_track_wood_v1_dropdown_short.png"
+)
+const CUSTOM_DROPDOWN_SCROLL_THUMB_PATH := (
+	"res://assets/ui/common/scrollbar/wood_v1/variants/dropdown_short/"
+	+ "scrollbar_thumb_wood_v1_dropdown_short.png"
 )
 const CUSTOM_MODEL_DISCOVERY_PANEL_PATH := (
 	CUSTOM_DROPDOWN_ROOT + "/custom_model_discovery_panel_v1.png"
@@ -372,6 +380,8 @@ static func runtime_assets_ready() -> bool:
 		CUSTOM_MODEL_ADD_ROW_PATH,
 		CUSTOM_DROPDOWN_PANEL_PATH,
 		CUSTOM_DROPDOWN_SELECTED_PATH,
+		CUSTOM_DROPDOWN_SCROLL_TRACK_PATH,
+		CUSTOM_DROPDOWN_SCROLL_THUMB_PATH,
 		CUSTOM_MODEL_DISCOVERY_PANEL_PATH,
 		CUSTOM_MODEL_EMPTY_PANEL_PATH,
 		STATUS_LOADING_PLATE_PATH,
@@ -405,6 +415,8 @@ static func composite_background_path(provider: Dictionary) -> String:
 	match str(provider.get("providerId", "")):
 		"302-ai":
 			return CUSTOM_302_BACKGROUND_PATH
+		"ollama-cloud":
+			return CUSTOM_COMPATIBLE_BACKGROUND_PATH
 		"openai-compatible":
 			return CUSTOM_COMPATIBLE_BACKGROUND_PATH
 		_:
@@ -465,7 +477,9 @@ static func provider_card_style(
 	state: String
 ) -> StyleBox:
 	var asset_path := PROVIDER_CARD_NEUTRAL_PATH
-	if selected:
+	if state == "disabled":
+		asset_path = PROVIDER_CARD_DISABLED_PATH
+	elif selected:
 		asset_path = PROVIDER_CARD_SELECTED_PATH
 	elif tone == "disabled":
 		asset_path = PROVIDER_CARD_DISABLED_PATH
@@ -735,8 +749,8 @@ static func custom_section_texture(section_id: String) -> Texture2D:
 static func custom_dropdown_panel_style() -> StyleBox:
 	return _texture_style(
 		CUSTOM_DROPDOWN_PANEL_PATH,
-		[18, 18, 18, 18],
 		[12, 8, 12, 8],
+		[6, 6, 6, 6],
 	)
 
 
@@ -745,6 +759,26 @@ static func custom_dropdown_selected_style() -> StyleBox:
 		CUSTOM_DROPDOWN_SELECTED_PATH,
 		[10, 8, 10, 8],
 		[10, 4, 10, 4],
+	)
+
+
+static func custom_dropdown_neutral_row_style() -> StyleBox:
+	return StyleBoxEmpty.new()
+
+
+static func custom_dropdown_scroll_track_style() -> StyleBox:
+	return _texture_style(
+		CUSTOM_DROPDOWN_SCROLL_TRACK_PATH,
+		[8, 28, 8, 28],
+		[0, 0, 0, 0],
+	)
+
+
+static func custom_dropdown_scroll_thumb_style() -> StyleBox:
+	return _texture_style(
+		CUSTOM_DROPDOWN_SCROLL_THUMB_PATH,
+		[12, 24, 12, 24],
+		[0, 0, 0, 0],
 	)
 
 

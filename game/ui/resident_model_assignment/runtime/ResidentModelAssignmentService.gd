@@ -28,6 +28,7 @@ const CUSTOM_MODEL_PROVIDER_IDS := [
 	"openai-compatible",
 	"302-ai",
 	"ollama",
+	"ollama-cloud",
 	"lm-studio",
 ]
 const INTENT_TO_ACTION := {

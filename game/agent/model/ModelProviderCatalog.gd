@@ -11,6 +11,12 @@ const XiaomiMiMoModelProviderScript := preload("res://agent/model/XiaomiMiMoMode
 const GenericOpenAICompatibleModelProviderScript := preload(
 	"res://agent/model/GenericOpenAICompatibleModelProvider.gd"
 )
+const ThreeZeroTwoAIModelProviderScript := preload(
+	"res://agent/model/ThreeZeroTwoAIModelProvider.gd"
+)
+const OllamaCloudModelProviderScript := preload(
+	"res://agent/model/OllamaCloudModelProvider.gd"
+)
 const FakeModelProviderScript := preload("res://agent/model/FakeModelProvider.gd")
 const SUPPORTED_INPUT_MODALITIES := ["text", "image"]
 
@@ -43,6 +49,9 @@ func _init(include_defaults := true) -> void:
 		"https://api.302.ai/v1",
 		true,
 		_create_302_ai,
+		{
+			"catalog_model_labels": ThreeZeroTwoAIModelProviderScript.TOWN_MODEL_LABELS,
+		},
 	)
 	_register_openai_compatible_preset(
 		"ollama",
@@ -51,6 +60,15 @@ func _init(include_defaults := true) -> void:
 		"http://127.0.0.1:11434/v1",
 		false,
 		_create_ollama,
+	)
+	_register_openai_compatible_preset(
+		"ollama-cloud",
+		"Ollama Cloud",
+		"Ollama Cloud API",
+		"https://ollama.com/api",
+		true,
+		_create_ollama_cloud,
+		{"native_ollama_api": true},
 	)
 	_register_openai_compatible_preset(
 		"lm-studio",
@@ -95,8 +113,9 @@ func _register_openai_compatible_preset(
 	default_endpoint: String,
 	auth_required: bool,
 	factory: Callable,
+	extra_descriptor: Dictionary = {},
 ) -> Dictionary:
-	var provider_result := register_provider({
+	var descriptor := {
 		"id": provider_id,
 		"label": label,
 		"transport_label": transport_label,
@@ -106,7 +125,10 @@ func _register_openai_compatible_preset(
 		"custom_models": true,
 		"custom_group": true,
 		"model_catalog_supported": true,
-	}, factory)
+	}
+	for key: Variant in extra_descriptor:
+		descriptor[key] = extra_descriptor[key]
+	var provider_result := register_provider(descriptor, factory)
 	if provider_result.get("ok") != true:
 		return provider_result
 	var model_result := register_model({
@@ -412,7 +434,7 @@ func _create_dynamic_openai_compatible(
 
 
 func _create_302_ai(request_host: Node, config: Dictionary) -> RefCounted:
-	return GenericOpenAICompatibleModelProviderScript.new(
+	return ThreeZeroTwoAIModelProviderScript.new(
 		request_host,
 		null,
 		_compatible_preset_config(config, {
@@ -438,6 +460,22 @@ func _create_ollama(request_host: Node, config: Dictionary) -> RefCounted:
 			"default_endpoint": "http://127.0.0.1:11434/v1",
 			"api_key_required": false,
 			"api_key_environment": "OLLAMA_API_KEY",
+			"timeout_seconds": 300.0,
+		}),
+	)
+
+
+func _create_ollama_cloud(request_host: Node, config: Dictionary) -> RefCounted:
+	return OllamaCloudModelProviderScript.new(
+		request_host,
+		null,
+		_compatible_preset_config(config, {
+			"provider_id": "ollama-cloud",
+			"provider_label": "Ollama Cloud",
+			"transport_label": "Ollama Cloud API",
+			"default_endpoint": "https://ollama.com/api",
+			"api_key_required": true,
+			"api_key_environment": "OLLAMA_API_KEY",
 			"timeout_seconds": 120.0,
 		}),
 	)
@@ -454,7 +492,7 @@ func _create_lm_studio(request_host: Node, config: Dictionary) -> RefCounted:
 			"default_endpoint": "http://127.0.0.1:1234/v1",
 			"api_key_required": false,
 			"api_key_environment": "LM_STUDIO_API_KEY",
-			"timeout_seconds": 120.0,
+			"timeout_seconds": 300.0,
 		}),
 	)
 

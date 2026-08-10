@@ -24,6 +24,10 @@ const CompositeDesktop = preload(
 const FormalDialog = preload(
 	"res://ui/common/formal_dialog/FormalConfirmationDialog.gd"
 )
+const CONNECTION_NAME_INPUT_TEXTURE := preload(
+	"res://assets/ui/common/formal_dialog_v1/runtime/"
+	+ "formal_dialog_connection_name_input_v2_1024x192.png"
+)
 
 const SCOPE := &"provider_settings"
 const MAP_TEXTURE_PATH := "res://world/maps/town/assets/town.png"
@@ -45,6 +49,10 @@ var _draft_provider_id := ""
 var _discard_confirmation: FormalDialog
 var _delete_model_confirmation: FormalDialog
 var _delete_connection_confirmation: FormalDialog
+var _connection_name_dialog: FormalDialog
+var _connection_name_edit: LineEdit
+var _connection_name_mode := ""
+var _connection_name_provider_id := ""
 var _delete_model_blocked_dialog: FormalDialog
 var _delete_model_blocked_revision := -1
 var _pending_model_deletion: Dictionary = {}
@@ -58,6 +66,7 @@ var _layout_profile := ""
 var _layout_root: Control
 var _rebuild_queued := false
 var _show_key := false
+var _last_auto_discovery_request_id := ""
 var _provider_page := -1
 var _model_page := -1
 var _key_edit: LineEdit
@@ -81,6 +90,7 @@ func _ready() -> void:
 	_build_discard_confirmation()
 	_build_delete_model_confirmation()
 	_build_delete_connection_confirmation()
+	_build_connection_name_dialog()
 	_build_delete_model_blocked_dialog()
 	if _view_model.is_empty():
 		_view_model = _empty_view_model()
@@ -175,6 +185,87 @@ func _build_delete_connection_confirmation() -> void:
 		_pending_connection_deletion.clear()
 	)
 	add_child(_delete_connection_confirmation)
+
+
+func _build_connection_name_dialog() -> void:
+	if is_instance_valid(_connection_name_dialog):
+		return
+	_connection_name_dialog = FormalDialog.new()
+	_connection_name_dialog.name = "CompatibleConnectionNameDialog"
+	_connection_name_dialog.semantic_kind = "info"
+	_connection_name_dialog.custom_content_frame_texture = (
+		CONNECTION_NAME_INPUT_TEXTURE
+	)
+	_connection_name_dialog.cancel_button_text = "取消"
+	_connection_name_dialog.confirmed.connect(_confirm_connection_name)
+	_connection_name_dialog.canceled.connect(_clear_connection_name_dialog)
+	_connection_name_edit = LineEdit.new()
+	_connection_name_edit.name = "CompatibleConnectionNameInput"
+	_connection_name_edit.max_length = 48
+	_connection_name_edit.placeholder_text = "例如 公司中转站"
+	_connection_name_edit.text_submitted.connect(func(_value: String) -> void:
+		_confirm_connection_name()
+	)
+	_connection_name_dialog.set_custom_content(_connection_name_edit)
+	add_child(_connection_name_dialog)
+
+
+func _request_create_compatible_connection() -> void:
+	_connection_name_mode = "create"
+	_connection_name_provider_id = ""
+	_connection_name_edit.text = ""
+	_connection_name_dialog.title = "新建兼容连接"
+	_connection_name_dialog.dialog_text = (
+		"填写一个容易识别的名称。也可以暂时留空，保存地址后会自动使用服务域名。"
+	)
+	_connection_name_dialog.ok_button_text = "创建连接"
+	_connection_name_dialog.popup_centered()
+	_connection_name_edit.grab_focus.call_deferred()
+
+
+func _request_rename_compatible_connection(
+	provider_id: String,
+	display_name: String,
+) -> void:
+	if provider_id.is_empty():
+		return
+	_connection_name_mode = "rename"
+	_connection_name_provider_id = provider_id
+	_connection_name_edit.text = display_name
+	_connection_name_edit.select_all()
+	_connection_name_dialog.title = "重命名兼容连接"
+	_connection_name_dialog.dialog_text = (
+		"名称只用于区分连接，不会改变服务地址、模型或居民分配。"
+	)
+	_connection_name_dialog.ok_button_text = "保存名称"
+	_connection_name_dialog.popup_centered()
+	_connection_name_edit.grab_focus.call_deferred()
+
+
+func _confirm_connection_name() -> void:
+	var display_name := _connection_name_edit.text.strip_edges()
+	if _connection_name_mode == "create":
+		_dispatch_intent(
+			&"provider_settings.create_compatible_connection",
+			{"displayName": display_name},
+		)
+	elif _connection_name_mode == "rename":
+		_dispatch_intent(
+			&"provider_settings.rename_compatible_connection",
+			{
+				"providerId": _connection_name_provider_id,
+				"displayName": display_name,
+			},
+		)
+	_connection_name_dialog.visible = false
+	_clear_connection_name_dialog()
+
+
+func _clear_connection_name_dialog() -> void:
+	_connection_name_mode = ""
+	_connection_name_provider_id = ""
+	if is_instance_valid(_connection_name_edit):
+		_connection_name_edit.text = ""
 
 
 func _request_delete_custom_model(provider_id: String, api_model: String) -> void:
@@ -295,6 +386,7 @@ func bind_adapter(adapter: Object) -> void:
 	_draft_base_url = ""
 	_draft_api_model = ""
 	_show_key = false
+	_last_auto_discovery_request_id = ""
 	_provider_page = -1
 	_model_page = -1
 	_pending_provider_selection.clear()
@@ -396,6 +488,13 @@ func apply_view_model(view_model: Dictionary) -> bool:
 			_draft_key_baseline = ""
 			_draft_key_dirty = false
 			_show_key = false
+			var request_id := String(operation.get("requestId", ""))
+			if request_id != _last_auto_discovery_request_id:
+				_last_auto_discovery_request_id = request_id
+				call_deferred(
+					"_auto_discover_saved_connection",
+					_selected_provider_id,
+				)
 		elif (
 			operation_status_text == "success"
 			and operation_intent == "provider_settings.save_api_model"
@@ -419,6 +518,18 @@ func apply_view_model(view_model: Dictionary) -> bool:
 		_show_key = false
 	_queue_layout_rebuild()
 	return true
+
+
+func _auto_discover_saved_connection(provider_id: String) -> void:
+	if provider_id.is_empty() or not is_inside_tree():
+		return
+	var provider := _find_provider(provider_id)
+	if provider.is_empty() or not bool(provider.get("customGroup", false)):
+		return
+	_dispatch_intent(
+		&"provider_settings.discover_models",
+		{"providerId": provider_id},
+	)
 
 
 func _present_delete_model_blocked_error(
@@ -1058,6 +1169,13 @@ func _on_composite_ui_action(
 			)
 		&"ui.request_delete_compatible_connection":
 			_request_delete_compatible_connection(
+				str(payload.get("providerId", "")),
+				str(payload.get("displayName", "兼容接口")),
+			)
+		&"ui.request_create_compatible_connection":
+			_request_create_compatible_connection()
+		&"ui.request_rename_compatible_connection":
+			_request_rename_compatible_connection(
 				str(payload.get("providerId", "")),
 				str(payload.get("displayName", "兼容接口")),
 			)
@@ -1958,7 +2076,10 @@ func _build_models_section(provider: Dictionary) -> Control:
 		"模型与能力",
 		"启用后参与连接检查"
 	))
-	if bool(provider.get("customModels", false)):
+	if (
+		bool(provider.get("customModels", false))
+		and str(provider.get("providerId", "")) != "volcengine-ark"
+	):
 		column.add_child(_build_api_model_editor(provider))
 	var grid := GridContainer.new()
 	grid.name = "ModelGrid"
@@ -1968,7 +2089,18 @@ func _build_models_section(provider: Dictionary) -> Control:
 	column.add_child(grid)
 	var models := provider.get("models", []) as Array
 	if models.is_empty():
-		grid.add_child(_empty_state("当前 Provider 没有可展示模型。"))
+		grid.add_child(_empty_state(
+			(
+				"正在读取可用模型……"
+				if (
+					str(provider.get("providerId", "")) == "volcengine-ark"
+					and _operation_loading()
+				)
+				else "保存 API Key 后将自动读取可用模型。"
+				if str(provider.get("providerId", "")) == "volcengine-ark"
+				else "当前 Provider 没有可展示模型。"
+			)
+		))
 	else:
 		for model_value: Variant in models:
 			grid.add_child(_model_card(
@@ -2610,9 +2742,9 @@ func _custom_providers() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for preset_id: String in [
 		"ollama",
+		"ollama-cloud",
 		"lm-studio",
 		"302-ai",
-		"openai-compatible",
 	]:
 		for provider: Dictionary in discovered:
 			if str(provider.get("providerId", "")) == preset_id:
@@ -2621,10 +2753,12 @@ func _custom_providers() -> Array[Dictionary]:
 	for provider: Dictionary in discovered:
 		if str(provider.get("providerId", "")) in [
 			"ollama",
+			"ollama-cloud",
 			"lm-studio",
 			"302-ai",
-			"openai-compatible",
 		]:
+			continue
+		if str(provider.get("providerId", "")) == "openai-compatible":
 			continue
 		result.append(provider)
 	return result
@@ -2639,6 +2773,8 @@ func _visible_providers() -> Array[Dictionary]:
 		var provider := provider_value as Dictionary
 		if not _provider_belongs_to_custom_group(provider):
 			official_providers.append(provider)
+			continue
+		if str(provider.get("providerId", "")) == "openai-compatible":
 			continue
 		if (
 			custom_group.is_empty()
@@ -2672,6 +2808,7 @@ func _provider_belongs_to_custom_group(provider: Dictionary) -> bool:
 		"openai-compatible",
 		"302-ai",
 		"ollama",
+		"ollama-cloud",
 		"lm-studio",
 	] or provider_id.begins_with("openai-compatible-")
 

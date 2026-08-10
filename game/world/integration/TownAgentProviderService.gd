@@ -30,6 +30,7 @@ var _configuration_generation := 0
 var _health_request_sequence := 0
 var _health_by_target: Dictionary = {}
 var _pending_health_requests: Dictionary = {}
+var _pending_model_catalog_providers: Array[RefCounted] = []
 
 
 func configure(config_value: Variant, request_host_value: Variant = null) -> Dictionary:
@@ -352,13 +353,22 @@ func request_model_catalog(
 	var provider: Object = creation.get("provider")
 	if provider == null or not provider.has_method("request_model_catalog"):
 		return _failure("PROVIDER_MODEL_CATALOG_UNSUPPORTED", false)
+	var retained_provider := provider as RefCounted
+	_pending_model_catalog_providers.append(retained_provider)
+	var complete_and_release := func(result: Dictionary) -> void:
+		_pending_model_catalog_providers.erase(retained_provider)
+		on_complete.call(result)
 	var started_value: Variant = provider.call(
 		"request_model_catalog",
-		on_complete,
+		complete_and_release,
 	)
 	if not started_value is Dictionary:
+		_pending_model_catalog_providers.erase(retained_provider)
 		return _failure("PROVIDER_MODEL_CATALOG_REQUEST_FAILED", true)
-	return started_value as Dictionary
+	var started := started_value as Dictionary
+	if not bool(started.get("accepted", false)):
+		_pending_model_catalog_providers.erase(retained_provider)
+	return started
 
 
 func request_health_check(
@@ -1116,14 +1126,39 @@ func _configured_api_models(provider_id: String) -> Array[String]:
 
 
 func _dynamic_model_descriptor(provider_id: String, model_id: String) -> Dictionary:
+	var provider_descriptor := _catalog.descriptor(provider_id) as Dictionary
+	var model_family := _model_release_family(model_id)
+	var model_labels := (
+		provider_descriptor.get("catalog_model_labels", {}) as Dictionary
+	)
+	var multimodal_families := (
+		provider_descriptor.get("catalog_multimodal_families", []) as Array
+	)
 	return {
 		"id": model_id,
-		"label": model_id,
+		"label": String(model_labels.get(
+			model_family,
+			model_labels.get(model_family.to_lower(), model_id),
+		)),
 		"provider_id": provider_id,
-		"input_modalities": ["text"],
+		"input_modalities": (
+			["text", "image"]
+			if model_family in multimodal_families
+			else ["text"]
+		),
 		"runtime_modalities_configurable": true,
 		"custom": true,
 	}
+
+
+func _model_release_family(model_id: String) -> String:
+	var separator := model_id.rfind("-")
+	if separator < 0:
+		return model_id
+	var suffix := model_id.substr(separator + 1)
+	if suffix.is_valid_int() and suffix.length() in [6, 8]:
+		return model_id.substr(0, separator)
+	return model_id
 
 
 func _rebuild_catalog_for_configs(provider_configs: Dictionary) -> Dictionary:

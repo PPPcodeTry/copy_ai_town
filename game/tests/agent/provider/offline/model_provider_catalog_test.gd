@@ -38,6 +38,7 @@ func _initialize() -> void:
 			"openai-compatible",
 			"302-ai",
 			"ollama",
+			"ollama-cloud",
 			"lm-studio",
 			"fake",
 		],
@@ -47,14 +48,8 @@ func _initialize() -> void:
 	_expect_equal(_model_ids(catalog, "deepseek"), ["deepseek-v4-flash", "deepseek-v4-pro"], "DeepSeek exposes V4 models")
 	_expect_equal(
 		_model_ids(catalog, "volcengine-ark"),
-		[
-			"doubao-seed-2-0-pro-260215",
-			"doubao-seed-2-0-lite-260428",
-			"doubao-seed-2-0-mini-260428",
-			"doubao-seed-2-1-pro-260628",
-			"doubao-seed-2-1-turbo-260628",
-		],
-		"Ark exposes Doubao Seed 2.0 and 2.1",
+		[],
+		"Ark no longer ships a stale preset model list",
 	)
 	_expect_equal(
 		_model_ids(catalog, "aliyun-bailian"),
@@ -91,6 +86,11 @@ func _initialize() -> void:
 	_expect_equal(_model_ids(catalog, "openai-compatible"), ["custom"], "generic OpenAI compatibility has one custom model entry")
 	_expect_equal(_model_ids(catalog, "302-ai"), ["custom"], "302.AI accepts player model ids")
 	_expect_equal(_model_ids(catalog, "ollama"), ["custom"], "Ollama accepts local model ids")
+	_expect_equal(
+		_model_ids(catalog, "ollama-cloud"),
+		["custom"],
+		"Ollama Cloud accepts models returned for the player's cloud key",
+	)
 	_expect_equal(_model_ids(catalog, "lm-studio"), ["custom"], "LM Studio accepts local model ids")
 	_expect_equal(_model_ids(catalog, "fake"), ["fake"], "Fake is represented by the same two-level catalog")
 	_expect_equal(
@@ -104,12 +104,33 @@ func _initialize() -> void:
 		"Ollama does not require a placeholder API key",
 	)
 	_expect_equal(
+		catalog.call("descriptor", "ollama-cloud").get("default_endpoint"),
+		"https://ollama.com/api",
+		"Ollama Cloud uses the official direct API base URL",
+	)
+	_expect_equal(
+		catalog.call("descriptor", "ollama-cloud").get("auth_required"),
+		true,
+		"direct Ollama Cloud access requires its API key",
+	)
+	_expect_equal(
 		catalog.call("descriptor", "lm-studio").get("auth_required"),
 		false,
 		"LM Studio does not require a placeholder API key",
 	)
 	_expect_equal(catalog.call("default_model_id"), "deepseek-v4-flash", "DeepSeek remains the global default")
-	_expect_equal(catalog.call("default_model_id", "volcengine-ark"), "doubao-seed-2-0-lite-260428", "Ark defaults to Seed 2.0 Lite")
+	_expect_equal(
+		catalog.call("default_model_id", "volcengine-ark"),
+		"",
+		"Ark waits for the saved API key to return the account model list",
+	)
+	_expect_equal(
+		catalog.call("descriptor", "volcengine-ark").get(
+			"model_catalog_supported"
+		),
+		true,
+		"Ark advertises API-key model discovery",
+	)
 	_expect_equal(catalog.call("default_model_id", "aliyun-bailian"), "qwen3.7-plus", "Bailian defaults to Qwen 3.7 Plus")
 	_expect_equal(catalog.call("default_model_id", "kimi"), "kimi-k3", "Kimi defaults to K3")
 	_expect_equal(catalog.call("default_model_id", "zhipu-glm"), "glm-5.2", "GLM defaults to 5.2")
@@ -541,7 +562,7 @@ func _test_multiple_compatible_connections() -> void:
 	var created_first := settings.call(
 		"dispatch",
 		"provider_settings.create_compatible_connection",
-		{},
+		{"displayName": "公司中转站"},
 	) as Dictionary
 	_expect_equal(created_first.get("ok"), true, "the first extra relay connection can be created")
 	var first_id := String(
@@ -606,6 +627,35 @@ func _test_multiple_compatible_connections() -> void:
 		settings.call("get_view_model") as Dictionary,
 		second_id,
 	)
+	_expect_equal(
+		projected_first.get("displayName"),
+		"公司中转站",
+		"a player-defined relay name survives connection saving",
+	)
+	_expect_equal(
+		projected_second.get("displayName"),
+		"兼容 · relay-two.example",
+		"an unnamed relay receives a readable host-based name",
+	)
+	var renamed_second := settings.call(
+		"dispatch",
+		"provider_settings.rename_compatible_connection",
+		{"providerId": second_id, "displayName": "备用中转站"},
+	) as Dictionary
+	_expect_equal(
+		renamed_second.get("ok"),
+		true,
+		"a dynamic compatible connection can be renamed",
+	)
+	projected_second = _provider_from_view_model(
+		settings.call("get_view_model") as Dictionary,
+		second_id,
+	)
+	_expect_equal(
+		projected_second.get("displayName"),
+		"备用中转站",
+		"the renamed connection is projected to the selector",
+	)
 	_expect_equal(projected_first.get("customGroup"), true, "the first relay stays inside Custom Models")
 	_expect_equal(projected_second.get("customGroup"), true, "the second relay stays inside Custom Models")
 	provider_service.set("_bindings_by_resident_id", {
@@ -632,6 +682,14 @@ func _test_multiple_compatible_connections() -> void:
 		{"providerId": second_id},
 	) as Dictionary
 	_expect_equal(deleted.get("ok"), true, "an unused relay connection can be deleted")
+	_expect_equal(
+		(settings.call("get_view_model") as Dictionary).get("data", {}).get(
+			"selectedProviderId",
+			"",
+		),
+		first_id,
+		"deleting the selected relay stays inside Custom Models and selects the remaining relay",
+	)
 	_expect_equal(
 		_provider_from_view_model(settings.call("get_view_model"), second_id).is_empty(),
 		true,
@@ -784,6 +842,44 @@ func _test_settings_service_custom_model_flow() -> void:
 		request_host,
 	) as Dictionary
 	_expect_equal(bound.get("ok"), true, "settings service binds the real provider runtime")
+	var discovered_ark := settings.call(
+		"_store_discovered_models",
+		"volcengine-ark",
+		[
+			"doubao-seed-2-1-pro-260628",
+			"deepseek-v4-pro-260425",
+			"glm-5-2-260617",
+		],
+	) as Dictionary
+	_expect_equal(
+		discovered_ark.get("ok"),
+		true,
+		"Ark discovery stores the models returned for the saved API key",
+	)
+	settings.call("refresh")
+	var ark_provider := _provider_from_view_model(
+		settings.call("get_view_model") as Dictionary,
+		"volcengine-ark",
+	)
+	var ark_model_ids: Array[String] = []
+	var ark_model_labels: Array[String] = []
+	for model: Dictionary in ark_provider.get("models", []):
+		ark_model_ids.append(String(model.get("modelId", "")))
+		ark_model_labels.append(String(model.get("displayName", "")))
+	_expect_equal(
+		ark_model_ids,
+		[
+			"doubao-seed-2-1-pro-260628",
+			"deepseek-v4-pro-260425",
+			"glm-5-2-260617",
+		],
+		"Ark model cards come only from the discovered account catalog",
+	)
+	_expect_equal(
+		ark_model_labels,
+		["豆包 Seed 2.1 Pro", "DeepSeek V4 Pro", "GLM 5.2"],
+		"Ark model cards use player-facing names instead of raw API ids",
+	)
 	var saved_local_connection := settings.call(
 		"dispatch",
 		"provider_settings.save_connection",
@@ -846,9 +942,14 @@ func _test_settings_service_custom_model_flow() -> void:
 	var discovered := settings.call(
 		"_store_discovered_models",
 		"ollama",
-		["qwen3:8b", "gemma3:4b", "qwen3:8b"],
+		[
+			"qwen3:8b",
+			"gemma3:4b",
+			"qwen3:8b",
+			"nomic-embedding-text",
+		],
 	) as Dictionary
-	_expect_equal(discovered.get("ok"), true, "discovered local models are offered for selection")
+	_expect_equal(discovered.get("ok"), true, "discovered local chat models are saved automatically")
 	settings.call("refresh")
 	view_model = settings.call("get_view_model") as Dictionary
 	provider = _provider_from_view_model(view_model, "ollama")
@@ -857,13 +958,13 @@ func _test_settings_service_custom_model_flow() -> void:
 		model_ids.append(String(model.get("modelId", "")))
 	_expect_equal(
 		model_ids,
-		["qwen3:8b"],
-		"discovery does not silently save every returned model",
+		["qwen3:8b", "gemma3:4b"],
+		"discovery saves unique chat models and filters embedding models",
 	)
 	_expect_equal(
 		provider.get("discoveredModels"),
-		["qwen3:8b", "gemma3:4b"],
-		"automatic discovery exposes stable unique model ids",
+		[],
+		"automatic discovery no longer leaves a second manual import list",
 	)
 	var saved_discovered_model := settings.call(
 		"dispatch",
@@ -873,7 +974,7 @@ func _test_settings_service_custom_model_flow() -> void:
 	_expect_equal(
 		saved_discovered_model.get("ok"),
 		true,
-		"a discovered model is saved only after player selection",
+		"an automatically discovered model can still be selected",
 	)
 	var runtime := settings.call("runtime_configuration") as Dictionary
 	_expect_equal(runtime.get("providerId"), "ollama", "local model becomes the selected provider")
@@ -943,6 +1044,11 @@ func _test_custom_model_ui_grouping() -> void:
 				"displayName": "LM Studio（本地）",
 				"customModels": true,
 			},
+			{
+				"providerId": "ollama-cloud",
+				"displayName": "Ollama Cloud",
+				"customModels": true,
+			},
 		],
 	})
 	var visible: Array[Dictionary] = screen._visible_providers()
@@ -973,14 +1079,14 @@ func _test_custom_model_ui_grouping() -> void:
 	_expect_equal(
 		(visible[2].get("customConnections", []) as Array).size(),
 		3,
-		"the custom model group preserves every compatible connection",
+		"the custom model group hides the empty legacy compatible placeholder",
 	)
 	var custom_connection_ids: Array[String] = []
 	for provider: Dictionary in visible[2].get("customConnections", []) as Array:
 		custom_connection_ids.append(String(provider.get("providerId", "")))
 	_expect_equal(
 		custom_connection_ids,
-		["ollama", "lm-studio", "openai-compatible"],
+		["ollama", "ollama-cloud", "lm-studio"],
 		"the custom connection selector keeps the approved local-first order",
 	)
 	screen.free()

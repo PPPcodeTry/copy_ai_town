@@ -244,6 +244,10 @@ func _build_request_body(model_request: Dictionary) -> Dictionary:
 	var body := super._build_request_body(model_request)
 	body["model"] = _api_model()
 	body.erase("max_tokens")
+	# Ollama 与 LM Studio 的 OpenAI-compatible 端点支持 reasoning_effort=none。
+	# 居民决策需要把输出预算留给最终 JSON，避免思考模型只返回推理过程。
+	if _provider_id() in ["ollama", "lm-studio"]:
+		body["reasoning_effort"] = "none"
 	return body
 
 

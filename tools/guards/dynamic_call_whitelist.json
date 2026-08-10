@@ -265,6 +265,30 @@
       "func": "_project_injuries",
       "call": "variable:.call(source_actor_id)",
       "reason": "本次 PR 引入的动态派发保留，需通过门禁白名单。"
+    },
+    {
+      "path": "game/agent/model/VolcengineArkModelProvider.gd",
+      "func": "request_model_catalog",
+      "call": "string:Callable(self, \"_on_unfiltered_model_catalog\")",
+      "reason": "方舟目录先复用兼容接口异步请求，再由本 Provider 过滤为居民可用模型；Callable 只绑定固定完成方法。"
+    },
+    {
+      "path": "game/agent/model/VolcengineArkModelProvider.gd",
+      "func": "_on_unfiltered_model_catalog",
+      "call": "variable:.call(_filter_town_model_catalog(result))",
+      "reason": "调用请求方传入的 Callable 返回已过滤的方舟模型目录。"
+    },
+    {
+      "path": "game/world/integration/TownAgentProviderService.gd",
+      "func": "request_model_catalog",
+      "call": "string:.call( \"request_model_catalog\", complete_and_release, )",
+      "reason": "Provider 由目录工厂按运行时配置创建，经过接口检查后调用共同的模型目录契约，并在完成时释放引用。"
+    },
+    {
+      "path": "game/world/integration/TownAgentProviderService.gd",
+      "func": "request_model_catalog",
+      "call": "variable:.call(result)",
+      "reason": "模型目录完成后调用请求方传入的 Callable，并释放异步请求期间保留的 Provider。"
     }
   ]
 }

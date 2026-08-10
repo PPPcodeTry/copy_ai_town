@@ -12,6 +12,9 @@ const CONFIG_STORE := preload(
 const CREDENTIAL_STORE := preload(
 	"res://world/presentation/ui/TownProviderCredentialStore.gd"
 )
+const THREE_ZERO_TWO_PROVIDER := preload(
+	"res://agent/model/ThreeZeroTwoAIModelProvider.gd"
+)
 const REQUIRED_PROVIDER_METHODS: Array[String] = [
 	"configure",
 	"get_health_snapshot",
@@ -29,6 +32,7 @@ const PROVIDER_DISPLAY_NAMES := {
 	"kimi": "Kimi",
 	"lm-studio": "LM Studio（本地）",
 	"ollama": "Ollama（本地）",
+	"ollama-cloud": "Ollama Cloud",
 	"openai-compatible": "其他兼容接口",
 	"zhipu-glm": "智谱",
 }
@@ -62,7 +66,7 @@ const MODEL_CAPABILITIES := {
 
 var _provider_service: Object
 var _request_host: Node
-var _store: RefCounted = CONFIG_STORE.new()
+var _store: TownProviderConfigStore = CONFIG_STORE.new()
 var _credential_store: TownProviderCredentialStore = CREDENTIAL_STORE.new()
 var _credential_keys: Dictionary = {}
 var _stored_config: Dictionary = {
@@ -85,7 +89,7 @@ var _dirty_health_providers: Dictionary = {}
 
 func configure_store(path: String) -> Dictionary:
 	_discovered_models_by_provider.clear()
-	var configured := _store.call("configure", path) as Dictionary
+	var configured := _store.configure(path)
 	if not bool(configured.get("ok", false)):
 		return configured
 	var credential_path := "%s.credentials.enc" % path.get_basename()
@@ -309,6 +313,12 @@ func dispatch(intent: Variant, payload: Dictionary = {}) -> Dictionary:
 			result = _check_connection(payload, request_id)
 		"provider_settings.save_key":
 			result = _save_key(payload)
+			if (
+				bool(result.get("ok", false))
+				and String(payload.get("providerId", "")) == "volcengine-ark"
+			):
+				_publish_operation(operation, {})
+				result = _discover_models(payload, request_id)
 		"provider_settings.delete_key":
 			result = _delete_key(payload)
 		"provider_settings.save_base_url":
@@ -316,7 +326,9 @@ func dispatch(intent: Variant, payload: Dictionary = {}) -> Dictionary:
 		"provider_settings.save_connection":
 			result = _save_connection(payload)
 		"provider_settings.create_compatible_connection":
-			result = _create_compatible_connection()
+			result = _create_compatible_connection(payload)
+		"provider_settings.rename_compatible_connection":
+			result = _rename_compatible_connection(payload)
 		"provider_settings.delete_compatible_connection":
 			result = _delete_compatible_connection(payload)
 		"provider_settings.save_api_model":
@@ -697,8 +709,16 @@ func _save_key(payload: Dictionary) -> Dictionary:
 		)
 	)
 	provider["enabled"] = true
+	if provider_id == "volcengine-ark":
+		provider["apiModels"] = []
 	providers[provider_id] = provider
 	candidate["providers"] = providers
+	if provider_id == "volcengine-ark":
+		var selected_models := (
+			candidate.get("selectedModelByProvider", {}) as Dictionary
+		)
+		selected_models.erase(provider_id)
+		candidate["selectedModelByProvider"] = selected_models
 	candidate["selectedProviderId"] = provider_id
 	var persisted := _persist_candidate_reconfigure_and_reload(
 		candidate,
@@ -789,7 +809,13 @@ func _save_base_url(payload: Dictionary) -> Dictionary:
 	)
 
 
-func _create_compatible_connection() -> Dictionary:
+func _create_compatible_connection(payload: Dictionary) -> Dictionary:
+	var display_name_value: Variant = payload.get("displayName", "")
+	if typeof(display_name_value) != TYPE_STRING:
+		return _failure("PROVIDER_CONNECTION_NAME_INVALID", false)
+	var requested_display_name := String(display_name_value).strip_edges()
+	if not _compatible_display_name_is_valid(requested_display_name, true):
+		return _failure("PROVIDER_CONNECTION_NAME_INVALID", false)
 	var candidate := _stored_config.duplicate(true)
 	var providers := candidate.get("providers", {}) as Dictionary
 	var index := 2
@@ -800,7 +826,11 @@ func _create_compatible_connection() -> Dictionary:
 	providers[provider_id] = {
 		"enabled": true,
 		"connectionType": COMPATIBLE_PROFILE_TYPE,
-		"displayName": "兼容接口 %d" % index,
+		"displayName": (
+			requested_display_name
+			if not requested_display_name.is_empty()
+			else "兼容接口 %d" % index
+		),
 		"authRequired": true,
 		"apiModels": [],
 	}
@@ -814,6 +844,40 @@ func _create_compatible_connection() -> Dictionary:
 	if bool(persisted.get("ok", false)):
 		_selected_provider_id = provider_id
 	return persisted
+
+
+func _rename_compatible_connection(payload: Dictionary) -> Dictionary:
+	var provider_result := _required_canonical_id(payload, "providerId")
+	var display_name_value: Variant = payload.get("displayName", "")
+	if (
+		not bool(provider_result.get("ok", false))
+		or typeof(display_name_value) != TYPE_STRING
+	):
+		return _failure("PROVIDER_CONNECTION_NAME_INVALID", false)
+	var provider_id := String(provider_result.get("value", ""))
+	var requested_display_name := String(display_name_value).strip_edges()
+	if not _compatible_display_name_is_valid(requested_display_name, true):
+		return _failure("PROVIDER_CONNECTION_NAME_INVALID", false)
+	var candidate := _stored_config.duplicate(true)
+	var providers := candidate.get("providers", {}) as Dictionary
+	var provider := (providers.get(provider_id, {}) as Dictionary).duplicate(true)
+	if not _is_dynamic_compatible_profile(provider_id, provider):
+		return _failure("PROVIDER_CONNECTION_RENAME_FORBIDDEN", false)
+	if requested_display_name.is_empty():
+		var endpoint := String(provider.get("endpoint", ""))
+		requested_display_name = (
+			_compatible_display_name(endpoint)
+			if not endpoint.is_empty()
+			else "兼容接口"
+		)
+	provider["displayName"] = requested_display_name
+	providers[provider_id] = provider
+	candidate["providers"] = providers
+	return _persist_candidate_reconfigure_and_reload(
+		candidate,
+		"连接名称已更新。",
+		provider_id,
+	)
 
 
 func _delete_compatible_connection(payload: Dictionary) -> Dictionary:
@@ -857,7 +921,10 @@ func _delete_compatible_connection(payload: Dictionary) -> Dictionary:
 	selected_models.erase(provider_id)
 	candidate["selectedModelByProvider"] = selected_models
 	if String(candidate.get("selectedProviderId", "")) == provider_id:
-		candidate["selectedProviderId"] = "openai-compatible"
+		candidate["selectedProviderId"] = _remaining_custom_provider_id(
+			candidate_providers,
+			provider_id,
+		)
 	var persisted := _persist_candidate_reconfigure_and_reload(
 		candidate,
 		"兼容连接已删除。",
@@ -875,6 +942,33 @@ func _delete_compatible_connection(payload: Dictionary) -> Dictionary:
 		return restored
 	_apply_provider_configuration()
 	return persisted
+
+
+func _remaining_custom_provider_id(
+	providers: Dictionary,
+	deleted_provider_id: String,
+) -> String:
+	for preferred_id: String in [
+		"ollama",
+		"ollama-cloud",
+		"lm-studio",
+		"302-ai",
+	]:
+		if preferred_id != deleted_provider_id and providers.has(preferred_id):
+			return preferred_id
+	var provider_ids: Array[String] = []
+	for provider_id_value: Variant in providers.keys():
+		var provider_id := String(provider_id_value)
+		if provider_id == deleted_provider_id:
+			continue
+		var provider := providers.get(provider_id, {}) as Dictionary
+		if _is_dynamic_compatible_profile(provider_id, provider):
+			provider_ids.append(provider_id)
+	provider_ids.sort()
+	if not provider_ids.is_empty():
+		return provider_ids[0]
+	# 内置 Ollama 配置即使尚未写进存档，也始终存在于自定义模型分组。
+	return "ollama"
 
 
 func _save_connection(payload: Dictionary) -> Dictionary:
@@ -926,7 +1020,13 @@ func _save_connection(payload: Dictionary) -> Dictionary:
 		provider.erase("endpoint")
 	else:
 		provider["endpoint"] = endpoint
-	if _is_dynamic_compatible_profile(provider_id, provider) and not endpoint.is_empty():
+	if (
+		_is_dynamic_compatible_profile(provider_id, provider)
+		and not endpoint.is_empty()
+		and _compatible_display_name_is_automatic(
+			String(provider.get("displayName", ""))
+		)
+	):
 		provider["displayName"] = _compatible_display_name(endpoint)
 	provider.erase("api_key")
 	if not api_key_ref.is_empty():
@@ -1146,18 +1246,99 @@ func _store_discovered_models(
 		if typeof(value) != TYPE_STRING:
 			continue
 		var model_id := (value as String).strip_edges()
-		if not model_id.is_empty() and model_id not in discovered:
+		if (
+			not model_id.is_empty()
+			and _is_discoverable_chat_model(model_id)
+			and model_id not in discovered
+		):
 			discovered.append(model_id)
 	if discovered.is_empty():
 		return _failure("PROVIDER_MODEL_CATALOG_EMPTY", false)
-	_discovered_models_by_provider[provider_id] = discovered.duplicate()
-	return {
-		"ok": true,
-		"errorCode": "",
-		"retryable": false,
-		"message": "已读取 %d 个模型，请选择后添加。" % discovered.size(),
-		"models": discovered.duplicate(),
-	}
+	var candidate := _stored_config.duplicate(true)
+	var providers := candidate.get("providers", {}) as Dictionary
+	var provider := (
+		providers.get(provider_id, {}) as Dictionary
+	).duplicate(true)
+	# 刷新列表时不能静默移除仍由居民使用的旧模型。
+	for stored_model: String in _stored_api_models(provider):
+		if stored_model in discovered:
+			continue
+		if _resident_ids_using_model(provider_id, stored_model).is_empty():
+			continue
+		discovered.append(stored_model)
+	var selected_models := (
+		candidate.get("selectedModelByProvider", {}) as Dictionary
+	)
+	var selected_model := String(
+		selected_models.get(provider_id, "")
+	).strip_edges()
+	if selected_model in discovered:
+		discovered.erase(selected_model)
+		discovered.push_front(selected_model)
+	else:
+		selected_models[provider_id] = discovered[0]
+	provider["apiModels"] = discovered.duplicate()
+	provider["enabled"] = true
+	providers[provider_id] = provider
+	candidate["providers"] = providers
+	candidate["selectedModelByProvider"] = selected_models
+	candidate["selectedProviderId"] = provider_id
+	var message := (
+		"已从火山方舟读取 %d 个可用模型。" % discovered.size()
+		if provider_id == "volcengine-ark"
+		else "已自动读取并加入 %d 个可用模型。" % discovered.size()
+	)
+	var persisted := _persist_candidate_reconfigure_and_reload(
+		candidate,
+		message,
+		provider_id,
+	)
+	if bool(persisted.get("ok", false)):
+		_discovered_models_by_provider.erase(provider_id)
+		persisted["models"] = discovered.duplicate()
+	return persisted
+
+
+func _is_discoverable_chat_model(model_id: String) -> bool:
+	var normalized := model_id.to_lower()
+	for marker: String in [
+		"embedding",
+		"rerank",
+		"moderation",
+		"seedream",
+		"seedance",
+		"text-to-image",
+		"image-generation",
+		"image-edit",
+		"text-to-video",
+		"video-generation",
+		"speech",
+		"transcri",
+		"whisper",
+		"-tts",
+		"tts-",
+		"music-generation",
+		"hyper3d",
+		"seed3d",
+		"hitem3d",
+	]:
+		if marker in normalized:
+			return false
+	return true
+
+
+func _resident_ids_using_model(provider_id: String, model_id: String) -> Array:
+	if not _provider_service.has_method("resident_ids_using_model"):
+		return []
+	var resident_ids_value: Variant = _provider_service.resident_ids_using_model(
+		provider_id,
+		model_id,
+	)
+	return (
+		(resident_ids_value as Array).duplicate()
+		if resident_ids_value is Array
+		else []
+	)
 
 
 func _set_enabled(payload: Dictionary) -> Dictionary:
@@ -1369,7 +1550,7 @@ func _on_health_request_completed(
 
 
 func _load_stored_config() -> Dictionary:
-	var loaded := _store.call("load_config") as Dictionary
+	var loaded := _store.load_config()
 	if not bool(loaded.get("ok", false)):
 		return loaded
 	_stored_config = (loaded.get("config", {}) as Dictionary).duplicate(true)
@@ -1390,20 +1571,49 @@ func _load_stored_config() -> Dictionary:
 	var migration_result := _migrate_plaintext_credentials()
 	if not bool(migration_result.get("ok", false)):
 		return migration_result
+	var catalog_migration := _sanitize_legacy_302_catalog()
+	if not bool(catalog_migration.get("ok", false)):
+		return catalog_migration
 	_selected_provider_id = String(_stored_config.get("selectedProviderId", ""))
 	return {"ok": true, "errorCode": "", "retryable": false}
 
 
+func _sanitize_legacy_302_catalog() -> Dictionary:
+	var providers := _stored_config.get("providers", {}) as Dictionary
+	if not providers.has("302-ai"):
+		return _success()
+	var provider := (providers.get("302-ai", {}) as Dictionary).duplicate(true)
+	var stored_models := _stored_api_models(provider)
+	# 旧版本曾把 302.AI 的全品类目录（数百项）原样写入存档。
+	# 小规模列表可能是玩家手动维护的，不在这里擅自改动。
+	if stored_models.size() <= 50:
+		return _success()
+	var filtered := THREE_ZERO_TWO_PROVIDER.filter_town_models(stored_models)
+	if filtered.is_empty():
+		return _success()
+	provider["apiModels"] = filtered.duplicate()
+	providers["302-ai"] = provider
+	_stored_config["providers"] = providers
+	var selected_models := (
+		_stored_config.get("selectedModelByProvider", {}) as Dictionary
+	)
+	var selected := String(selected_models.get("302-ai", ""))
+	if selected not in filtered:
+		selected_models["302-ai"] = filtered[0]
+	_stored_config["selectedModelByProvider"] = selected_models
+	return _store.save_config(_stored_config)
+
+
 func _persist_candidate_and_reconfigure(candidate: Dictionary) -> Dictionary:
 	var previous := _stored_config.duplicate(true)
-	var persisted := _store.call("save_config", candidate) as Dictionary
+	var persisted := _store.save_config(candidate)
 	if not bool(persisted.get("ok", false)):
 		return persisted
 	_stored_config = candidate.duplicate(true)
 	var configured := _apply_provider_configuration()
 	if bool(configured.get("ok", false)):
 		return configured
-	var rollback := _store.call("save_config", previous) as Dictionary
+	var rollback := _store.save_config(previous)
 	_stored_config = previous
 	var runtime_rollback := _apply_provider_configuration()
 	if (
@@ -1532,14 +1742,14 @@ func _migrate_plaintext_credentials() -> Dictionary:
 		_stored_config["providers"] = providers
 		if not bool(saved.get("ok", false)):
 			var scrubbed := (
-				_store.call("save_config", _stored_config) as Dictionary
+				_store.save_config(_stored_config)
 			)
 			if not bool(scrubbed.get("ok", false)):
 				return scrubbed
 			return saved
 	if changed:
 		_stored_config["providers"] = providers
-		return _store.call("save_config", _stored_config) as Dictionary
+		return _store.save_config(_stored_config)
 	return _success()
 
 
@@ -1720,6 +1930,10 @@ func _actions(data: Dictionary) -> Dictionary:
 			"provider_settings.create_compatible_connection",
 			has_providers,
 		),
+		"renameCompatibleConnection": _action(
+			"provider_settings.rename_compatible_connection",
+			has_providers,
+		),
 		"deleteCompatibleConnection": _action(
 			"provider_settings.delete_compatible_connection",
 			has_providers,
@@ -1850,6 +2064,31 @@ func _compatible_display_name(endpoint: String) -> String:
 		return "兼容接口"
 	var label := "兼容 · %s" % host
 	return label.left(48)
+
+
+func _compatible_display_name_is_valid(
+	display_name: String,
+	allow_empty: bool = false,
+) -> bool:
+	if display_name.is_empty():
+		return allow_empty
+	if display_name != display_name.strip_edges() or display_name.length() > 48:
+		return false
+	for character: String in display_name:
+		var codepoint := character.unicode_at(0)
+		if codepoint < 32 or codepoint == 127:
+			return false
+	return true
+
+
+func _compatible_display_name_is_automatic(display_name: String) -> bool:
+	return (
+		display_name.is_empty()
+		or display_name == "兼容接口"
+		or display_name == "新建兼容连接"
+		or display_name.begins_with("兼容接口 ")
+		or display_name.begins_with("兼容 · ")
+	)
 
 
 func _restore_credential(
