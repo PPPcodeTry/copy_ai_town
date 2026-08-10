@@ -47,6 +47,19 @@ const CUSTOM_LOADING_BUTTON_PATH := (
 	RUNTIME_ASSET_ROOT
 	+ "/base_ninepatch/buttons_loading/button_loading_v2.png"
 )
+const EXACT_BUTTON_ROOT := RUNTIME_ASSET_ROOT + "/exact_buttons"
+const SAVE_CONNECTION_DISABLED_PATH := (
+	EXACT_BUTTON_ROOT + "/save_connection_disabled_v3.png"
+)
+const DISCOVER_MODELS_DISABLED_PATH := (
+	EXACT_BUTTON_ROOT + "/discover_models_disabled_v3.png"
+)
+const ADD_MODEL_DISABLED_PATH := (
+	EXACT_BUTTON_ROOT + "/add_model_disabled_v3.png"
+)
+const CHECK_CONNECTION_LOADING_PATH := (
+	EXACT_BUTTON_ROOT + "/check_connection_loading_v3.png"
+)
 const CUSTOM_SECTION_ROOT := (
 	RUNTIME_ASSET_ROOT + "/composite/custom_sections"
 )
@@ -256,6 +269,10 @@ static func runtime_assets_ready() -> bool:
 		CUSTOM_SUCCESS_BUTTON_PATH,
 		CUSTOM_SECONDARY_BUTTON_PATH,
 		CUSTOM_LOADING_BUTTON_PATH,
+		SAVE_CONNECTION_DISABLED_PATH,
+		DISCOVER_MODELS_DISABLED_PATH,
+		ADD_MODEL_DISABLED_PATH,
+		CHECK_CONNECTION_LOADING_PATH,
 		CUSTOM_CONNECTION_ROW_PATH,
 		CUSTOM_CONNECTION_TWO_ROW_PATH,
 		CUSTOM_MODEL_ADD_ROW_PATH,
@@ -470,6 +487,23 @@ static func button_style(variant: String, state: String) -> StyleBox:
 		[52, 38, 52, 38],
 		[16, 12, 16, 12]
 	)
+
+
+static func exact_action_button_style(action_id: String) -> StyleBox:
+	var asset_path := ""
+	match action_id:
+		"custom_connection_save":
+			asset_path = SAVE_CONNECTION_DISABLED_PATH
+		"api_model_discover":
+			asset_path = DISCOVER_MODELS_DISABLED_PATH
+		"api_model_add":
+			asset_path = ADD_MODEL_DISABLED_PATH
+		"check_connection_loading":
+			asset_path = CHECK_CONNECTION_LOADING_PATH
+		_:
+			return button_style("loading", "disabled")
+	# 四张状态图按各自按钮框的实际宽高比生成，整图缩放可保留完整边框。
+	return _texture_style(asset_path, [0, 0, 0, 0], [12, 8, 12, 8])
 
 
 static func provider_toggle_texture(enabled: bool) -> Texture2D:

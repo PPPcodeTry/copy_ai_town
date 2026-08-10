@@ -249,6 +249,34 @@
       "path": "res://assets/ui/provider_settings/component_assets/runtime/base_ninepatch/buttons_loading/button_loading_v2.png"
     },
     {
+      "assetId": "ui.provider-settings.button.save-connection-disabled.v3",
+      "componentType": "imagegen_exact_button_state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "custom_connection_save_disabled",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/exact_buttons/save_connection_disabled_v3.png"
+    },
+    {
+      "assetId": "ui.provider-settings.button.discover-models-disabled.v3",
+      "componentType": "imagegen_exact_button_state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "api_model_discover_disabled",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/exact_buttons/discover_models_disabled_v3.png"
+    },
+    {
+      "assetId": "ui.provider-settings.button.add-model-disabled.v3",
+      "componentType": "imagegen_exact_button_state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "api_model_add_disabled",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/exact_buttons/add_model_disabled_v3.png"
+    },
+    {
+      "assetId": "ui.provider-settings.button.check-connection-loading.v3",
+      "componentType": "imagegen_exact_button_state",
+      "ownerLevel": "operation_control",
+      "runtimeUsage": "check_connection_loading",
+      "path": "res://assets/ui/provider_settings/component_assets/runtime/exact_buttons/check_connection_loading_v3.png"
+    },
+    {
       "assetId": "ui.provider-settings.custom-key.save.v1",
       "componentType": "imagegen_icon_button",
       "ownerLevel": "operation_control",

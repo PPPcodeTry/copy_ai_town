@@ -1172,13 +1172,16 @@ func _custom_action_button(
 	)
 	button.add_theme_font_size_override("font_size", _scaled_font_size(20))
 	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
+		var style := (
+			ProviderTheme.button_style("secondary", state)
+			if variant == "quiet"
+			else ProviderTheme.button_style(variant, state)
+		)
+		if state == "disabled":
+			style = ProviderTheme.exact_action_button_style(gate_id)
 		button.add_theme_stylebox_override(
 			state,
-			(
-				ProviderTheme.button_style("secondary", state)
-				if variant == "quiet"
-				else ProviderTheme.button_style(variant, state)
-			),
+			style,
 		)
 	for color_id: String in [
 		"font_color",
@@ -1872,7 +1875,9 @@ func _build_connection_section(
 	if _operation_loading():
 		check_button.add_theme_stylebox_override(
 			"disabled",
-			ProviderTheme.button_style("loading", "disabled"),
+			ProviderTheme.exact_action_button_style(
+				"check_connection_loading"
+			),
 		)
 		check_button.add_theme_color_override(
 			"font_disabled_color",
