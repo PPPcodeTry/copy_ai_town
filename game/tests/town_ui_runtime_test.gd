@@ -5656,6 +5656,61 @@ func _scenario_game_flow_resident_model_assignment_route() -> void:
 			17,
 			"opening/model assignment sees pool.get_merged_catalog",
 		)
+		var assignment_selection_data := projected_data.duplicate(true)
+		var assignment_selected_ids := (
+			assignment_selection_data.get(
+				"recommended_resident_ids",
+				[],
+			) as Array
+		).duplicate()
+		var replaced_assignment_resident_id := String(
+			assignment_selected_ids.pop_front()
+		)
+		assignment_selected_ids.append(custom_resident_id)
+		assignment_selection_data["selected_resident_ids"] = (
+			assignment_selected_ids
+		)
+		RESIDENT_CATALOG.update_confirmation_payload(
+			assignment_selection_data,
+			"",
+			"",
+			23,
+		)
+		var assignment_projection := host.call(
+			"_project_resident_model_assignment_catalog",
+			merged_catalog.get("catalog", {}) as Dictionary,
+			assignment_selection_data.get(
+				"confirmation_payload",
+				{},
+			) as Dictionary,
+		) as Dictionary
+		_expect_ok(
+			assignment_projection,
+			"model assignment projects the selected custom roster",
+		)
+		var assignment_catalog_residents := (
+			(assignment_projection.get("catalog", {}) as Dictionary).get(
+				"residents",
+				[],
+			) as Array
+		)
+		var assignment_catalog_ids: Array[String] = []
+		for assignment_resident_value: Variant in assignment_catalog_residents:
+			assignment_catalog_ids.append(String(
+				(assignment_resident_value as Dictionary).get("residentId", "")
+			))
+		_expect_equal(
+			assignment_catalog_residents.size(),
+			15,
+			"model assignment receives exactly the selected fifteen residents",
+		)
+		_expect(
+			assignment_catalog_ids.has(custom_resident_id)
+			and not assignment_catalog_ids.has(
+				replaced_assignment_resident_id,
+			),
+			"model assignment keeps the custom resident and excludes the replaced preset",
+		)
 		_expect(
 			selection.is_connected(
 				"residents_delete_requested",
