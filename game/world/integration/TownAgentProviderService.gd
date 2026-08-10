@@ -165,6 +165,7 @@ func get_health_snapshot() -> Dictionary:
 
 func list_available_models() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
+	var known_model_keys: Dictionary = {}
 	for model_value: Variant in _catalog.list_models() as Array:
 		if not model_value is Dictionary:
 			continue
@@ -177,12 +178,20 @@ func list_available_models() -> Array[Dictionary]:
 			continue
 		if _provider_uses_custom_models(provider_id) and model_id == "custom":
 			continue
+		var model_key := "%s/%s" % [provider_id, model_id]
+		if known_model_keys.has(model_key):
+			continue
+		known_model_keys[model_key] = true
 		result.append(_model_health_projection(model))
 	for provider_id_value: Variant in _provider_configs.keys():
 		var provider_id := String(provider_id_value)
 		if not _provider_uses_custom_models(provider_id):
 			continue
 		for model_id: String in _configured_api_models(provider_id):
+			var model_key := "%s/%s" % [provider_id, model_id]
+			if known_model_keys.has(model_key):
+				continue
+			known_model_keys[model_key] = true
 			result.append(_model_health_projection(
 				_dynamic_model_descriptor(provider_id, model_id),
 			))

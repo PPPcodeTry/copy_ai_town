@@ -484,6 +484,36 @@ func _test_volcengine_custom_endpoint_model() -> void:
 			"ep-player-custom-model",
 			"the Ark custom endpoint id reaches the actual request provider",
 		)
+	var duplicate_service: RefCounted = ProviderServiceScript.new()
+	var duplicate_configured := duplicate_service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"volcengine-ark": {
+				"api_key": "temporary-ark-key",
+				"api_models": ["doubao-seed-2-0-lite-260428"],
+				"api_model": "doubao-seed-2-0-lite-260428",
+			},
+		},
+	}) as Dictionary
+	_expect_equal(
+		duplicate_configured.get("ok"),
+		true,
+		"Ark accepts an inference endpoint id matching a built-in model id",
+	)
+	var duplicate_model_count := 0
+	for model: Dictionary in duplicate_service.call("list_available_models"):
+		if (
+			String(model.get("providerId", "")) == "volcengine-ark"
+			and String(model.get("modelId", "")) == "doubao-seed-2-0-lite-260428"
+		):
+			duplicate_model_count += 1
+	_expect_equal(
+		duplicate_model_count,
+		1,
+		"Ark does not expose duplicate cards when a custom endpoint matches a built-in id",
+	)
 
 
 func _test_multiple_compatible_connections() -> void:
