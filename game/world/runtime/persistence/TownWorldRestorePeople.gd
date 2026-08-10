@@ -188,6 +188,8 @@ static func prepare(
 		var expected_resident_fields := SAVED_RESIDENT_FIELDS.duplicate()
 		if requires_activity_state:
 			expected_resident_fields.append("activityState")
+		if saved.has("attendanceState"):
+			expected_resident_fields.append("attendanceState")
 		if saved.has("arrivalState"):
 			expected_resident_fields.append("arrivalState")
 		_validate_exact_keys(
@@ -433,6 +435,45 @@ static func _validate_saved_resident(
 						"世界存档居民 %s 的 activityState.%s 必须在 0..100"
 						% [resident_id, key]
 					)
+	if saved.has("attendanceState"):
+		var attendance_value: Variant = saved.get("attendanceState")
+		if not attendance_value is Dictionary:
+			errors.append(
+				"世界存档居民 %s 的 attendanceState 必须是对象"
+				% resident_id,
+			)
+		else:
+			var attendance := attendance_value as Dictionary
+			_validate_exact_keys(
+				attendance,
+				["status", "untilMinute"],
+				"世界存档居民 %s 的 attendanceState" % resident_id,
+				errors,
+			)
+			if String(attendance.get("status", "")) not in [
+				"available",
+				"on_leave",
+			]:
+				errors.append(
+					"世界存档居民 %s 的 attendanceState.status 无效"
+					% resident_id,
+				)
+			if typeof(attendance.get("untilMinute")) != TYPE_INT:
+				errors.append(
+					"世界存档居民 %s 的 attendanceState.untilMinute 必须是整数"
+					% resident_id,
+				)
+			elif (
+				String(attendance.get("status", "")) == "on_leave"
+				and int(attendance.get("untilMinute", -1)) < 0
+			) or (
+				String(attendance.get("status", "")) == "available"
+				and int(attendance.get("untilMinute", -1)) != -1
+			):
+				errors.append(
+					"世界存档居民 %s 的 attendanceState 时间关系无效"
+					% resident_id,
+				)
 	var current_action_value: Variant = saved.get("currentAction")
 	var current_action := (
 		current_action_value as Dictionary
@@ -1249,6 +1290,11 @@ static func _resident_runtime(record: Dictionary, saved: Dictionary, resident_id
 		else _activity_state_from_body(body)
 	)
 	var current_action := saved.get("currentAction", {}) as Dictionary if saved.get("currentAction") is Dictionary else {}
+	var attendance_state := (
+		saved.get("attendanceState", {}) as Dictionary
+		if saved.get("attendanceState") is Dictionary
+		else {"status": "available", "untilMinute": -1}
+	)
 	var confirmed_preview := (
 		saved.get("confirmedActionPreview", {}) as Dictionary
 		if saved.get("confirmedActionPreview") is Dictionary
@@ -1279,6 +1325,7 @@ static func _resident_runtime(record: Dictionary, saved: Dictionary, resident_id
 		"doing": String(saved.get("doing", "")),
 		"body": body.duplicate(true),
 		"activityState": activity_state.duplicate(true),
+		"attendanceState": attendance_state.duplicate(true),
 		"nearby": [],
 		"currentAction": current_action.duplicate(true),
 		"confirmedActionPreview": confirmed_preview.duplicate(true),

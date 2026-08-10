@@ -253,6 +253,7 @@ const IDLE_DEPARTURE_PLACE_CANDIDATE_LIMIT := 2
 const OUTDOOR_IDLE_PARKING_MAX_DISTANCE_PX := 640.0
 const OUTDOOR_IDLE_PARKING_SAMPLE_STEP_PX := 64.0
 const PASSIVE_NEED_TICK_MINUTES := 60
+const SLEEP_ACTIVITY_ID := "activity_home_sleep"
 const MAX_SOCIAL_RESPONSE_CANDIDATES := 4
 const MAX_ACTIVE_SOCIAL_COMMITMENTS_PER_RESIDENT := 1
 const SERVICE_FETCH_DURATION_MINUTES := 10
@@ -270,7 +271,7 @@ const NATURAL_LIFE_ACTIVITY_IDS := [
 	"activity_dining_eat_meal",
 	"activity_dining_collect_meal",
 	"activity_dining_return_dishes",
-	"activity_home_sleep",
+	SLEEP_ACTIVITY_ID,
 	"activity_market_buy_general_goods",
 	"activity_market_buy_fish",
 	"activity_market_buy_flowers",
@@ -1979,6 +1980,12 @@ func _resident_save_snapshot(resident_id: String) -> Dictionary:
 		"body": (resident.get("body", {}) as Dictionary).duplicate(true),
 		"activityState": (
 			resident.get("activityState", _empty_activity_state()) as Dictionary
+		).duplicate(true),
+		"attendanceState": (
+			resident.get(
+				"attendanceState",
+				{"status": "available", "untilMinute": -1},
+			) as Dictionary
 		).duplicate(true),
 		"currentAction": (resident.get("currentAction", {}) as Dictionary).duplicate(true),
 		"confirmedActionPreview": _saved_confirmed_action_preview(resident),
@@ -5387,6 +5394,7 @@ func query_activity_options(
 		var reachability_memo := {}
 		for option_value: Variant in result.get("options", []) as Array:
 			var option := option_value as Dictionary
+			_apply_sleep_activity_availability(resident, option)
 			_apply_bulletin_activity_availability(
 				normalized_id,
 				option,
@@ -5470,6 +5478,16 @@ func query_activity_options(
 				)
 			)
 	return _decorate_command_result(result)
+
+
+func _resident_sleep_needed(resident: Dictionary) -> bool:
+	return ACTIVITY_SCALARS.resident_sleep_needed(resident)
+
+func _apply_sleep_activity_availability(
+	resident: Dictionary,
+	option: Dictionary,
+) -> void:
+	ACTIVITY_SCALARS.apply_sleep_activity_availability(resident, option)
 
 
 func _apply_occupation_service_activity_availability(
@@ -5783,6 +5801,14 @@ func _perform_activity_step_internal(
 	var requested_activity_id := String(
 		step_target.get("activityId", "")
 	)
+	if (
+		requested_activity_id == SLEEP_ACTIVITY_ID
+		and not _resident_sleep_needed(resident)
+	):
+		return _command_failure(
+			"ACTIVITY_NOT_ELIGIBLE",
+			["当前精力还足，不需要睡觉"],
+		)
 	var activity_social_state := _activity_social_state_for(
 		normalized_resident_id,
 		requested_activity_id,
@@ -5987,6 +6013,11 @@ func _perform_activity_step_internal(
 	resident["doing"] = "正在%s" % String(
 		execution.get("activityLabel", "")
 	)
+	_start_sleep_leave_if_work_expected(
+		resident,
+		action,
+		execution,
+	)
 	_bump_world_revision()
 	probe_lap_usec = WORLD_PERFORMANCE_PROBE.record_lap(probe_lap_usec, "activity_revision")
 	_emit_activity_lifecycle(
@@ -6003,6 +6034,26 @@ func _perform_activity_step_internal(
 		"changed": true,
 		"execution": _safe_activity_execution(execution),
 	})
+
+
+func _start_sleep_leave_if_work_expected(
+	resident: Dictionary,
+	action: Dictionary,
+	execution: Dictionary,
+) -> void:
+	if ACTIVITY_SCALARS.start_sleep_leave(
+		resident,
+		action,
+		execution,
+		bool(_life_rhythm_snapshot(resident).get("work_expected", false)),
+		_prop_approach_duration_minutes(action),
+	):
+		WORK_SETTLEMENT.refresh_staffing_after_attendance_change(self)
+
+
+func _clear_sleep_leave(resident: Dictionary) -> void:
+	if ACTIVITY_SCALARS.clear_sleep_leave(resident):
+		WORK_SETTLEMENT.refresh_staffing_after_attendance_change(self)
 
 
 func _bind_work_task_to_activity(
@@ -11402,6 +11453,10 @@ func _resident_runtime(record: Dictionary, world_state: Dictionary, resident_id 
 		"doing": String(world_state.get("doing", "")),
 		"body": body,
 		"activityState": _activity_state_from_body(body),
+		"attendanceState": {
+			"status": "available",
+			"untilMinute": -1,
+		},
 		"nearby": [],
 		"currentAction": {},
 		"confirmedActionPreview": {},
@@ -14240,6 +14295,8 @@ func _finish_activity_action(resident_id: String) -> void:
 		1,
 		int(action.get("durationMinutes", 1)),
 	)
+	if String(execution.get("activityId", "")) == SLEEP_ACTIVITY_ID:
+		_clear_sleep_leave(resident)
 	_restore_action_route_connector(resident, action)
 	resident["currentAction"] = {}
 	resident["actionSuspendedAbsoluteMinute"] = -1
@@ -15595,11 +15652,15 @@ func _agent_life_destination_options(
 	resident: Dictionary,
 ) -> Array[Dictionary]:
 	var resident_id := String(resident.get("residentId", ""))
-	# 职业任务优先；只有确实没有工作可做时，才补充日常生活去处。
-	if (
-		resident_id.is_empty()
-		or not get_work_tasks_for_resident(resident_id).is_empty()
-	):
+	if resident_id.is_empty():
+		return []
+	var has_work_tasks := not get_work_tasks_for_resident(
+		resident_id,
+	).is_empty()
+	var sleep_needed := _resident_sleep_needed(resident)
+	# 平常仍由职业任务优先；精力已经偏低时，回家睡觉不能再被工作
+	# 选项整个遮住，否则居民永远没有形成请假的机会。
+	if has_work_tasks and not sleep_needed:
 		return []
 	var social_state := resident.get("socialState", {}) as Dictionary
 	var home_place := String(social_state.get("home", ""))
@@ -15629,7 +15690,11 @@ func _agent_life_destination_options(
 				or activity_id not in NATURAL_LIFE_ACTIVITY_IDS
 			):
 				continue
-			if activity_id == "activity_home_sleep" and place_id != home_place:
+			if activity_id == SLEEP_ACTIVITY_ID and (
+				place_id != home_place or not sleep_needed
+			):
+				continue
+			if has_work_tasks and activity_id != SLEEP_ACTIVITY_ID:
 				continue
 			var matched := INTERESTS.matched_labels_for_activity(
 				interests,
@@ -15747,6 +15812,8 @@ func _agent_available_props(resident: Dictionary) -> Array:
 		var available_verbs: Array = []
 		for verb_value: Variant in prop.get("verbs", []) as Array:
 			var verb := String(verb_value)
+			if verb == "睡觉" and not _resident_sleep_needed(resident):
+				continue
 			var action := {
 				"prop": prop_name,
 				"verb": verb,
@@ -15847,73 +15914,20 @@ func _agent_available_props(resident: Dictionary) -> Array:
 
 
 func _life_rhythm_snapshot(resident: Dictionary = {}) -> Dictionary:
-	var absolute_minute := int(_environment.get_absolute_minute())
-	var minute_of_day := posmod(absolute_minute, 1440)
-	var rhythm: Dictionary
-	if minute_of_day < 420:
-		rhythm = {
-			"id": "late_night",
-			"label": "深夜；通常应休息，也可以因本人情况晚睡或不睡",
-			"flexible": true,
-		}
-	elif minute_of_day < 570:
-		rhythm = {
-			"id": "morning_start",
-			"label": "起床、准备和自由活动；可以早起或赖床",
-			"flexible": true,
-		}
-	elif minute_of_day < 750:
-		rhythm = {
-			"id": "morning_work",
-			"label": "上午工作时段；可以迟到、请假、闭店或放假",
-			"flexible": true,
-		}
-	elif minute_of_day < 870:
-		rhythm = {
-			"id": "midday_free",
-			"label": "午饭、午休和自由活动",
-			"flexible": true,
-		}
-	elif minute_of_day < 1140:
-		rhythm = {
-			"id": "afternoon_work",
-			"label": "下午工作时段；可以请假、闭店或放假",
-			"flexible": true,
-		}
-	elif minute_of_day < 1380:
-		rhythm = {
-			"id": "evening_free",
-			"label": "下班、加班、自由活动或公共活动",
-			"flexible": true,
-		}
-	else:
-		rhythm = {
-			"id": "night_rest",
-			"label": "夜间休息；可以早睡、晚睡或因本人情况不睡",
-			"flexible": true,
-		}
+	var minute_of_day := posmod(
+		int(_environment.get_absolute_minute()),
+		1440,
+	)
 	var social_state := resident.get("socialState", {}) as Dictionary
 	var schedule_context := _activity_runtime.schedule_context(
 		social_state,
 		minute_of_day,
 	) as Dictionary
-	var workplace := String(social_state.get("workplace", ""))
-	rhythm["work_expected"] = bool(
-		schedule_context.get("workExpected", false)
+	return ACTIVITY_SCALARS.life_rhythm_snapshot(
+		resident,
+		minute_of_day,
+		schedule_context,
 	)
-	rhythm["workplace"] = workplace
-	rhythm["schedule_label"] = String(
-		schedule_context.get("scheduleLabel", "")
-	)
-	if (
-		bool(rhythm.get("work_expected", false))
-		and not workplace.is_empty()
-	):
-		rhythm["label"] = "%s；本职工作地是%s" % [
-			String(rhythm.get("label", "")),
-			workplace,
-		]
-	return rhythm
 
 
 func _schedule_life_rhythm_decisions(absolute_minute: int) -> void:
@@ -17364,14 +17378,7 @@ func _empty_activity_state() -> Dictionary:
 
 
 func _activity_state_from_body(body: Dictionary) -> Dictionary:
-	var state := _empty_activity_state()
-	state["satiety"] = _need_value_for_body_level(
-		String(body.get("饿", "不饿")),
-	)
-	state["energy"] = _need_value_for_body_level(
-		String(body.get("累", "不累")),
-	)
-	return state
+	return ACTIVITY_SCALARS.activity_state_from_body(body)
 
 
 func _need_value_for_body_level(level: String) -> int:
@@ -17382,18 +17389,11 @@ func _next_activity_state(
 	resident: Dictionary,
 	effects: Dictionary,
 ) -> Dictionary:
-	var state := (
-		resident.get("activityState", _empty_activity_state()) as Dictionary
-	).duplicate(true)
-	for key_value: Variant in effects:
-		var key := String(key_value)
-		if key in ACTIVITY_STATE_KEYS:
-			state[key] = clampi(
-				int(state.get(key, 50)) + int(effects[key_value]),
-				0,
-				100,
-			)
-	return state
+	return ACTIVITY_SCALARS.next_activity_state(
+		resident,
+		effects,
+		ACTIVITY_STATE_KEYS,
+	)
 
 
 func _advance_passive_activity_needs(absolute_minute: int) -> void:
@@ -17450,7 +17450,7 @@ func _resident_is_sleeping(resident: Dictionary) -> bool:
 		String(resident.get("residentId", "")),
 		String(action.get("action_id", "")),
 	) as Dictionary
-	return String(execution.get("activityId", "")) == "activity_home_sleep"
+	return String(execution.get("activityId", "")) == SLEEP_ACTIVITY_ID
 
 
 func _sync_body_from_activity_needs(
@@ -19504,7 +19504,8 @@ func _settle_resident_activity_condition(
 	var occurred_at := int(_environment.get_absolute_minute())
 	var activity_id := String(execution.get("activityId", ""))
 	var condition_result: Dictionary = {}
-	if activity_id == "activity_home_sleep":
+	if activity_id == SLEEP_ACTIVITY_ID:
+		_clear_sleep_leave(resident)
 		var active_sleep := _resident_sleep.get_active_sleep(resident_id,) as Dictionary
 		if active_sleep.is_empty():
 			return
