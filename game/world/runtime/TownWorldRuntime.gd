@@ -196,6 +196,7 @@ const ACTIVITY_ROUTINE_MAX_STEPS := {
 	"work": 1,
 	"meal": 3,
 }
+const DINING_SERVICE := preload("res://world/runtime/work/TownDiningServiceRuntime.gd")
 const BODY_LEVELS := {
 	"困": ["不困", "有点困", "很困"],
 	"饿": ["不饿", "有点饿", "很饿"],
@@ -1839,6 +1840,7 @@ func advance(real_seconds: float) -> Dictionary:
 		lap_usec = _advance_profile_lap(advance_profile, "conflictUsec", lap_usec)
 		_expire_time_sensitive_private_messages(absolute_minute)
 		lap_usec = _advance_profile_lap(advance_profile, "privateMessageExpiryUsec", lap_usec)
+		DINING_SERVICE.settle_period_close(self, absolute_minute)
 		_sync_occupation_service_presence(absolute_minute)
 		lap_usec = _advance_profile_lap(advance_profile, "occupationPresenceUsec", lap_usec)
 		_advance_social_matters(absolute_minute)
@@ -3131,6 +3133,9 @@ func create_occupation_service_request(spec: Dictionary) -> Dictionary:
 			)
 			request_context["customerAbsentSinceMinute"] = -1
 	if kind == "dining_order":
+		request_context["onsiteWaitUntilMinute"] = (
+			DINING_SERVICE.wait_deadline(self, request_now)
+		)
 		var meal_period_ref := String(request_context.get("mealPeriodRef", ""))
 		var already_completed := (
 			not meal_period_ref.is_empty()
@@ -20188,7 +20193,10 @@ func _sync_occupation_service_presence(absolute_minute: int) -> void:
 			else:
 				_maybe_notify_ready_preorder(request, absolute_minute)
 			continue
-		if _onsite_service_queue_is_advancing(request):
+		if (
+			String(request.get("kind", "")) != "dining_order"
+			and _onsite_service_queue_is_advancing(request)
+		):
 			var extended_wait_until := maxi(
 				int(context.get("onsiteWaitUntilMinute", absolute_minute)),
 				absolute_minute + _onsite_service_wait_minutes(
@@ -20204,10 +20212,18 @@ func _sync_occupation_service_presence(absolute_minute: int) -> void:
 		if (
 			_occupation_service_wait_deadline_applies(request)
 			and absolute_minute >= int(
-			context.get("onsiteWaitUntilMinute", absolute_minute + 1),
+				context.get("onsiteWaitUntilMinute", absolute_minute + 1),
 			)
 		):
-			_cancel_occupation_service_request(request, "等待服务时间已结束")
+			if String(request.get("kind", "")) == "dining_order":
+				DINING_SERVICE.complete_as_takeaway(
+					self,
+					request,
+					absolute_minute,
+					"等待超过半小时，已经领取打包餐",
+				)
+			else:
+				_cancel_occupation_service_request(request, "等待服务时间已结束")
 			continue
 		if at_service_place:
 			if int(context.get("customerAbsentSinceMinute", -1)) >= 0:
@@ -20282,16 +20298,6 @@ func _onsite_service_queue_is_advancing(request: Dictionary) -> bool:
 func _occupation_service_wait_deadline_applies(
 	request: Dictionary,
 ) -> bool:
-	if (
-		String(request.get("kind", "")) == "dining_order"
-		and String(request.get("state", "")) == "waiting"
-		and String(request.get("waitReason", "")) in [
-			"当前餐次尚未完成备餐",
-			"当前餐次尚未开始供餐",
-			"食堂当前不在供餐时间",
-		]
-	):
-		return false
 	if String(request.get("kind", "")) == "clinic":
 		return not _clinic_request_has_active_execution(request)
 	if not (request.get("outcome", {}) as Dictionary).is_empty():
@@ -21474,7 +21480,7 @@ func _dining_collect_can_finish_in_current_period(
 	if period.is_empty():
 		return false
 	var minute_of_day := posmod(absolute_minute, 1440)
-	return minute_of_day + 10 < int(period.get("end", 0))
+	return minute_of_day + 5 <= int(period.get("end", 0))
 
 
 func _meal_period_source_ref(absolute_minute: int) -> String:
@@ -22222,9 +22228,7 @@ func _activate_waiting_dining_orders() -> void:
 		var refreshed_context := (
 			request.get("context", {}) as Dictionary
 		).duplicate(true)
-		var wait_until := now + _onsite_service_wait_minutes(
-			"dining_order",
-		)
+		var wait_until := DINING_SERVICE.wait_deadline(self, now)
 		refreshed_context["onsiteWaitUntilMinute"] = wait_until
 		refreshed_context["customerAbsentSinceMinute"] = -1
 		_occupation_services.merge_request_context(

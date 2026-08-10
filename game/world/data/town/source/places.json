@@ -168,7 +168,7 @@
       "spaceId": "indoor_dining_hall",
       "summary": "面向全镇供餐的公共食堂，居民可以在这里工作、吃饭和碰面。",
       "serviceProfile": {
-        "capacity": 2,
+        "capacity": 4,
         "helperActivityId": "activity_dining_serve_meal",
         "requestActivityIds": ["activity_dining_collect_meal"]
       },

@@ -190,7 +190,7 @@
       "label": "取餐",
       "kind": "need",
       "tags": ["food.collect", "social.meal", "routine.meal.collect"],
-      "durationMinutes": 10,
+      "durationMinutes": 5,
       "effects": {},
       "interruptible": true,
       "poseFamily": "work"
@@ -220,7 +220,7 @@
       "label": "把备好的饭菜递给顾客",
       "kind": "work",
       "tags": ["food.serve"],
-      "durationMinutes": 10,
+      "durationMinutes": 5,
       "effects": {"energy": -1},
       "interruptible": true,
       "poseFamily": "service"

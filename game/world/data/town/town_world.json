@@ -294,7 +294,7 @@
     },
     {
       "activityId": "activity_dining_collect_meal",
-      "durationMinutes": 10.0,
+      "durationMinutes": 5.0,
       "effects": {},
       "interruptible": true,
       "kind": "need",
@@ -354,7 +354,7 @@
     },
     {
       "activityId": "activity_dining_serve_meal",
-      "durationMinutes": 10.0,
+      "durationMinutes": 5.0,
       "effects": {
         "energy": -1.0
       },
@@ -1048,15 +1048,15 @@
     "receiptVersion": 1,
     "scheduleTemplatesResolved": true,
     "sourceDocumentFingerprints": {
-      "activity_definitions.json": "f5896fa1ed8e4d10241ce25d311abf7faec8086bcf407c840395858054f00e71",
-      "activity_slots.json": "caa74852c1bf596f6b423e1ce54a106b8e1f9a8b3aefdb00fb042445f7fbd0b2",
-      "indoor_prop_authoring.json": "bce61ec516e03670c504f8d98f01f1cad326bafd60ba987f7970bf6df3330a5d",
+      "activity_definitions.json": "1ffcfdd0e3c33628ccac320194b5a6af4f9d61a3ed171a2d0b65e49bceba36f1",
+      "activity_slots.json": "c30ad36039ff2b6016a443fd9df149a98e411717807e8d4ca9f07f297921b8ef",
+      "indoor_prop_authoring.json": "6a742d3f4df13228e679c23f521531c074c19f53b5edd208b958a3808f8992ae",
       "occupation_catalog.json": "eddae46da2c289df21ee8ec93b1042d36c22db8211a1bc51a0addd3e65c139af",
-      "places.json": "4892cbac5d28ec3d50130610d857928048e22672d0da8d08be1793a462a6a2c6",
-      "props.json": "d320175ba3a626173da33a704bf4186c481b643fb3024f66ad5fb08410338011",
-      "schedule_templates.json": "ca8d3edb5050e49bbee0e373d39989039a029f393d0b3b23f04cf7225fa5fe5f"
+      "places.json": "17dc9a4fdd84421544713171fd69f394d5f40efd10586bb2de9e3de3c241342e",
+      "props.json": "9936605fc44f1da6facae39db8b31fdece6ab4d091bfa16a7241deeac03639b9",
+      "schedule_templates.json": "cb24336fd32adb32e520dcfc536558834288541a236e0c47fb314860a0c902d9"
     },
-    "sourceFingerprint": "bf870f16f18fde30f8512bdd6c1fbbaa62989f38970af10d1630d4ab87947dff",
+    "sourceFingerprint": "584ba4b89019f92378131a56bc380e0c2dec5e460d977d7050484996a9c57a9f",
     "sourceWorldId": "town",
     "staticReferencesValidated": true,
     "status": "formal_executable",
@@ -1096,11 +1096,11 @@
       "fallback": "reject",
       "memberAnchors": [
         {
-          "anchorId": "open_front",
+          "anchorId": "dough_front",
           "memberAnchorId": "member_baker_prepare_dough_01",
           "position": [
             680.0,
-            376.0
+            472.0
           ]
         }
       ],
@@ -1111,8 +1111,8 @@
       "slotId": "slot_baker_prepare_dough_01",
       "target": {
         "actionVerb": "准备面团",
-        "anchorId": "open_front",
-        "propName": "公共食堂备餐柜"
+        "anchorId": "dough_front",
+        "propName": "公共食堂面团操作台"
       },
       "targetType": "prop"
     },
@@ -1695,10 +1695,10 @@
       "fallback": "reject",
       "memberAnchors": [
         {
-          "anchorId": "open_front",
+          "anchorId": "serve_front",
           "memberAnchorId": "member_dining_serve_meal_01",
           "position": [
-            680.0,
+            568.0,
             376.0
           ]
         }
@@ -1709,9 +1709,9 @@
       "sceneId": "dining_hall",
       "slotId": "slot_dining_serve_meal_01",
       "target": {
-        "actionVerb": "取餐",
-        "anchorId": "open_front",
-        "propName": "公共食堂备餐柜"
+        "actionVerb": "递餐",
+        "anchorId": "serve_front",
+        "propName": "公共食堂递餐口"
       },
       "targetType": "prop"
     },
@@ -209436,7 +209436,7 @@
         "region_portal_dining_hall_entry"
       ],
       "serviceProfile": {
-        "capacity": 2.0,
+        "capacity": 4.0,
         "helperActivityId": "activity_dining_serve_meal",
         "requestActivityIds": [
           "activity_dining_collect_meal"
@@ -210190,14 +210190,9 @@
     {
       "actions": [
         {
-          "durationMinutes": 10.0,
+          "durationMinutes": 5.0,
           "effects": {},
           "verb": "取餐"
-        },
-        {
-          "durationMinutes": 25.0,
-          "effects": {},
-          "verb": "准备面团"
         }
       ],
       "interaction": {
@@ -210343,6 +210338,76 @@
         "spaceId": "indoor_dining_hall"
       },
       "name": "公共食堂西侧餐桌",
+      "placeName": "公共食堂"
+    },
+    {
+      "actions": [
+        {
+          "durationMinutes": 5.0,
+          "effects": {},
+          "verb": "递餐"
+        }
+      ],
+      "interaction": {
+        "actorFacing": "down",
+        "anchorId": "serve_front",
+        "anchorKind": "use",
+        "anchorSnappedToFloor": false,
+        "assetId": "pantry_cabinet",
+        "direction": "down",
+        "instanceId": "pantry_cabinet_kitchen_east",
+        "instancePosition": [
+          688.0,
+          336.0
+        ],
+        "position": [
+          568.0,
+          376.0
+        ],
+        "regionId": "region_portal_dining_hall_entry",
+        "roomId": "dining_hall",
+        "sourceAnchorPosition": [
+          568.0,
+          376.0
+        ],
+        "spaceId": "indoor_dining_hall"
+      },
+      "name": "公共食堂递餐口",
+      "placeName": "公共食堂"
+    },
+    {
+      "actions": [
+        {
+          "durationMinutes": 25.0,
+          "effects": {},
+          "verb": "准备面团"
+        }
+      ],
+      "interaction": {
+        "actorFacing": "up",
+        "anchorId": "dough_front",
+        "anchorKind": "use",
+        "anchorSnappedToFloor": false,
+        "assetId": "pantry_cabinet",
+        "direction": "down",
+        "instanceId": "pantry_cabinet_kitchen_east",
+        "instancePosition": [
+          688.0,
+          336.0
+        ],
+        "position": [
+          680.0,
+          472.0
+        ],
+        "regionId": "region_portal_dining_hall_entry",
+        "roomId": "dining_hall",
+        "sourceAnchorPosition": [
+          680.0,
+          472.0
+        ],
+        "spaceId": "indoor_dining_hall"
+      },
+      "name": "公共食堂面团操作台",
       "placeName": "公共食堂"
     },
     {
@@ -213180,7 +213245,7 @@
             "food.clean",
             "baking.prepare"
           ],
-          "endMinute": 1140.0,
+          "endMinute": 1200.0,
           "goalPressure": {
             "goalId": "occupation_activity",
             "weight": 55.0

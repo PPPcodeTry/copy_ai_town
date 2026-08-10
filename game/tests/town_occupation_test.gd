@@ -29,6 +29,23 @@ const CRAFTSPERSON_ID := "resident_lin_lan_01"
 const DELIVERY_ID := "resident_jiang_lin_01"
 const DINING_WORKER_ID := "resident_shen_yao_01"
 const DINING_VISITOR_ID := "resident_lu_qing_01"
+const DINING_PEAK_RESIDENT_IDS := [
+	"resident_lin_lan_01",
+	"resident_tang_xiaoman_01",
+	"resident_a_he_01",
+	"resident_gu_chuan_01",
+	"resident_su_he_01",
+	"resident_zhao_tang_01",
+	"resident_chen_zhou_01",
+	"resident_shen_yao_01",
+	"resident_lu_qing_01",
+	"resident_he_yu_01",
+	"resident_zhou_ning_01",
+	"resident_bai_yu_01",
+	"resident_jiang_lin_01",
+	"resident_xu_an_01",
+	"resident_ye_cheng_01",
+]
 const CAFE_WORKER_ID := "resident_a_he_01"
 const CAFE_VISITOR_ID := "resident_tang_xiaoman_01"
 const FLOWER_VENDOR_ID := "resident_he_yu_01"
@@ -50,6 +67,7 @@ func _initialize() -> void:
 
 func _run_all() -> void:
 	_scenario_occupation_service_work_chain_integration()
+	_scenario_dining_peak_regression()
 	_scenario_occupation_downstream_closure_integration()
 	_scenario_staffing_negotiation_integration()
 	_scenario_occupation_natural_source()
@@ -631,11 +649,363 @@ func _test_warehouse_audit(world: RefCounted) -> void:
 	)
 
 
+func _scenario_dining_peak_regression() -> void:
+	var data := BUILDER.build_from_source(SOURCE_DIR)
+	var collect_position := _dining_activity_position_key(
+		data,
+		"activity_dining_collect_meal",
+	)
+	var serve_position := _dining_activity_position_key(
+		data,
+		"activity_dining_serve_meal",
+	)
+	var dough_position := _dining_activity_position_key(
+		data,
+		"activity_baker_prepare_dough",
+	)
+	_expect(not collect_position.is_empty(), "公共食堂取餐位置存在")
+	_expect(
+		serve_position != collect_position,
+		"工作人员递餐位置不会与顾客取餐位置互相占用",
+	)
+	_expect(
+		dough_position != collect_position,
+		"准备面团位置不会与顾客取餐位置互相占用",
+	)
+	_expect(
+		dough_position != serve_position,
+		"准备面团位置不会与工作人员递餐位置互相占用",
+	)
+	_expect(
+		_service_place_positions_are_independent(data),
+		"全镇服务地点的顾客请求位置都不会占住工作人员服务位置",
+	)
+	var batch_world := _start_dining_peak_world(data)
+	if batch_world == null:
+		return
+	_expect(
+		_advance_to_minute_of_day(batch_world, 1020),
+		"四人供餐场景会推进到晚餐供餐开始",
+	)
+	_expect(
+		_perform_and_finish(
+			batch_world,
+			COOK_ID,
+			"activity_dining_prepare_meal",
+			"公共食堂",
+		),
+		"食堂完成晚餐备餐",
+	)
+	var customer_ids := _dining_customer_ids()
+	var batch_request_ids := _create_dining_orders(
+		batch_world,
+		customer_ids.slice(0, 8),
+	)
+	_expect_equal(batch_request_ids.size(), 8, "晚餐高峰形成八份有效订单")
+	_expect(
+		_perform_and_finish(
+			batch_world,
+			COOK_ID,
+			"activity_dining_serve_meal",
+			"公共食堂",
+		),
+		"食堂完成第一批五分钟递餐",
+	)
+	_expect_equal(
+		_count_completed_requests(batch_world, batch_request_ids),
+		4,
+		"第一批递餐同时完成四份订单",
+	)
+	_expect(
+		_perform_and_finish(
+			batch_world,
+			COOK_ID,
+			"activity_dining_serve_meal",
+			"公共食堂",
+		),
+		"食堂完成第二批五分钟递餐",
+	)
+	_expect_equal(
+		_count_completed_requests(batch_world, batch_request_ids),
+		8,
+		"第二批递餐后八份订单全部完成",
+	)
+	var completion_batches := _dining_completion_batches(
+		batch_world,
+		batch_request_ids,
+	)
+	_expect_equal(completion_batches.size(), 2, "八份订单分成两个完成批次")
+	for batch_count: int in completion_batches.values():
+		_expect_equal(batch_count, 4, "每个递餐批次同时完成四份订单")
+	for request_id: String in batch_request_ids:
+		var request := batch_world.call(
+			"get_occupation_service_request",
+			request_id,
+		) as Dictionary
+		if String(request.get("state", "")) != "completed":
+			continue
+		_expect_equal(
+			(request.get("outcome", {}) as Dictionary).get("batchCapacity"),
+			4,
+			"四人批次的完成记录保留接待容量",
+		)
+	batch_world.call("stop")
+
+	var closing_world := _start_dining_peak_world(data)
+	if closing_world == null:
+		return
+	_expect(
+		_advance_to_minute_of_day(closing_world, 1020),
+		"关餐兜底场景会推进到晚餐供餐开始",
+	)
+	var all_request_ids := _create_dining_orders(
+		closing_world,
+		_dining_customer_ids(),
+	)
+	_expect_equal(
+		all_request_ids.size(),
+		_dining_customer_ids().size(),
+		"除留在食堂工作的主理人外，全镇居民都能形成晚餐订单",
+	)
+	_expect(
+		_advance_to_minute_of_day(closing_world, 1200),
+		"未及时堂食时会推进到晚餐关餐",
+	)
+	for request_id: String in all_request_ids:
+		var request := closing_world.call(
+			"get_occupation_service_request",
+			request_id,
+		) as Dictionary
+		_expect_equal(request.get("state"), "completed", "每份晚餐订单都有餐食")
+		_expect_equal(
+			(request.get("outcome", {}) as Dictionary).get("serviceMode"),
+			"closing_takeaway",
+			"等不及柜台服务的居民会领取打包餐",
+		)
+		var task := (
+			closing_world.get("_work_tasks") as RefCounted
+		).call("task", String(request.get("taskId", ""))) as Dictionary
+		_expect(
+			task.is_empty()
+			or String(task.get("state", "")) in [
+				"completed", "failed", "cancelled",
+			],
+			"打包餐不会留下仍在排队的递餐任务",
+		)
+	_expect(
+		_advance_to_minute_of_day(closing_world, 1210),
+		"关餐后十分钟内所有人会走出食堂",
+	)
+	_expect_equal(
+		_count_residents_at_dining(closing_world, _dining_resident_ids()),
+		0,
+		"晚上八点十分，等待、工作或聊天的居民都不再滞留食堂",
+	)
+	_expect(
+		_advance_to_minute_of_day(closing_world, 1330),
+		"关餐兜底场景会继续推进到晚上十点十分",
+	)
+	_expect_equal(
+		_count_residents_at_dining(closing_world, _dining_resident_ids()),
+		0,
+		"晚上十点十分食堂仍然没有排队和用餐人群",
+	)
+	closing_world.call("stop")
+
+
+func _start_dining_peak_world(data: Dictionary) -> RefCounted:
+	var opening_result := OPENING.load_config(OPENING_PATH, data) as Dictionary
+	_expect_equal(opening_result.get("ok"), true, "晚餐高峰开局可加载")
+	if opening_result.get("ok") != true:
+		return null
+	var opening := (
+		opening_result.get("config", {}) as Dictionary
+	).duplicate(true)
+	(opening.get("environment", {}) as Dictionary)["clock"] = "17:00"
+	_prepare_residents(opening)
+	for resident_value: Variant in opening.get("residents", []) as Array:
+		var resident := resident_value as Dictionary
+		var resident_id := String(resident.get("residentId", ""))
+		var world_state := resident.get("worldState", {}) as Dictionary
+		world_state["place"] = "公共食堂"
+		world_state["spaceId"] = "indoor_dining_hall"
+		world_state["regionId"] = "region_portal_dining_hall_entry"
+		world_state["position"] = [368, 384]
+		if resident_id == COOK_ID:
+			var social_state := resident.get("socialState", {}) as Dictionary
+			social_state["job"] = "食堂主理人"
+			social_state["workplace"] = "公共食堂"
+	var world: RefCounted = WORLD.new()
+	var started := world.call("start", data, opening) as Dictionary
+	_expect_equal(started.get("ok"), true, "晚餐高峰世界可启动")
+	return world if started.get("ok") == true else null
+
+
+func _dining_resident_ids() -> Array[String]:
+	var result: Array[String] = []
+	for resident_id: String in DINING_PEAK_RESIDENT_IDS:
+		result.append(resident_id)
+	return result
+
+
+func _dining_activity_position_key(
+	data: Dictionary,
+	activity_id: String,
+) -> String:
+	for slot_value: Variant in data.get("activitySlots", []) as Array:
+		var slot := slot_value as Dictionary
+		if String(slot.get("activityId", "")) != activity_id:
+			continue
+		var anchors := slot.get("memberAnchors", []) as Array
+		if anchors.is_empty():
+			return ""
+		var position := (anchors[0] as Dictionary).get("position", []) as Array
+		if position.size() != 2:
+			return ""
+		return "%d,%d" % [roundi(float(position[0])), roundi(float(position[1]))]
+	return ""
+
+
+func _service_place_positions_are_independent(data: Dictionary) -> bool:
+	for place_value: Variant in data.get("places", []) as Array:
+		var place := place_value as Dictionary
+		var profile := place.get("serviceProfile", {}) as Dictionary
+		if profile.is_empty():
+			continue
+		var helper_positions := _activity_position_keys(
+			data,
+			String(profile.get("helperActivityId", "")),
+		)
+		for request_activity_id: String in profile.get(
+			"requestActivityIds",
+			[],
+		) as Array:
+			for position_key: String in _activity_position_keys(
+				data,
+				request_activity_id,
+			):
+				if helper_positions.has(position_key):
+					return false
+	return true
+
+
+func _activity_position_keys(
+	data: Dictionary,
+	activity_id: String,
+) -> Array[String]:
+	var result: Array[String] = []
+	for slot_value: Variant in data.get("activitySlots", []) as Array:
+		var slot := slot_value as Dictionary
+		if String(slot.get("activityId", "")) != activity_id:
+			continue
+		for anchor_value: Variant in slot.get("memberAnchors", []) as Array:
+			var position := (
+				(anchor_value as Dictionary).get("position", []) as Array
+			)
+			if position.size() == 2:
+				result.append("%d,%d" % [
+					roundi(float(position[0])),
+					roundi(float(position[1])),
+				])
+	return result
+
+
+func _dining_customer_ids() -> Array[String]:
+	var result := _dining_resident_ids()
+	result.erase(COOK_ID)
+	return result
+
+
+func _create_dining_orders(
+	world: RefCounted,
+	resident_ids: Array[String],
+) -> Array[String]:
+	var result: Array[String] = []
+	for resident_id: String in resident_ids:
+		var created := world.call(
+			"create_occupation_service_request",
+			{
+				"kind": "dining_order",
+				"requesterResidentId": resident_id,
+			},
+		) as Dictionary
+		_expect_equal(created.get("ok"), true, "%s 可以点到晚餐" % resident_id)
+		if created.get("ok") == true:
+			result.append(String(
+				(created.get("request", {}) as Dictionary).get("requestId", ""),
+			))
+	return result
+
+
+func _advance_to_minute_of_day(world: RefCounted, target: int) -> bool:
+	for _minute in 1441:
+		var now := int(
+			(world.get("_environment") as RefCounted).call(
+				"get_absolute_minute",
+			)
+		)
+		if posmod(now, 1440) == target:
+			return true
+		world.call("advance", 1.0)
+	return false
+
+
+func _count_completed_requests(
+	world: RefCounted,
+	request_ids: Array[String],
+) -> int:
+	var count := 0
+	for request_id: String in request_ids:
+		var request := world.call(
+			"get_occupation_service_request",
+			request_id,
+		) as Dictionary
+		count += 1 if String(request.get("state", "")) == "completed" else 0
+	return count
+
+
+func _dining_completion_batches(
+	world: RefCounted,
+	request_ids: Array[String],
+) -> Dictionary:
+	var result := {}
+	for request_id: String in request_ids:
+		var request := world.call(
+			"get_occupation_service_request",
+			request_id,
+		) as Dictionary
+		if String(request.get("state", "")) != "completed":
+			continue
+		var completed_at := int(request.get("completedAtMinute", -1))
+		result[completed_at] = int(result.get(completed_at, 0)) + 1
+	return result
+
+
+func _count_residents_at_dining(
+	world: RefCounted,
+	resident_ids: Array[String],
+) -> int:
+	var count := 0
+	for resident_id: String in resident_ids:
+		var state := world.call("get_resident_state", resident_id) as Dictionary
+		count += 1 if String(state.get("currentPlace", "")) == "公共食堂" else 0
+	return count
+
+
 
 func _test_dining_and_cafe(world: RefCounted) -> void:
 	_expect(
 		_advance_to_meal_preparation_window(world),
 		"食堂顾客在当前餐次的备餐时段到店",
+	)
+	var dining_customer_state := world.call(
+		"get_resident_state",
+		DINING_CUSTOMER_ID,
+	) as Dictionary
+	_expect(
+		String(dining_customer_state.get("currentPlace", "")) == "公共食堂"
+		or _move_to_place(world, DINING_CUSTOMER_ID, "公共食堂"),
+		"食堂顾客会先到店再点餐",
 	)
 	var meal_before := _inventory(
 		world.call("get_cargo_inventory_snapshot") as Dictionary,
@@ -694,15 +1064,14 @@ func _test_dining_and_cafe(world: RefCounted) -> void:
 		),
 		"备餐完成后会等到正式供餐时间再恢复订单",
 	)
+	var resumed_meal_request := world.call(
+		"get_occupation_service_request",
+		meal_request_id,
+	) as Dictionary
 	_expect_equal(
-		(
-			world.call(
-				"get_occupation_service_request",
-				meal_request_id,
-			) as Dictionary
-		).get("state"),
+		resumed_meal_request.get("state"),
 		"pending",
-		"备餐完成后等待中的取餐请求恢复",
+		"备餐完成后等待中的取餐请求恢复（%s）" % resumed_meal_request,
 	)
 	_expect(
 		_perform_and_finish(
