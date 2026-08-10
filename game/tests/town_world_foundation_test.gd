@@ -96,8 +96,8 @@ func _scenario_indoor_props() -> void:
 	_expect_equal(authored.get("ok"), true, "indoor prop authoring succeeds")
 	for error in PROP_VALIDATOR.validate(data):
 		_expect(false, str(error))
-	_expect_equal((data.get("props", []) as Array).size(), 79, "catalog includes all authored work, writing, and rest props")
-	_expect_equal(_indoor_prop_count(data), 61, "catalog includes indoor and fixed-scene interaction props")
+	_expect_equal((data.get("props", []) as Array).size(), 81, "catalog includes all authored work, writing, and rest props")
+	_expect_equal(_indoor_prop_count(data), 63, "catalog includes indoor and fixed-scene interaction props")
 	_expect_equal(_props_at_place(data, "独立市集").size(), 5, "fixed market stalls expose goods and flower work points")
 	_expect_equal(int(authored.get("indoorSpaceCount", 0)), 23, "authoring covers all twenty-three indoor spaces")
 	var colliding_name_data := data.duplicate(true)
@@ -287,8 +287,18 @@ func _validate_agent_projection(data: Dictionary) -> void:
 	)
 	_expect_equal(
 		_verbs_for_prop(dining_props, "公共食堂备餐柜"),
-		["准备面团", "取餐"],
-		"one real pantry carries both preparation actions",
+		["取餐"],
+		"the pantry pickup point only serves customers collecting meals",
+	)
+	_expect_equal(
+		_verbs_for_prop(dining_props, "公共食堂递餐口"),
+		["递餐"],
+		"the pantry service point is independent from customer pickup",
+	)
+	_expect_equal(
+		_verbs_for_prop(dining_props, "公共食堂面团操作台"),
+		["准备面团"],
+		"the pantry dough point is independent from meal handoff",
 	)
 
 

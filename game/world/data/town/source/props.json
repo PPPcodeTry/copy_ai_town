@@ -131734,14 +131734,9 @@
     {
       "actions": [
         {
-          "durationMinutes": 10,
+          "durationMinutes": 5,
           "effects": {},
           "verb": "取餐"
-        },
-        {
-          "durationMinutes": 25,
-          "effects": {},
-          "verb": "准备面团"
         }
       ],
       "interaction": {
@@ -131887,6 +131882,76 @@
         "spaceId": "indoor_dining_hall"
       },
       "name": "公共食堂西侧餐桌",
+      "placeName": "公共食堂"
+    },
+    {
+      "actions": [
+        {
+          "durationMinutes": 5,
+          "effects": {},
+          "verb": "递餐"
+        }
+      ],
+      "interaction": {
+        "actorFacing": "down",
+        "anchorId": "serve_front",
+        "anchorKind": "use",
+        "anchorSnappedToFloor": false,
+        "assetId": "pantry_cabinet",
+        "direction": "down",
+        "instanceId": "pantry_cabinet_kitchen_east",
+        "instancePosition": [
+          688,
+          336
+        ],
+        "position": [
+          568,
+          376
+        ],
+        "regionId": "region_portal_dining_hall_entry",
+        "roomId": "dining_hall",
+        "sourceAnchorPosition": [
+          568,
+          376
+        ],
+        "spaceId": "indoor_dining_hall"
+      },
+      "name": "公共食堂递餐口",
+      "placeName": "公共食堂"
+    },
+    {
+      "actions": [
+        {
+          "durationMinutes": 25,
+          "effects": {},
+          "verb": "准备面团"
+        }
+      ],
+      "interaction": {
+        "actorFacing": "up",
+        "anchorId": "dough_front",
+        "anchorKind": "use",
+        "anchorSnappedToFloor": false,
+        "assetId": "pantry_cabinet",
+        "direction": "down",
+        "instanceId": "pantry_cabinet_kitchen_east",
+        "instancePosition": [
+          688,
+          336
+        ],
+        "position": [
+          680,
+          472
+        ],
+        "regionId": "region_portal_dining_hall_entry",
+        "roomId": "dining_hall",
+        "sourceAnchorPosition": [
+          680,
+          472
+        ],
+        "spaceId": "indoor_dining_hall"
+      },
+      "name": "公共食堂面团操作台",
       "placeName": "公共食堂"
     },
     {

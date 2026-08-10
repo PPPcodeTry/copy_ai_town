@@ -87,6 +87,7 @@ const VERB_ICON_KEYS := {
 	"取用木料": "take_lumber",
 	"取药": "clinic_medicine",
 	"取餐": "collect_meal",
+	"递餐": "collect_meal",
 	"叫卖报纸": "sell_newspapers",
 	"吃点心": "eat_pastry",
 	"吃饭": "eat_meal",

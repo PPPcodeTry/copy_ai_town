@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "source_revision": "dining_hall_pantry_cabinet_footpoint_geometry_v2",
+  "source_revision": "dining_hall_pantry_cabinet_service_anchors_v3",
   "projection_revision": "interior_projection_v1",
   "asset_id": "pantry_cabinet",
   "label": "公共食堂高储物柜",
@@ -112,6 +112,26 @@
       "position_px": [
         0,
         48
+      ],
+      "actor_facing": "up",
+      "capacity": 1
+    },
+    {
+      "id": "serve_front",
+      "kind": "use",
+      "position_px": [
+        -120,
+        48
+      ],
+      "actor_facing": "down",
+      "capacity": 1
+    },
+    {
+      "id": "dough_front",
+      "kind": "use",
+      "position_px": [
+        0,
+        144
       ],
       "actor_facing": "up",
       "capacity": 1
