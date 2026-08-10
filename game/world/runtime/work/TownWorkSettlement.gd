@@ -11,6 +11,9 @@ const RESIDENT_MESSAGE_POLICY := preload(
 const RESIDENT_MESSAGE_CONTENT := preload(
 	"res://world/runtime/social/TownResidentMessageContent.gd"
 )
+const DINING_SERVICE := preload(
+	"res://world/runtime/work/TownDiningServiceRuntime.gd"
+)
 
 # 活动完成后的工单结算域(自 TownWorldRuntime 下沉)。world 为世界运行时实例;
 # 结算是冷路径(每次活动完成一回),子 runtime 与目录 helper 统一经 world 动态访问,
@@ -810,6 +813,9 @@ static func _complete_occupation_service_work_task_before_release(
 					else "base_always_available"
 				),
 			}
+			if kind == "dining_order":
+				outcome["serviceMode"] = "counter_batch"
+				outcome["batchCapacity"] = DINING_SERVICE.BATCH_SIZE
 			world._apply_consumed_service_item(
 				requester_id,
 				item_id,
@@ -929,6 +935,13 @@ static func _complete_occupation_service_work_task_before_release(
 			"已经等到并完成这次服务",
 			true,
 		)
+		if kind == "dining_order":
+			DINING_SERVICE.complete_additional_orders(
+				world,
+				resident_id,
+				request_id,
+				now,
+			)
 		if kind == "library_return":
 			world._cancel_private_messages_for_source(
 				"library-return:%s" % String(request.get("subjectRef", "")),

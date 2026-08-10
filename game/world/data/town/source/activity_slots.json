@@ -466,10 +466,10 @@
       "fallback": "reject",
       "memberAnchors": [
         {
-          "anchorId": "open_front",
+          "anchorId": "serve_front",
           "memberAnchorId": "member_dining_serve_meal_01",
           "position": [
-            680,
+            568,
             376
           ]
         }
@@ -480,9 +480,9 @@
       "sceneId": "dining_hall",
       "slotId": "slot_dining_serve_meal_01",
       "target": {
-        "actionVerb": "取餐",
-        "anchorId": "open_front",
-        "propName": "公共食堂备餐柜"
+        "actionVerb": "递餐",
+        "anchorId": "serve_front",
+        "propName": "公共食堂递餐口"
       },
       "targetType": "prop"
     },
@@ -1557,11 +1557,11 @@
       "fallback": "reject",
       "memberAnchors": [
         {
-          "anchorId": "open_front",
+          "anchorId": "dough_front",
           "memberAnchorId": "member_baker_prepare_dough_01",
           "position": [
             680,
-            376
+            472
           ]
         }
       ],
@@ -1572,8 +1572,8 @@
       "slotId": "slot_baker_prepare_dough_01",
       "target": {
         "actionVerb": "准备面团",
-        "anchorId": "open_front",
-        "propName": "公共食堂备餐柜"
+        "anchorId": "dough_front",
+        "propName": "公共食堂面团操作台"
       },
       "targetType": "prop"
     },

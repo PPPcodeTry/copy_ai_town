@@ -170,7 +170,9 @@ static func onsite_service_wait_minutes(kind: String) -> int:
 	# 诊所看诊包含自由问诊、检查和必要的配药；餐饮要等真实备餐。
 	# 普通柜台服务窗口对这些真实链条太短。
 	match kind:
-		"clinic", "cafe_order", "dining_order":
+		"dining_order":
+			return 30
+		"clinic", "cafe_order":
 			return 120
 	return 30
 

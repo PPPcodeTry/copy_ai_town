@@ -2779,6 +2779,10 @@ func _verify_meal_sequence(data: Dictionary, opening: Dictionary) -> void:
 		_move_to_place(world, resident_name, "公共食堂"),
 		"访客能到达公共食堂",
 	)
+	_expect(
+		_prepare_meal_for_activity_test(world),
+		"完整用餐检查会先完成当前餐次备餐",
+	)
 	var wake := _take_wake_activity_routine(world, resident_name)
 	_expect_accepted(
 		world.call(
@@ -2837,6 +2841,10 @@ func _verify_active_meal_routine_save(
 		_move_to_place(world, resident_name, "公共食堂"),
 		"用餐中途存档前居民能到达食堂",
 	)
+	_expect(
+		_prepare_meal_for_activity_test(world),
+		"用餐存档检查会先完成当前餐次备餐",
+	)
 	var wake := _take_wake_activity_routine(world, resident_name)
 	_expect_accepted(
 		world.call(
@@ -2890,6 +2898,10 @@ func _verify_meal_presentation_progress(
 	_expect(
 		_move_to_place(world, resident_name, "公共食堂"),
 		"室内活动表现检查前居民能到达食堂",
+	)
+	_expect(
+		_prepare_meal_for_activity_test(world),
+		"室内活动表现检查会先完成当前餐次备餐",
 	)
 	var actor_root := Node2D.new()
 	actor_root.y_sort_enabled = true
@@ -3272,6 +3284,45 @@ func _complete_pending_dining_service(
 			continue
 		if not _perform_dining_worker_activity(world, activity_id):
 			return false
+	return false
+
+
+func _prepare_meal_for_activity_test(world: RefCounted) -> bool:
+	for _minute in 1440:
+		var now := int(
+			(world.get("_environment") as RefCounted).call(
+				"get_absolute_minute",
+			)
+		)
+		var period := world.call("_meal_period_for_minute", now) as Dictionary
+		if (
+			not period.is_empty()
+			and bool(world.call("_meal_period_is_prepared", now))
+		):
+			return true
+		var day_start := now - posmod(now, 1440)
+		if (
+			period.is_empty()
+			or now + 60 > day_start + int(period.get("end", 0))
+		):
+			world.call("advance", 1.0)
+			continue
+		for task_value: Variant in world.call(
+			"get_work_tasks_for_resident",
+			"resident_lu_qing_01",
+		) as Array:
+			var task := task_value as Dictionary
+			if (
+				String(task.get("source_kind", "")) == "meal_demand"
+				and String(task.get("capability", "")) == "food.production"
+			):
+				if not _perform_dining_worker_activity(
+					world,
+					"activity_dining_prepare_meal",
+				):
+					return false
+				break
+		world.call("advance", 1.0)
 	return false
 
 
