@@ -20,9 +20,6 @@ const SOURCE_SIZE := Vector2(1672.0, 941.0)
 const REFERENCE_VIEWPORT := Vector2(1920.0, 1080.0)
 const MINIMUM_TOUCH_SIZE := Vector2(48.0, 48.0)
 const CLOCK_HANDS_RECT := Rect2(795.0, 49.0, 82.0, 82.0)
-const ASSET_PATH := (
-	ProviderTheme.COMPOSITE_DYNAMIC_CARD_BACKGROUND_PATH
-)
 const CONTRACT_PATH := (
 	"res://assets/ui/provider_settings/composite_reference/"
 	+ "provider_settings_page_composite_user_reference_v1_contract.json"
@@ -39,13 +36,18 @@ const DETAIL_STRETCH_SAMPLE_Y := 735.0
 const CUSTOM_CONNECTION_LABEL_RECT := Rect2(690.0, 302.0, 124.0, 31.0)
 const CUSTOM_CONNECTION_INPUT_RECT := Rect2(690.0, 343.0, 548.0, 39.0)
 const CUSTOM_CONNECTION_SAVE_RECT := Rect2(1254.0, 334.0, 174.0, 56.0)
-const CUSTOM_OTHER_BASE_LABEL_RECT := Rect2(690.0, 302.0, 116.0, 31.0)
-const CUSTOM_OTHER_BASE_INPUT_RECT := Rect2(814.0, 299.0, 598.0, 37.0)
-const CUSTOM_OTHER_KEY_LABEL_RECT := Rect2(690.0, 352.0, 116.0, 31.0)
-const CUSTOM_OTHER_KEY_INPUT_RECT := Rect2(814.0, 349.0, 390.0, 37.0)
-const CUSTOM_OTHER_SAVE_KEY_RECT := Rect2(1214.0, 341.0, 62.0, 54.0)
-const CUSTOM_OTHER_REVEAL_RECT := Rect2(1284.0, 341.0, 62.0, 54.0)
-const CUSTOM_OTHER_DELETE_RECT := Rect2(1354.0, 341.0, 62.0, 54.0)
+const CUSTOM_OTHER_HEADING_RECT := Rect2(690.0, 296.0, 180.0, 35.0)
+const CUSTOM_OTHER_BASE_LABEL_RECT := Rect2(690.0, 335.0, 116.0, 46.0)
+const CUSTOM_OTHER_BASE_INPUT_RECT := Rect2(814.0, 335.0, 608.0, 46.0)
+const CUSTOM_OTHER_KEY_LABEL_RECT := Rect2(690.0, 386.0, 116.0, 50.0)
+const CUSTOM_OTHER_KEY_INPUT_RECT := Rect2(814.0, 386.0, 430.0, 52.0)
+const CUSTOM_OTHER_SAVE_RECT := Rect2(1306.0, 296.0, 116.0, 46.0)
+const CUSTOM_OTHER_REVEAL_RECT := Rect2(1258.0, 386.0, 76.0, 52.0)
+const CUSTOM_OTHER_DELETE_RECT := Rect2(1347.0, 386.0, 76.0, 52.0)
+const CUSTOM_OTHER_MODEL_LABEL_RECT := Rect2(690.0, 471.0, 180.0, 31.0)
+const CUSTOM_OTHER_MODEL_INPUT_RECT := Rect2(690.0, 529.0, 413.0, 39.0)
+const CUSTOM_OTHER_MODEL_DISCOVER_RECT := Rect2(1128.0, 509.0, 136.0, 63.0)
+const CUSTOM_OTHER_MODEL_ADD_RECT := Rect2(1292.0, 509.0, 126.0, 63.0)
 const CUSTOM_MODEL_INPUT_RECT := Rect2(690.0, 473.0, 398.0, 39.0)
 const CUSTOM_MODEL_DISCOVER_RECT := Rect2(1101.0, 464.0, 143.0, 56.0)
 const CUSTOM_MODEL_ADD_RECT := Rect2(1260.0, 464.0, 162.0, 56.0)
@@ -133,7 +135,12 @@ func configure(
 
 
 func _build() -> void:
-	var texture := ResourceLoader.load(ASSET_PATH, "Texture2D") as Texture2D
+	var provider := _find_provider(_selected_provider_id)
+	var background_path := ProviderTheme.composite_background_path(provider)
+	var texture := ResourceLoader.load(
+		background_path,
+		"Texture2D",
+	) as Texture2D
 	_build_composite_background(texture)
 	_add_header_clock_hands()
 
@@ -637,9 +644,7 @@ func _build_custom_connection_selector(
 	var connections := provider.get("customConnections", []) as Array
 	for index: int in range(connections.size()):
 		var connection := connections[index] as Dictionary
-		selector.add_item("自定义模型 · %s" % str(
-			connection.get("displayName", "兼容接口")
-		))
+		selector.add_item(str(connection.get("displayName", "兼容接口")))
 		selector.set_item_metadata(
 			index,
 			str(connection.get("providerId", "")),
@@ -653,7 +658,11 @@ func _build_custom_connection_selector(
 		selector.disabled = true
 	else:
 		selector.select(selected_index)
+		selector.text = "自定义模型 · %s" % selector.get_item_text(
+			selected_index
+		)
 	selector.item_selected.connect(func(index: int) -> void:
+		selector.text = "自定义模型 · %s" % selector.get_item_text(index)
 		ui_action.emit(
 			&"provider_settings.select_provider",
 			{"providerId": str(selector.get_item_metadata(index))},
@@ -665,6 +674,9 @@ func _build_custom_connection_selector(
 
 func _style_custom_connection_popup(selector: OptionButton) -> void:
 	var popup := selector.get_popup()
+	for index: int in range(popup.item_count):
+		popup.set_item_as_radio_checkable(index, false)
+		popup.set_item_as_checkable(index, false)
 	popup.add_theme_font_override(
 		"font",
 		ProviderTheme.composite_font("body"),
@@ -677,11 +689,11 @@ func _style_custom_connection_popup(selector: OptionButton) -> void:
 	)
 	popup.add_theme_stylebox_override(
 		"panel",
-		ProviderTheme.input_style("normal"),
+		ProviderTheme.custom_dropdown_panel_style(),
 	)
 	popup.add_theme_stylebox_override(
 		"hover",
-		ProviderTheme.status_style("success"),
+		ProviderTheme.custom_dropdown_selected_style(),
 	)
 
 
@@ -706,6 +718,13 @@ func _build_custom_connection_section(
 		),
 	)
 	if provider_id == "openai-compatible":
+		_build_custom_connection_label(
+			owner,
+			region_rect,
+			CUSTOM_OTHER_HEADING_RECT,
+			"连接设置",
+			"custom_connection_heading",
+		)
 		_build_custom_connection_label(
 			owner,
 			region_rect,
@@ -736,7 +755,7 @@ func _build_custom_connection_section(
 			"custom_api_key_input",
 		)
 		_configure_custom_key_edit(provider, key_edit)
-		_add_custom_key_actions(provider, owner, region_rect)
+		_add_custom_compatible_actions(provider, owner, region_rect)
 		return
 	_build_custom_connection_label(
 		owner,
@@ -773,17 +792,38 @@ func _build_custom_model_add_section(
 		"custom_model_add_section",
 		"custom_model_add",
 	)
+	var compatible := str(provider.get("providerId", "")) == "openai-compatible"
+	var label_rect := (
+		CUSTOM_OTHER_MODEL_LABEL_RECT
+		if compatible
+		else Rect2(690.0, 432.0, 180.0, 31.0)
+	)
+	var input_rect := (
+		CUSTOM_OTHER_MODEL_INPUT_RECT
+		if compatible
+		else CUSTOM_MODEL_INPUT_RECT
+	)
+	var add_rect := (
+		CUSTOM_OTHER_MODEL_ADD_RECT
+		if compatible
+		else CUSTOM_MODEL_ADD_RECT
+	)
+	var discover_rect := (
+		CUSTOM_OTHER_MODEL_DISCOVER_RECT
+		if compatible
+		else CUSTOM_MODEL_DISCOVER_RECT
+	)
 	_build_custom_connection_label(
 		owner,
 		region_rect,
-		Rect2(690.0, 432.0, 180.0, 31.0),
+		label_rect,
 		"添加模型",
 		"custom_model_add_label",
 	)
 	api_model_edit = _custom_connection_input(
 		owner,
 		region_rect,
-		CUSTOM_MODEL_INPUT_RECT,
+		input_rect,
 		"ApiModelInput",
 		"api_model_input",
 	)
@@ -792,7 +832,7 @@ func _build_custom_model_add_section(
 	var add := _custom_action_button(
 		owner,
 		region_rect,
-		CUSTOM_MODEL_ADD_RECT,
+		add_rect,
 		"AddApiModelButton",
 		"api_model_add",
 		"添加",
@@ -835,7 +875,7 @@ func _build_custom_model_add_section(
 	var discover := _custom_action_button(
 		owner,
 		region_rect,
-		CUSTOM_MODEL_DISCOVER_RECT,
+		discover_rect,
 		"DiscoverModelsButton",
 		"api_model_discover",
 		"获取模型",
@@ -858,6 +898,149 @@ func _build_custom_model_add_section(
 			{"providerId": str(provider.get("providerId", ""))},
 		)
 	)
+	var discovered_models := provider.get("discoveredModels", []) as Array
+	if not discovered_models.is_empty():
+		_build_discovered_model_panel(provider, discovered_models, add)
+
+
+func _build_discovered_model_panel(
+	provider: Dictionary,
+	discovered_models: Array,
+	add_button: Button,
+) -> void:
+	var texture := ProviderTheme.custom_model_discovery_texture()
+	if texture == null:
+		return
+	var panel_rect := _scaled_rect(Rect2(690.0, 512.0, 580.0, 126.0))
+	var panel := Control.new()
+	panel.name = "DiscoveredModelPanel"
+	panel.position = panel_rect.position
+	panel.size = panel_rect.size
+	panel.z_index = 40
+	panel.z_as_relative = false
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.add_to_group("provider_settings_content_surface")
+	panel.set_meta("gate_id", "discovered_model_panel")
+	_register_owner(
+		panel,
+		"discovered_model_panel",
+		"operation_control",
+		"ui.provider-settings.custom-model-discovery-panel.v1",
+		"imagegen_dropdown_panel",
+	)
+	add_child(panel)
+
+	var art := TextureRect.new()
+	art.name = "DiscoveredModelPanelArt"
+	art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	art.texture = texture
+	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art.stretch_mode = TextureRect.STRETCH_SCALE
+	art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(art)
+
+	var scroll := ScrollContainer.new()
+	scroll.name = "DiscoveredModelScroll"
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.add_theme_stylebox_override("panel", ProviderTheme.empty_style())
+	panel.add_child(scroll)
+
+	var rows := VBoxContainer.new()
+	rows.name = "DiscoveredModelRows"
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows.add_theme_constant_override("separation", 0)
+	rows.custom_minimum_size = Vector2(
+		panel_rect.size.x,
+		maxf(panel_rect.size.y, panel_rect.size.y / 3.0 * discovered_models.size()),
+	)
+	scroll.add_child(rows)
+	var provider_label := _custom_model_discovery_source_label(provider)
+	for value: Variant in discovered_models:
+		if typeof(value) != TYPE_STRING:
+			continue
+		var model_id := String(value).strip_edges()
+		if model_id.is_empty():
+			continue
+		_add_discovered_model_row(
+			rows,
+			model_id,
+			provider_label,
+			panel_rect.size.y / 3.0,
+			panel,
+			add_button,
+		)
+
+
+func _add_discovered_model_row(
+	parent: VBoxContainer,
+	model_id: String,
+	provider_label: String,
+	row_height: float,
+	panel: Control,
+	add_button: Button,
+) -> void:
+	var row := Control.new()
+	row.custom_minimum_size = Vector2(0.0, row_height)
+	row.mouse_filter = Control.MOUSE_FILTER_PASS
+	parent.add_child(row)
+
+	var button := Button.new()
+	button.name = "DiscoveredModel_%s" % model_id.validate_node_name()
+	button.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	button.flat = true
+	button.focus_mode = Control.FOCUS_ALL
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	for state: String in [
+		"normal",
+		"hover",
+		"pressed",
+		"hover_pressed",
+		"focus",
+		"disabled",
+	]:
+		button.add_theme_stylebox_override(state, ProviderTheme.empty_style())
+	row.add_child(button)
+
+	var model_label := Label.new()
+	model_label.anchor_right = 1.0
+	model_label.offset_left = _design_scale * 16.0
+	model_label.offset_right = -_design_scale * 140.0
+	model_label.offset_bottom = row_height
+	model_label.text = model_id
+	model_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	model_label.add_theme_font_override("font", ProviderTheme.composite_font("body"))
+	model_label.add_theme_font_size_override("font_size", _scaled_font_size(19))
+	model_label.add_theme_color_override("font_color", ProviderTheme.COMPOSITE_INK)
+	model_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(model_label)
+
+	var source_label := Label.new()
+	source_label.anchor_left = 1.0
+	source_label.anchor_right = 1.0
+	source_label.offset_left = -_design_scale * 130.0
+	source_label.offset_right = -_design_scale * 18.0
+	source_label.offset_bottom = row_height
+	source_label.text = provider_label
+	source_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	source_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	source_label.add_theme_font_override("font", ProviderTheme.composite_font("body"))
+	source_label.add_theme_font_size_override("font_size", _scaled_font_size(15))
+	source_label.add_theme_color_override("font_color", ProviderTheme.COMPOSITE_MUTED)
+	source_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(source_label)
+
+	button.pressed.connect(func() -> void:
+		_draft_api_model = model_id
+		api_model_edit.text = model_id
+		api_model_edit.caret_column = model_id.length()
+		add_button.disabled = false
+		ui_action.emit(&"ui.draft_api_model", {"value": model_id})
+		panel.queue_free()
+		api_model_edit.grab_focus()
+	)
 
 
 func _custom_section_owner(
@@ -878,19 +1061,10 @@ func _custom_section_owner(
 		gate_id,
 		"section_frame",
 		"ui.provider-settings.%s.v2" % section_id.replace("_", "-"),
-		"imagegen-composite",
+		"imagegen-composite-background-owner",
 	)
 	_mark_surface(panel)
 	provider_detail.add_child(panel)
-	var art := TextureRect.new()
-	art.name = "GeneratedSectionArt"
-	art.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	art.texture = ProviderTheme.custom_section_texture(section_id)
-	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	art.stretch_mode = TextureRect.STRETCH_SCALE
-	art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_child(art)
 	return panel
 
 
@@ -1001,19 +1175,20 @@ func _configure_custom_key_edit(
 	)
 
 
-func _add_custom_key_actions(
+func _add_custom_compatible_actions(
 	provider: Dictionary,
 	parent: Control,
 	parent_rect: Rect2,
 ) -> void:
 	var key_data := provider.get("key", {}) as Dictionary
-	var save := _custom_icon_button(
+	var save := _custom_action_button(
 		parent,
 		parent_rect,
-		CUSTOM_OTHER_SAVE_KEY_RECT,
+		CUSTOM_OTHER_SAVE_RECT,
 		"SaveCustomConnectionButton",
 		"custom_connection_save",
-		ProviderTheme.custom_key_save_texture(),
+		"保存连接",
+		"success",
 	)
 	save.disabled = (
 		not _action_enabled("saveConnection")
@@ -1041,7 +1216,7 @@ func _add_custom_key_actions(
 		CUSTOM_OTHER_REVEAL_RECT,
 		"RevealCustomKeyButton",
 		"custom_key_reveal",
-		ProviderTheme.custom_key_reveal_texture(),
+		null,
 	)
 	reveal.disabled = (
 		_draft_key.is_empty()
@@ -1057,7 +1232,7 @@ func _add_custom_key_actions(
 		CUSTOM_OTHER_DELETE_RECT,
 		"DeleteCustomKeyButton",
 		"custom_key_delete",
-		ProviderTheme.custom_key_delete_texture(),
+		null,
 	)
 	delete.disabled = (
 		not _action_enabled("deleteKey")
@@ -1101,8 +1276,19 @@ func _custom_icon_button(
 			ProviderTheme.transparent_hit_style(state),
 		)
 	parent.add_child(button)
+	if art_texture != null:
+		_add_button_art(button, art_texture, "ActionArt")
+	ProviderButtonMotion.attach(button)
+	return button
+
+
+func _add_button_art(
+	button: BaseButton,
+	art_texture: Texture2D,
+	art_name: String,
+) -> void:
 	var art := TextureRect.new()
-	art.name = "DeleteArt"
+	art.name = art_name
 	_apply_visual_rect(art, button)
 	art.texture = art_texture
 	art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -1110,8 +1296,6 @@ func _custom_icon_button(
 	art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	art.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_child(art)
-	ProviderButtonMotion.attach(button)
-	return button
 
 
 func _add_custom_connection_save_button(
@@ -1172,11 +1356,9 @@ func _custom_action_button(
 	)
 	button.add_theme_font_size_override("font_size", _scaled_font_size(20))
 	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
-		var style := (
-			ProviderTheme.button_style("secondary", state)
-			if variant == "quiet"
-			else ProviderTheme.button_style(variant, state)
-		)
+		# 正常按钮底板已经由自定义模型整页资产负责，运行时只覆盖
+		# 不可用等动态状态，避免同一个边框被重复绘制两次。
+		var style: StyleBox = ProviderTheme.transparent_hit_style(state)
 		if state == "disabled":
 			style = ProviderTheme.exact_action_button_style(gate_id)
 		button.add_theme_stylebox_override(
@@ -1234,6 +1416,18 @@ func _custom_model_origin_label(provider: Dictionary) -> String:
 			return "Ollama · 本地"
 		"lm-studio":
 			return "LM Studio · 本地"
+		"302-ai":
+			return "302.AI"
+		_:
+			return "兼容接口"
+
+
+func _custom_model_discovery_source_label(provider: Dictionary) -> String:
+	match str(provider.get("providerId", "")):
+		"ollama":
+			return "Ollama"
+		"lm-studio":
+			return "LM Studio"
 		"302-ai":
 			return "302.AI"
 		_:
@@ -1363,6 +1557,9 @@ func _build_key_section(
 				and not bool(key_data.get("saved", false))
 			)
 	)
+	if str(provider.get("providerId", "")) == "302-ai":
+		_add_302_key_actions(provider, owner, region_rect)
+		return
 	var reveal := _hit_button(
 		owner,
 		region_rect,
@@ -1424,6 +1621,74 @@ func _build_key_section(
 		ui_action.emit(
 			&"provider_settings.delete_key",
 			{"providerId": str(provider.get("providerId", ""))}
+		)
+	)
+
+
+func _add_302_key_actions(
+	provider: Dictionary,
+	parent: Control,
+	parent_rect: Rect2,
+) -> void:
+	var key_data := provider.get("key", {}) as Dictionary
+	var save := _custom_icon_button(
+		parent,
+		parent_rect,
+		_rect(_hit_targets.get("show_key", [])),
+		"SaveKeyButton",
+		"key_save",
+		ProviderTheme.custom_key_save_texture(),
+	)
+	save.disabled = (
+		_draft_key.is_empty()
+		or not _draft_key_dirty
+		or not _action_enabled("saveKey")
+		or _operation_loading()
+	)
+	save.tooltip_text = "保存 Key"
+	save.pressed.connect(func() -> void:
+		ui_action.emit(
+			&"ui.save_key",
+			{
+				"providerId": str(provider.get("providerId", "")),
+				"apiKey": key_edit.text,
+			},
+		)
+	)
+	var reveal := _custom_icon_button(
+		parent,
+		parent_rect,
+		_rect(_hit_targets.get("save_key", [])),
+		"RevealKeyButton",
+		"key_reveal",
+		ProviderTheme.custom_key_reveal_texture(),
+	)
+	reveal.disabled = (
+		_draft_key.is_empty()
+		and not bool(key_data.get("saved", false))
+	)
+	reveal.tooltip_text = "隐藏 Key" if _show_key else "显示 Key"
+	reveal.pressed.connect(func() -> void:
+		ui_action.emit(&"ui.toggle_key_visibility", {})
+	)
+	var delete := _custom_icon_button(
+		parent,
+		parent_rect,
+		_rect(_hit_targets.get("delete_key", [])),
+		"DeleteKeyButton",
+		"key_delete",
+		ProviderTheme.custom_key_delete_texture(),
+	)
+	delete.disabled = (
+		not _action_enabled("deleteKey")
+		or not bool(key_data.get("saved", false))
+		or _operation_loading()
+	)
+	delete.tooltip_text = "删除 Key"
+	delete.pressed.connect(func() -> void:
+		ui_action.emit(
+			&"provider_settings.delete_key",
+			{"providerId": str(provider.get("providerId", ""))},
 		)
 	)
 
@@ -1495,6 +1760,7 @@ func _build_models_section(
 	provider: Dictionary,
 	detail_rect: Rect2
 ) -> void:
+	var compatible := str(provider.get("providerId", "")) == "openai-compatible"
 	var region_rect := _region_rect("models_section")
 	var owner := _owner_control(
 		provider_detail,
@@ -1511,7 +1777,8 @@ func _build_models_section(
 		region_rect,
 		"models_label",
 		"模型与能力",
-		ProviderTheme.COMPOSITE_INK
+		ProviderTheme.COMPOSITE_INK,
+		Rect2(700.0, 600.0, 124.0, 31.0) if compatible else Rect2(),
 	)
 	var models := provider.get("models", []) as Array
 	var custom_models := bool(provider.get("customModels", false))
@@ -1524,7 +1791,8 @@ func _build_models_section(
 		region_rect,
 		"model_page",
 		"%d / %d" % [_model_page + 1, page_count],
-		ProviderTheme.COMPOSITE_INK
+		ProviderTheme.COMPOSITE_INK,
+		Rect2(1245.0, 596.0, 108.0, 34.0) if compatible else Rect2(),
 	)
 	var previous := _pagination_button(
 		owner,
@@ -1534,6 +1802,7 @@ func _build_models_section(
 		"上一页模型",
 		false,
 		_model_page <= 0,
+		Rect2(1190.0, 593.0, 46.0, 42.0) if compatible else Rect2(),
 	)
 	previous.pressed.connect(func() -> void:
 		_change_model_page(_model_page - 1)
@@ -1546,6 +1815,7 @@ func _build_models_section(
 		"下一页模型",
 		true,
 		_model_page >= page_count - 1,
+		Rect2(1362.0, 593.0, 46.0, 42.0) if compatible else Rect2(),
 	)
 	next.pressed.connect(func() -> void:
 		_change_model_page(_model_page + 1)
@@ -1553,7 +1823,16 @@ func _build_models_section(
 	for index: int in range(page_end - page_start):
 		var model := models[page_start + index] as Dictionary
 		var model_id := str(model.get("modelId", ""))
-		var card_rect := _hit_rect("model_%d" % index)
+		var card_rect := (
+			_scaled_rect(Rect2(
+				682.0 if index == 0 else 1066.0,
+				635.0,
+				363.0,
+				105.0,
+			))
+			if compatible
+			else _hit_rect("model_%d" % index)
+		)
 		var card := _hit_button_from_rect(
 			owner,
 			region_rect,
@@ -1596,7 +1875,17 @@ func _build_models_section(
 				ProviderTheme.COMPOSITE_SUCCESS
 				if bool(model.get("enabled", false))
 				else ProviderTheme.COMPOSITE_INK
-			)
+			),
+			(
+				Rect2(
+					710.0 if index == 0 else 1109.0,
+					642.0,
+					270.0,
+					38.0,
+				)
+				if compatible
+				else Rect2()
+			),
 		)
 		var capability_label := _add_slot_label(
 			card,
@@ -1613,7 +1902,17 @@ func _build_models_section(
 				ProviderTheme.COMPOSITE_SUCCESS
 				if bool(model.get("enabled", false))
 				else ProviderTheme.COMPOSITE_MUTED
-			)
+			),
+			(
+				Rect2(
+					710.0 if index == 0 else 1109.0,
+					686.0,
+					305.0,
+					45.0,
+				)
+				if compatible
+				else Rect2()
+			),
 		)
 		if bool(model.get("enabled", false)):
 			_apply_selected_model_typography(name_label, "body")
@@ -1627,20 +1926,38 @@ func _build_models_section(
 				index,
 			)
 	if models.is_empty() and custom_models:
-		_add_slot_label(
+		var empty_texture := ProviderTheme.custom_model_empty_texture()
+		if empty_texture != null:
+			var empty_art := TextureRect.new()
+			empty_art.name = "CustomModelEmptyPanelArt"
+			var empty_rect := _scaled_rect(Rect2(678.0, 585.0, 752.0, 154.0))
+			_place(empty_art, empty_rect, region_rect)
+			empty_art.texture = empty_texture
+			empty_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			empty_art.stretch_mode = TextureRect.STRETCH_SCALE
+			empty_art.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			empty_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			empty_art.add_to_group("provider_settings_surface")
+			empty_art.set_meta("gate_id", "custom_model_empty_panel")
+			owner.add_child(empty_art)
+		var empty_title := _add_slot_label(
 			owner,
 			region_rect,
 			"model_0_name",
 			"还没有添加模型",
 			ProviderTheme.COMPOSITE_MUTED,
+			Rect2(700.0, 648.0, 708.0, 35.0),
 		)
-		_add_slot_label(
+		empty_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var empty_message := _add_slot_label(
 			owner,
 			region_rect,
 			"model_0_capabilities",
 			"填写模型 ID，或从当前连接获取模型",
 			ProviderTheme.COMPOSITE_MUTED,
+			Rect2(700.0, 684.0, 708.0, 34.0),
 		)
+		empty_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	if models.size() == 1 and _model_page == 0:
 		_add_slot_label(
 			owner,
@@ -1670,15 +1987,21 @@ func _pagination_button(
 	tooltip: String,
 	point_right: bool,
 	disabled: bool,
+	source_rect_override: Rect2 = Rect2(),
 ) -> Button:
-	var button := _hit_button(
+	var button := _hit_button_from_rect(
 		parent,
 		parent_rect,
-		hit_id,
+		(
+			_scaled_rect(source_rect_override)
+			if source_rect_override.size != Vector2.ZERO
+			else _hit_rect(hit_id)
+		),
 		node_name,
 		hit_id,
 		"operation_control",
 		"ui.provider-settings.composite.%s.v1" % hit_id,
+		"composite-transparent-control",
 	)
 	button.tooltip_text = tooltip
 	button.disabled = disabled
@@ -1834,9 +2157,11 @@ func _build_connection_section(
 		str(error_data.get("kind", "")),
 		str(connection.get("status", ""))
 	)
-	if _operation_loading():
-		_add_loading_status_plate(owner, region_rect)
-		_add_checking_status_icon(owner, region_rect)
+	_add_connection_status_plate(
+		owner,
+		region_rect,
+		"loading" if _operation_loading() else tone,
+	)
 	status_label = _add_slot_label(
 		owner,
 		region_rect,
@@ -1844,7 +2169,7 @@ func _build_connection_section(
 		_operation_title(operation, connection, error_data),
 		_tone_color(tone)
 	)
-	_add_slot_label(
+	var status_message := _add_slot_label(
 		owner,
 		region_rect,
 		"connection_message",
@@ -1855,6 +2180,9 @@ func _build_connection_section(
 		),
 		ProviderTheme.COMPOSITE_MUTED
 	)
+	for label: Label in [status_label, status_message]:
+		label.position.x += _scaled_spacing(28.0)
+		label.size.x = maxf(0.0, label.size.x - _scaled_spacing(28.0))
 	check_button = _hit_button(
 		owner,
 		region_rect,
@@ -1865,7 +2193,11 @@ func _build_connection_section(
 		"ui.provider-settings.composite.check-connection.v1"
 	)
 	check_button.text = (
-		"检查中…" if _operation_loading() else "检查连接"
+		"检查中…"
+		if _operation_loading()
+		else "重新检查"
+		if tone == "error"
+		else "检查连接"
 	)
 	check_button.disabled = (
 		not _action_enabled("checkConnection")
@@ -1896,12 +2228,16 @@ func _build_connection_section(
 	)
 
 
-func _add_loading_status_plate(owner: Control, region_rect: Rect2) -> void:
-	var texture := ProviderTheme.provider_loading_status_texture()
+func _add_connection_status_plate(
+	owner: Control,
+	region_rect: Rect2,
+	tone: String,
+) -> void:
+	var texture := ProviderTheme.connection_status_texture(tone)
 	if texture == null:
 		return
 	var plate := TextureRect.new()
-	plate.name = "ConnectionLoadingPlate"
+	plate.name = "ConnectionStatusPlate"
 	var plate_rect := _scaled_rect(Rect2(662.0, 741.0, 506.0, 94.0))
 	_place(plate, plate_rect, region_rect)
 	plate.texture = texture
@@ -1910,8 +2246,22 @@ func _add_loading_status_plate(owner: Control, region_rect: Rect2) -> void:
 	plate.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	plate.add_to_group("provider_settings_surface")
-	plate.set_meta("gate_id", "connection_status_loading_plate")
+	plate.set_meta("gate_id", "connection_status_%s_plate" % tone)
 	owner.add_child(plate)
+	if tone == "loading":
+		var tween := plate.create_tween().set_loops()
+		tween.tween_property(
+			plate,
+			"modulate",
+			Color(1.0, 1.0, 1.0, 0.72),
+			0.58,
+		).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tween.tween_property(
+			plate,
+			"modulate",
+			Color.WHITE,
+			0.58,
+		).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 
 func _add_checking_status_icon(owner: Control, region_rect: Rect2) -> void:
@@ -2213,10 +2563,15 @@ func _add_slot_label(
 	parent_rect: Rect2,
 	slot_id: String,
 	text_value: String,
-	color: Color
+	color: Color,
+	source_rect_override: Rect2 = Rect2(),
 ) -> Label:
 	var slot := _slots.get(slot_id, {}) as Dictionary
-	var target_rect := _scaled_rect(_rect(slot.get("rect", [])))
+	var target_rect := _scaled_rect(
+		source_rect_override
+		if source_rect_override.size != Vector2.ZERO
+		else _rect(slot.get("rect", []))
+	)
 	target_rect.position.y += _scaled_spacing(
 		float(slot.get("opticalYOffsetAt1920", 0))
 	)
@@ -2455,6 +2810,11 @@ func _is_placeholder_data() -> bool:
 
 
 func _formal_status_text() -> String:
+	match str((_view_model.get("operation", {}) as Dictionary).get("status", "idle")):
+		"loading":
+			return "正在检查"
+		"error", "rejected":
+			return "需要处理"
 	var published := str(
 		_data.get("formalStatusLabel", "")
 	).strip_edges()
@@ -2537,14 +2897,7 @@ func _operation_title(
 		"rejected":
 			return "配置需要修正"
 		"error":
-			var connection_label := str(
-				connection.get("label", "")
-			).strip_edges()
-			return (
-				connection_label
-				if not connection_label.is_empty()
-				else "连接检查失败"
-			)
+			return "连接检查失败"
 		"disabled":
 			return (
 				"开发预览不可用"
@@ -2552,7 +2905,11 @@ func _operation_title(
 				else "当前无法检查连接"
 			)
 		_:
-			return str(connection.get("label", "等待检查"))
+			return (
+				"连接正常"
+				if str(connection.get("status", "")) == "available"
+				else str(connection.get("label", "等待检查"))
+			)
 
 
 func _operation_message(
@@ -2592,6 +2949,8 @@ func _operation_tone(
 	error_kind: String,
 	provider_status: String
 ) -> String:
+	if operation_status == "error":
+		return "error"
 	if operation_status == "success" or provider_status == "available":
 		return "success"
 	if operation_status == "disabled":
@@ -2602,8 +2961,6 @@ func _operation_tone(
 		or provider_status in ["rate_limited", "checking"]
 	):
 		return "warning"
-	if operation_status == "error":
-		return "error"
 	return (
 		"error"
 		if provider_status in [

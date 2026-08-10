@@ -121,6 +121,9 @@ func _build_delete_model_confirmation() -> void:
 	_delete_model_confirmation.title = "删除这个自定义模型？"
 	_delete_model_confirmation.ok_button_text = "删除模型"
 	_delete_model_confirmation.cancel_button_text = "取消"
+	_delete_model_confirmation.semantic_icon = (
+		ProviderTheme.custom_model_delete_texture()
+	)
 	_delete_model_confirmation.confirmed.connect(_confirm_delete_custom_model)
 	_delete_model_confirmation.canceled.connect(func() -> void:
 		_pending_model_deletion.clear()
@@ -139,7 +142,10 @@ func _build_delete_model_blocked_dialog() -> void:
 	)
 	_delete_model_blocked_dialog.ok_button_text = "去分配模型"
 	_delete_model_blocked_dialog.cancel_button_text = "知道了"
-	_delete_model_blocked_dialog.semantic_kind = "error"
+	_delete_model_blocked_dialog.semantic_kind = "warning"
+	_delete_model_blocked_dialog.semantic_icon = (
+		ProviderTheme.custom_model_delete_blocked_texture()
+	)
 	_delete_model_blocked_dialog.confirmed.connect(
 		_open_blocked_model_assignment
 	)
@@ -154,7 +160,7 @@ func _request_delete_custom_model(provider_id: String, api_model: String) -> voi
 		"apiModel": api_model,
 	}
 	_delete_model_confirmation.dialog_text = (
-		"将删除“%s”。如果居民仍在使用它，系统会阻止删除并要求先重新分配。"
+		"将删除“%s”。删除后无法恢复。"
 		% api_model
 	)
 	_delete_model_confirmation.popup_centered()

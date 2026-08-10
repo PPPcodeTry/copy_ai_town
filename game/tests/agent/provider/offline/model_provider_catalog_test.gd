@@ -626,11 +626,11 @@ func _test_settings_service_custom_model_flow() -> void:
 	) as Dictionary
 	_expect_equal(saved_local_model.get("ok"), true, "Ollama model can be saved without an API key")
 	var discovered := settings.call(
-		"_persist_discovered_models",
+		"_store_discovered_models",
 		"ollama",
 		["qwen3:8b", "gemma3:4b", "qwen3:8b"],
 	) as Dictionary
-	_expect_equal(discovered.get("ok"), true, "discovered local models merge into saved models")
+	_expect_equal(discovered.get("ok"), true, "discovered local models are offered for selection")
 	settings.call("refresh")
 	view_model = settings.call("get_view_model") as Dictionary
 	provider = _provider_from_view_model(view_model, "ollama")
@@ -639,12 +639,27 @@ func _test_settings_service_custom_model_flow() -> void:
 		model_ids.append(String(model.get("modelId", "")))
 	_expect_equal(
 		model_ids,
+		["qwen3:8b"],
+		"discovery does not silently save every returned model",
+	)
+	_expect_equal(
+		provider.get("discoveredModels"),
 		["qwen3:8b", "gemma3:4b"],
-		"automatic discovery keeps stable unique model ids",
+		"automatic discovery exposes stable unique model ids",
+	)
+	var saved_discovered_model := settings.call(
+		"dispatch",
+		"provider_settings.save_api_model",
+		{"providerId": "ollama", "apiModel": "gemma3:4b"},
+	) as Dictionary
+	_expect_equal(
+		saved_discovered_model.get("ok"),
+		true,
+		"a discovered model is saved only after player selection",
 	)
 	var runtime := settings.call("runtime_configuration") as Dictionary
 	_expect_equal(runtime.get("providerId"), "ollama", "local model becomes the selected provider")
-	_expect_equal(runtime.get("modelId"), "qwen3:8b", "local model id reaches runtime configuration")
+	_expect_equal(runtime.get("modelId"), "gemma3:4b", "selected discovered model id reaches runtime configuration")
 	_expect_equal(runtime.get("authRequired"), false, "local runtime records optional authentication")
 	_expect(
 		String(runtime.get("errorCode", "")) != "PROVIDER_API_KEY_REQUIRED",

@@ -22,6 +22,18 @@ const COMPOSITE_DYNAMIC_CARD_BACKGROUND_PATH := (
 	RUNTIME_ASSET_ROOT
 	+ "/composite/page_shell/provider_settings_page_dynamic_cards_v2.png"
 )
+const CUSTOM_LOCAL_BACKGROUND_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/page_shell/provider_settings_custom_local_v3.png"
+)
+const CUSTOM_302_BACKGROUND_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/page_shell/provider_settings_custom_302_v3.png"
+)
+const CUSTOM_COMPATIBLE_BACKGROUND_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/page_shell/provider_settings_custom_compatible_v3.png"
+)
 const SECTION_FRAME_PATH := (
 	RUNTIME_ASSET_ROOT
 	+ "/base_ninepatch/section_frame/section_frame_v1.png"
@@ -72,9 +84,37 @@ const CUSTOM_CONNECTION_TWO_ROW_PATH := (
 const CUSTOM_MODEL_ADD_ROW_PATH := (
 	CUSTOM_SECTION_ROOT + "/custom_model_add_row_v2.png"
 )
+const CUSTOM_DROPDOWN_ROOT := (
+	RUNTIME_ASSET_ROOT + "/composite/dropdowns"
+)
+const CUSTOM_DROPDOWN_PANEL_PATH := (
+	CUSTOM_DROPDOWN_ROOT + "/custom_connection_dropdown_panel_v1.png"
+)
+const CUSTOM_DROPDOWN_SELECTED_PATH := (
+	CUSTOM_DROPDOWN_ROOT + "/custom_connection_dropdown_selected_v1.png"
+)
+const CUSTOM_MODEL_DISCOVERY_PANEL_PATH := (
+	CUSTOM_DROPDOWN_ROOT + "/custom_model_discovery_panel_v1.png"
+)
+const CUSTOM_MODEL_EMPTY_PANEL_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/empty_states/custom_model_empty_panel_v1.png"
+)
 const STATUS_LOADING_PLATE_PATH := (
 	RUNTIME_ASSET_ROOT
 	+ "/composite/status_strips/status_loading_v2.png"
+)
+const STATUS_SUCCESS_CUSTOM_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/status_strips/status_success_custom_v3.png"
+)
+const STATUS_LOADING_CUSTOM_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/status_strips/status_loading_custom_v3.png"
+)
+const STATUS_ERROR_CUSTOM_PATH := (
+	RUNTIME_ASSET_ROOT
+	+ "/composite/status_strips/status_error_custom_v3.png"
 )
 const PROVIDER_CARD_ROOT := (
 	RUNTIME_ASSET_ROOT + "/composite/provider_cards"
@@ -115,6 +155,9 @@ const CUSTOM_KEY_DELETE_PATH := (
 )
 const PROVIDER_CHECKING_CONNECTION_PATH := (
 	RUNTIME_ASSET_ROOT + "/icons/status/provider_checking_connection_v1.png"
+)
+const CUSTOM_MODEL_DELETE_BLOCKED_PATH := (
+	RUNTIME_ASSET_ROOT + "/icons/status/custom_model_delete_blocked_v1.png"
 )
 const PROVIDER_CLOCK_HANDS_PATH := (
 	RUNTIME_ASSET_ROOT + "/icons/header/provider_clock_hands_v1.png"
@@ -254,6 +297,9 @@ static func runtime_assets_ready() -> bool:
 	for path: String in [
 		PAGE_SHELL_PATH,
 		COMPOSITE_DYNAMIC_CARD_BACKGROUND_PATH,
+		CUSTOM_LOCAL_BACKGROUND_PATH,
+		CUSTOM_302_BACKGROUND_PATH,
+		CUSTOM_COMPATIBLE_BACKGROUND_PATH,
 		SECTION_FRAME_PATH,
 		CONTENT_SLOT_PATH,
 		"%s/button_normal_v1.png" % BUTTON_ROOT,
@@ -276,8 +322,16 @@ static func runtime_assets_ready() -> bool:
 		CUSTOM_CONNECTION_ROW_PATH,
 		CUSTOM_CONNECTION_TWO_ROW_PATH,
 		CUSTOM_MODEL_ADD_ROW_PATH,
+		CUSTOM_DROPDOWN_PANEL_PATH,
+		CUSTOM_DROPDOWN_SELECTED_PATH,
+		CUSTOM_MODEL_DISCOVERY_PANEL_PATH,
+		CUSTOM_MODEL_EMPTY_PANEL_PATH,
 		STATUS_LOADING_PLATE_PATH,
+		STATUS_SUCCESS_CUSTOM_PATH,
+		STATUS_LOADING_CUSTOM_PATH,
+		STATUS_ERROR_CUSTOM_PATH,
 		PROVIDER_CHECKING_CONNECTION_PATH,
+		CUSTOM_MODEL_DELETE_BLOCKED_PATH,
 		CUSTOM_KEY_SAVE_PATH,
 		CUSTOM_KEY_REVEAL_PATH,
 		CUSTOM_KEY_DELETE_PATH,
@@ -288,6 +342,18 @@ static func runtime_assets_ready() -> bool:
 		if _texture(path) == null:
 			return false
 	return true
+
+
+static func composite_background_path(provider: Dictionary) -> String:
+	if not bool(provider.get("customGroup", false)):
+		return COMPOSITE_DYNAMIC_CARD_BACKGROUND_PATH
+	match str(provider.get("providerId", "")):
+		"302-ai":
+			return CUSTOM_302_BACKGROUND_PATH
+		"openai-compatible":
+			return CUSTOM_COMPATIBLE_BACKGROUND_PATH
+		_:
+			return CUSTOM_LOCAL_BACKGROUND_PATH
 
 
 static func board_panel(compact: bool = false) -> StyleBox:
@@ -546,8 +612,22 @@ static func provider_checking_connection_texture() -> Texture2D:
 	return _texture(PROVIDER_CHECKING_CONNECTION_PATH)
 
 
+static func custom_model_delete_blocked_texture() -> Texture2D:
+	return _texture(CUSTOM_MODEL_DELETE_BLOCKED_PATH)
+
+
 static func provider_loading_status_texture() -> Texture2D:
 	return _texture(STATUS_LOADING_PLATE_PATH)
+
+
+static func connection_status_texture(tone: String) -> Texture2D:
+	match tone:
+		"loading":
+			return _texture(STATUS_LOADING_CUSTOM_PATH)
+		"error", "warning":
+			return _texture(STATUS_ERROR_CUSTOM_PATH)
+		_:
+			return _texture(STATUS_SUCCESS_CUSTOM_PATH)
 
 
 static func custom_section_texture(section_id: String) -> Texture2D:
@@ -558,6 +638,30 @@ static func custom_section_texture(section_id: String) -> Texture2D:
 			return _texture(CUSTOM_MODEL_ADD_ROW_PATH)
 		_:
 			return _texture(CUSTOM_CONNECTION_ROW_PATH)
+
+
+static func custom_dropdown_panel_style() -> StyleBox:
+	return _texture_style(
+		CUSTOM_DROPDOWN_PANEL_PATH,
+		[18, 18, 18, 18],
+		[12, 8, 12, 8],
+	)
+
+
+static func custom_dropdown_selected_style() -> StyleBox:
+	return _texture_style(
+		CUSTOM_DROPDOWN_SELECTED_PATH,
+		[10, 8, 10, 8],
+		[10, 4, 10, 4],
+	)
+
+
+static func custom_model_discovery_texture() -> Texture2D:
+	return _texture(CUSTOM_MODEL_DISCOVERY_PANEL_PATH)
+
+
+static func custom_model_empty_texture() -> Texture2D:
+	return _texture(CUSTOM_MODEL_EMPTY_PANEL_PATH)
 
 
 static func empty_style() -> StyleBoxEmpty:

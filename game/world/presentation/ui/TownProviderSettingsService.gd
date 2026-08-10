@@ -76,11 +76,13 @@ var _revision := 0
 var _request_sequence := 0
 var _active_health_request_id := ""
 var _active_model_catalog_request_id := ""
+var _discovered_models_by_provider: Dictionary = {}
 var _health_configuration_generation := 0
 var _dirty_health_providers: Dictionary = {}
 
 
 func configure_store(path: String) -> Dictionary:
+	_discovered_models_by_provider.clear()
 	var configured := _store.call("configure", path) as Dictionary
 	if not bool(configured.get("ok", false)):
 		return configured
@@ -875,11 +877,12 @@ func _save_api_model(payload: Dictionary) -> Dictionary:
 	selected_models[provider_id] = api_model
 	candidate["selectedModelByProvider"] = selected_models
 	candidate["selectedProviderId"] = provider_id
-	return _persist_candidate_reconfigure_and_reload(
+	var persisted := _persist_candidate_reconfigure_and_reload(
 		candidate,
 		"模型已添加并设为居民默认模型。",
 		provider_id,
 	)
+	return persisted
 
 
 func _delete_api_model(payload: Dictionary) -> Dictionary:
@@ -997,7 +1000,7 @@ func _on_model_catalog_completed(
 			"PROVIDER_MODEL_CATALOG_REQUEST_FAILED",
 		)
 	else:
-		final_result = _persist_discovered_models(
+		final_result = _store_discovered_models(
 			provider_id,
 			result.get("models", []),
 		)
@@ -1016,7 +1019,7 @@ func _on_model_catalog_completed(
 	operation_completed.emit(SCOPE, operation.duplicate(true))
 
 
-func _persist_discovered_models(
+func _store_discovered_models(
 	provider_id: String,
 	models_value: Variant,
 ) -> Dictionary:
@@ -1031,29 +1034,14 @@ func _persist_discovered_models(
 			discovered.append(model_id)
 	if discovered.is_empty():
 		return _failure("PROVIDER_MODEL_CATALOG_EMPTY", false)
-	var candidate := _stored_config.duplicate(true)
-	var providers := candidate.get("providers", {}) as Dictionary
-	var provider := (providers.get(provider_id, {}) as Dictionary).duplicate(true)
-	var api_models := _stored_api_models(provider)
-	for model_id: String in discovered:
-		if model_id not in api_models:
-			api_models.append(model_id)
-	provider["apiModels"] = api_models
-	provider["enabled"] = true
-	providers[provider_id] = provider
-	candidate["providers"] = providers
-	var selected_models := (
-		candidate.get("selectedModelByProvider", {}) as Dictionary
-	)
-	if String(selected_models.get(provider_id, "")).is_empty():
-		selected_models[provider_id] = discovered[0]
-	candidate["selectedModelByProvider"] = selected_models
-	candidate["selectedProviderId"] = provider_id
-	return _persist_candidate_reconfigure_and_reload(
-		candidate,
-		"已读取 %d 个模型。" % discovered.size(),
-		provider_id,
-	)
+	_discovered_models_by_provider[provider_id] = discovered.duplicate()
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"message": "已读取 %d 个模型，请选择后添加。" % discovered.size(),
+		"models": discovered.duplicate(),
+	}
 
 
 func _set_enabled(payload: Dictionary) -> Dictionary:
@@ -1319,6 +1307,7 @@ func _persist_candidate_reconfigure_and_reload(
 	if not bool(persisted.get("ok", false)):
 		return persisted
 	if not dirty_provider_id.is_empty():
+		_discovered_models_by_provider.erase(dirty_provider_id)
 		_invalidate_provider_health(dirty_provider_id)
 	var loaded := _load_public_snapshot()
 	if not bool(loaded.get("ok", false)):
@@ -1565,9 +1554,27 @@ func _base_view_model(
 	operation: Dictionary,
 	error: Dictionary,
 ) -> Dictionary:
-	var actions_value := _actions(data)
+	var rendered_data := data.duplicate(true)
+	var providers := rendered_data.get("providers", []) as Array
+	for index: int in range(providers.size()):
+		if not providers[index] is Dictionary:
+			continue
+		var provider := (providers[index] as Dictionary).duplicate(true)
+		var provider_id := String(provider.get("providerId", ""))
+		provider["discoveredModels"] = (
+			_discovered_models_by_provider.get(provider_id, []) as Array
+		).duplicate()
+		providers[index] = provider
+	rendered_data["providers"] = providers
+	var actions_value := _actions(rendered_data)
 	return AiTownUiViewModel.envelope(
-		SCOPE, status, _revision, data, actions_value, operation, error
+		SCOPE,
+		status,
+		_revision,
+		rendered_data,
+		actions_value,
+		operation,
+		error,
 	)
 
 
