@@ -899,7 +899,7 @@ func _validate_catalog(catalog: Dictionary) -> Dictionary:
 	var residents_value: Variant = catalog.get("residents", [])
 	if not residents_value is Array:
 		return _failure("RESIDENT_MODEL_CATALOG_INVALID")
-	if _single_resident_mode and (residents_value as Array).size() != _slot_count:
+	if (residents_value as Array).size() != _slot_count:
 		return _failure("RESIDENT_MODEL_CATALOG_RESIDENT_COUNT_MISMATCH")
 	var seen: Dictionary = {}
 	for value: Variant in residents_value as Array:
