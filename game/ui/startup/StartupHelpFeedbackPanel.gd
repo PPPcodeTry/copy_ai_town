@@ -1,4 +1,8 @@
+class_name StartupHelpFeedbackPanel
 extends Control
+
+
+signal external_open_failed(message: String)
 
 
 const GAME_FEEDBACK_REPORT := preload(
@@ -167,6 +171,9 @@ func _open_external_url(url: String, destination_name: String) -> void:
 	push_warning(
 		"帮助与反馈选项无法打开外部链接：%s (%s)"
 		% [url, error_string(open_error)]
+	)
+	external_open_failed.emit(
+		"暂时无法打开%s，请稍后再试。" % destination_name
 	)
 
 

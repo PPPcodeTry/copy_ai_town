@@ -637,7 +637,11 @@ func _open_help_feedback_panel() -> void:
 	if is_instance_valid(_help_feedback_panel):
 		_help_feedback_panel.queue_free()
 		return
-	_help_feedback_panel = STARTUP_HELP_FEEDBACK_PANEL.new() as Control
+	var help_feedback_panel := (
+		STARTUP_HELP_FEEDBACK_PANEL.new() as StartupHelpFeedbackPanel
+	)
+	help_feedback_panel.external_open_failed.connect(_show_notice)
+	_help_feedback_panel = help_feedback_panel
 	_apply_reference_rect(_help_feedback_panel, HELP_FEEDBACK_PANEL_RECT)
 	_help_feedback_panel.set_meta("startup_keep_reference_scale", true)
 	_help_feedback_panel.z_index = 1010
