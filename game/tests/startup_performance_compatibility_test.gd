@@ -72,7 +72,12 @@ func _run() -> void:
 		_expect_equal(
 			audio_snapshot.get("loadedMusicPoolIds"),
 			PackedStringArray(["cover"]),
-			"title screen loads only the compact cover music pool",
+			"title screen loads only the daytime title music pool",
+		)
+		_expect_equal(
+			audio_snapshot.get("musicPoolSize"),
+			4,
+			"title screen cycles all four approved daytime tracks",
 		)
 		_expect_equal(
 			audio_snapshot.get("loadedBaseAmbienceIds"),
