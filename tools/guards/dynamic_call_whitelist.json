@@ -289,6 +289,12 @@
       "func": "request_model_catalog",
       "call": "variable:.call(result)",
       "reason": "模型目录完成后调用请求方传入的 Callable，并释放异步请求期间保留的 Provider。"
+    },
+    {
+      "path": "game/world/presentation/game_flow/GameFlowHost.gd",
+      "func": "request_quit_game",
+      "call": "string:.call( \"prepare_departure_messages\", _quit_departure_id, 2, Callable(self, \"_on_quit_departure_messages_ready\").bind( departure_id, ), )",
+      "reason": "正式与测试网关共享退出留言契约；绑定本次退出编号，用于忽略超时后迟到的异步回调，避免重复保存或退出。"
     }
   ]
 }

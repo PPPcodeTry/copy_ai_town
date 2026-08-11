@@ -23,6 +23,7 @@ class AdapterHarness extends Node:
 	var fail_next_lifecycle_pause := false
 	var fail_next_lifecycle_resume := false
 	var fail_next_resident_view_begin := false
+	var fail_next_inner_observation_exit := false
 	var resident_view_phase := "running"
 	var resident_view_begin_count := 0
 	var world_menu_host: Node
@@ -107,6 +108,16 @@ class AdapterHarness extends Node:
 			return {
 				"ok": false,
 				"errorCode": "TEST_LIFECYCLE_RESUME_FAILED",
+				"retryable": true,
+			}
+		if (
+			intent == "inner_observation.exit"
+			and fail_next_inner_observation_exit
+		):
+			fail_next_inner_observation_exit = false
+			return {
+				"ok": false,
+				"errorCode": "TEST_INNER_OBSERVATION_EXIT_REJECTED",
 				"retryable": true,
 			}
 		if (
@@ -2560,12 +2571,26 @@ func _scenario_ui_runtime_host_navigation() -> void:
 		{"residentId": "resident-lin"},
 	)
 	_expect_single_active_page("resident inner route")
-	_host.call(
-		"_on_inner_observation_intent",
-		&"inner_observation.exit",
-		{"residentId": "resident-lin"},
-		1,
-		"inner-navigation-exit",
+	var inner_page := _active_route_page()
+	_adapter.fail_next_inner_observation_exit = true
+	_expect(
+		bool(inner_page.call("request_exit")),
+		"inner observation submits its first exit request",
+	)
+	var rejected_exit_state := inner_page.call("debug_state") as Dictionary
+	_expect_equal(
+		rejected_exit_state.get("exitPending"),
+		false,
+		"an immediate exit rejection releases the local pending state",
+	)
+	_expect_equal(
+		_host.call("current_route"),
+		&"inner_observation",
+		"an immediate exit rejection keeps the current page available for retry",
+	)
+	_expect(
+		bool(inner_page.call("request_exit")),
+		"inner observation accepts a retry after immediate rejection",
 	)
 	await process_frame
 	await process_frame
@@ -7563,6 +7588,56 @@ func _scenario_session_production_composition() -> void:
 		true,
 		"PauseMenuNavigationHost binds the same Adapter",
 	)
+	var failed_descent_camera := runtime.get_node("PlayerCamera") as Camera2D
+	failed_descent_camera.zoom = Vector2.ONE * 1_000_000.0
+	var failed_descent := adapter.call(
+		"dispatch",
+		"town_hud.select_tool",
+		{"toolId": "avatar"},
+	) as Dictionary
+	_expect_equal(
+		failed_descent.get("ok"),
+		true,
+		"avatar entry remains accepted when the optional descent presentation cannot start",
+	)
+	_expect_equal(
+		runtime.call("get_avatar_mode"),
+		"avatar_descent",
+		"failed presentation keeps the transition locked until the deferred recovery turn",
+	)
+	_expect_equal(
+		(runtime.call("get_avatar_descent_snapshot") as Dictionary).get("active"),
+		false,
+		"invalid camera transform makes the real descent presentation reject start",
+	)
+	var repeated_failed_descent := adapter.call(
+		"dispatch",
+		"town_hud.select_tool",
+		{"toolId": "avatar"},
+	) as Dictionary
+	_expect_equal(
+		repeated_failed_descent.get("errorCode"),
+		"AVATAR_MODE_TRANSITION_IN_PROGRESS",
+		"a repeated click cannot start or reverse the failed descent recovery",
+	)
+	await process_frame
+	var recovered_avatar_state := runtime.call("get_runtime_state") as Dictionary
+	var recovered_player := runtime.get_node("Player") as CharacterBody2D
+	var recovered_feet := recovered_player.get_node("FeetCollision") as CollisionShape2D
+	_expect_equal(
+		runtime.call("get_avatar_mode"),
+		"avatar_active",
+		"failed descent presentation completes avatar entry on the next idle turn",
+	)
+	_expect_equal(
+		recovered_avatar_state.get("playerAvatarEnabled"),
+		true,
+		"failed presentation recovery enables avatar control",
+	)
+	_expect_equal(recovered_player.collision_layer, 2, "failed presentation recovery restores the avatar collision layer")
+	_expect_equal(recovered_player.collision_mask, 13, "failed presentation recovery restores the avatar collision mask")
+	_expect_equal(recovered_feet.disabled, false, "failed presentation recovery restores feet collision")
+	_expect_equal(failed_descent_camera.zoom, Vector2.ONE, "failed presentation recovery restores gameplay camera zoom")
 
 	var agent_participant: RefCounted = gateway.call("get_agent_save_participant")
 	var context := gateway.call("get_agent_save_context") as Dictionary
