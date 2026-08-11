@@ -57,9 +57,23 @@ static func schedule_player_priority_decision(
 ) -> bool:
 	if not has_player_priority([event]):
 		return false
+	# 直接对话由对话合同负责轮流答话；公告先留在事件队列，不能把
+	# 对话中的居民唤醒成一轮普通公告决定，否则会留下未结束的对话。
+	if resident_in_active_conversation(host, resident_id):
+		return false
 	# 玩家公告可替换普通工作；对话和受伤后的强制回应仍由决定合同优先。
 	host._schedule_decision(resident_id, true, false, true, false, true)
 	return true
+
+
+static func resident_in_active_conversation(
+	host: TownWorldRuntime,
+	resident_id: String,
+) -> bool:
+	for conversation: Dictionary in host.get_active_conversations():
+		if (conversation.get("participants", []) as Array).has(resident_id):
+			return true
+	return false
 
 
 static func emit_reactions(

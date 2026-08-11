@@ -1623,6 +1623,30 @@ func _test_accept_multi_turn_overhear_and_end() -> void:
 		_expect_equal(overheard.get("speakers"), ["林岚", "唐小满"], "overhear event keeps player-readable participant names")
 		_expect_equal((overheard.get("turn", {}) as Dictionary).get("speaker_resident_id"), "resident_lin_lan_01", "overhear turn identifies the actual speaker")
 
+	var player_notice := world.call(
+		"publish_announcement",
+		"请大家稍后到中央广场集合。",
+	) as Dictionary
+	_expect_equal(
+		player_notice.get("ok"),
+		true,
+		"player announcement can be published during a resident conversation",
+	)
+	var lin_during_conversation := world.call(
+		"get_resident_state",
+		"林岚",
+	) as Dictionary
+	_expect_equal(
+		lin_during_conversation.get("decisionPending"),
+		false,
+		"player announcement does not interrupt an active resident conversation",
+	)
+	_expect_equal(
+		(world.call("get_active_conversations") as Array).size(),
+		1,
+		"active resident conversation remains intact after a player announcement",
+	)
+
 	var tang_invitation := _take_wake_conversation(world, "唐小满")
 	_expect(_has_event_conversation(tang_invitation, "搭话"), "target receives an urgent talk event")
 	_expect(_has_required_invitation_event_conversation(tang_invitation), "talk event marks the target reply as required")
