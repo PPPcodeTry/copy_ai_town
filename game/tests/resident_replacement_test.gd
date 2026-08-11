@@ -11,6 +11,52 @@ const RESIDENT_REPLACEMENT := preload(
 )
 
 
+class NeverCompletingProvider:
+	extends RefCounted
+	var callback := Callable()
+
+	func request_json(_request: Dictionary, on_complete: Callable) -> void:
+		callback = on_complete
+
+	func complete(result: Dictionary) -> void:
+		if callback.is_valid():
+			callback.call(result.duplicate(true))
+
+
+class ReplacementProviderService:
+	extends RefCounted
+	var provider: NeverCompletingProvider
+
+	func _init(value: NeverCompletingProvider) -> void:
+		provider = value
+
+	func create_provider_for_resident(_binding: Dictionary) -> Dictionary:
+		return {
+			"ok": true,
+			"errorCode": "",
+			"retryable": false,
+			"provider": provider,
+		}
+
+
+class GameFlowRecoveryHarness:
+	extends "res://world/presentation/game_flow/GameFlowHost.gd"
+	var presented_replacements: Array[Dictionary] = []
+	var continued_quit_messages: Array[Array] = []
+
+	func _present_generated_replacement(candidate: Dictionary) -> void:
+		presented_replacements.append(candidate.duplicate(true))
+
+	func _continue_quit_after_optional_messages(
+		messages: Array,
+		_execute_process_quit: bool,
+	) -> Dictionary:
+		continued_quit_messages.append(messages.duplicate(true))
+		_quit_departure_pending = false
+		_quit_departure_id = ""
+		return {"ok": true, "errorCode": "", "retryable": false}
+
+
 func _initialize() -> void:
 	call_deferred("_run")
 
@@ -43,6 +89,7 @@ func _run() -> void:
 	var death_event_id := String(
 		(death.get("event", {}) as Dictionary).get("event_id", "")
 	)
+	_verify_async_recovery(opening, death.get("event", {}) as Dictionary)
 	var record := ((opening.get("residents", []) as Array)[0] as Dictionary).duplicate(true)
 	record["residentId"] = String(deceased.get("residentId", ""))
 	var attributes := (record.get("attributes", {}) as Dictionary).duplicate(true)
@@ -181,3 +228,109 @@ func _run() -> void:
 	)
 	restored_world.stop()
 	_finish_suite("RESIDENT_REPLACEMENT_PASS")
+
+
+func _verify_async_recovery(
+	opening: Dictionary,
+	death_event: Dictionary,
+) -> void:
+	var provider := NeverCompletingProvider.new()
+	var provider_service := ReplacementProviderService.new(provider)
+	var host := GameFlowRecoveryHarness.new()
+	var resident_id := String(death_event.get("deceased_resident_id", ""))
+	var binding := {
+		"residentId": resident_id,
+		"residentName": "待补位居民",
+	}
+	host.set("_provider_service", provider_service)
+	host.set("_active_session_config", {
+		"openingConfig": opening.duplicate(true),
+		"residentBindings": [binding.duplicate(true)],
+	})
+	host.call(
+		"_begin_replacement_persona_generation",
+		death_event.duplicate(true),
+	)
+	_expect_equal(
+		host.get("_replacement_generation_pending"),
+		true,
+		"补位资料请求未回调时保持等待状态",
+	)
+	var generation_id := int(host.get("_active_replacement_generation_id"))
+	host.call(
+		"_on_replacement_persona_timeout",
+		generation_id,
+		death_event.duplicate(true),
+		binding.duplicate(true),
+	)
+	_expect_equal(
+		host.get("_replacement_generation_pending"),
+		false,
+		"补位资料请求超时后解除等待状态",
+	)
+	_expect_equal(
+		host.presented_replacements.size(),
+		1,
+		"补位资料请求超时后生成一份本地默认候选人",
+	)
+	_expect(
+		not host.presented_replacements[0].is_empty(),
+		"补位资料超时使用的本地候选人资料完整",
+	)
+	provider.complete({"ok": true, "json": {"name": "迟到居民"}})
+	_expect_equal(
+		host.presented_replacements.size(),
+		1,
+		"补位资料超时后的迟到回调不会重复弹出候选人",
+	)
+
+	host.set("_quit_departure_pending", true)
+	host.set("_quit_departure_id", "departure-timeout")
+	host.set("_quit_execute_process", false)
+	host.call(
+		"_on_quit_departure_messages_timeout",
+		"departure-timeout",
+	)
+	_expect_equal(
+		host.continued_quit_messages.size(),
+		1,
+		"退出留言不回调时按超时继续退出流程",
+	)
+	_expect_equal(
+		host.continued_quit_messages[0],
+		[],
+		"退出留言超时后不携带未确认留言",
+	)
+	host.call(
+		"_on_quit_departure_messages_ready",
+		{"ok": true, "messages": [{"text": "迟到留言"}]},
+		"departure-timeout",
+	)
+	_expect_equal(
+		host.continued_quit_messages.size(),
+		1,
+		"退出留言超时后的迟到回调不会重复执行退出",
+	)
+
+	host.set("_quit_departure_pending", true)
+	host.set("_quit_departure_id", "departure-success")
+	host.call(
+		"_on_quit_departure_messages_ready",
+		{"ok": true, "messages": [{"text": "按时留言"}]},
+		"departure-success",
+	)
+	_expect_equal(
+		host.continued_quit_messages.size(),
+		2,
+		"按时返回的退出留言正常继续退出流程",
+	)
+	host.call(
+		"_on_quit_departure_messages_timeout",
+		"departure-success",
+	)
+	_expect_equal(
+		host.continued_quit_messages.size(),
+		2,
+		"退出已经继续后，旧超时不会再次结算",
+	)
+	host.free()

@@ -2040,11 +2040,19 @@ func enter_avatar_mode() -> Dictionary:
 		),
 	)
 	_sync_avatar_visual_from_world(false, true, false)
-	_set_avatar_mode(AVATAR_MODE_DESCENT)
+	var presentation_started := _set_avatar_mode(AVATAR_MODE_DESCENT)
+	if presentation_started.get("ok") != true:
+		# The World has already confirmed the avatar landing. A missing or
+		# unready visual presentation must not leave movement and collision
+		# permanently locked in avatar_descent. Keep that state for the rest of
+		# this dispatch so repeated clicks are still rejected, then finish the
+		# transition on the next idle turn.
+		_complete_avatar_descent_after_presentation_start_failure.call_deferred()
 	return {
 		"ok": true,
 		"mode": _avatar_mode,
-		"durationMsec": 1450,
+		"durationMsec": int(presentation_started.get("durationMsec", 0)),
+		"presentationStarted": presentation_started.get("ok") == true,
 		"landing": (
 			landing.get("landing", {}) as Dictionary
 		).duplicate(true),
@@ -2103,18 +2111,24 @@ func exit_avatar_mode() -> Dictionary:
 	return {"ok": true, "mode": _avatar_mode}
 
 
-func _set_avatar_mode(next_mode: String) -> void:
+func _set_avatar_mode(next_mode: String) -> Dictionary:
 	var previous_mode := _avatar_mode
 	_avatar_mode = next_mode
 	enable_player_avatar = next_mode == AVATAR_MODE_ACTIVE
+	var presentation_result := {"ok": true}
 	if next_mode == AVATAR_MODE_DESCENT:
 		_prepare_avatar_descent_control()
-		if _avatar_descent_presentation != null:
-			_avatar_descent_presentation.start(
+		if is_instance_valid(_avatar_descent_presentation):
+			presentation_result = _avatar_descent_presentation.start(
 				_player_visual_root,
 				_player_shadow,
 				_camera,
 			)
+		else:
+			presentation_result = {
+				"ok": false,
+				"errorCode": "AVATAR_DESCENT_PRESENTATION_NOT_READY",
+			}
 	elif enable_player_avatar:
 		_enable_avatar_control()
 		_set_zoom_index(DEFAULT_ZOOM_INDEX)
@@ -2127,6 +2141,7 @@ func _set_avatar_mode(next_mode: String) -> void:
 	_set_building_hotspots_available(next_mode == AVATAR_MODE_OBSERVER)
 	avatar_mode_changed.emit(_avatar_mode, previous_mode)
 	_update_runtime_hud()
+	return presentation_result
 
 
 func _avatar_mode_failure(error_code: String) -> Dictionary:
@@ -2171,6 +2186,11 @@ func _prepare_avatar_descent_control() -> void:
 
 
 func _on_avatar_descent_timeline_completed() -> void:
+	if _avatar_mode == AVATAR_MODE_DESCENT:
+		complete_avatar_descent()
+
+
+func _complete_avatar_descent_after_presentation_start_failure() -> void:
 	if _avatar_mode == AVATAR_MODE_DESCENT:
 		complete_avatar_descent()
 

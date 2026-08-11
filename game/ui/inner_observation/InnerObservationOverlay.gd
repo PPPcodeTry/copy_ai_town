@@ -392,6 +392,28 @@ func request_retry() -> bool:
 	return _submit_action("retry", RETRY_INTENT)
 
 
+func recover_immediate_dispatch_failure(
+	intent: StringName,
+	result: Dictionary,
+) -> void:
+	if bool(result.get("ok", false)):
+		return
+	var intent_key := String(intent)
+	_pending_action_keys.erase(intent_key)
+	if intent == EXIT_INTENT:
+		_exit_pending = false
+		if not _active_generation_request_id.is_empty():
+			_closed_request_ids.erase(_active_generation_request_id)
+			_closed_request_order.erase(_active_generation_request_id)
+	if is_node_ready():
+		_apply_action_state()
+	action_blocked.emit(
+		intent,
+		String(result.get("errorCode", "ACTION_REJECTED")),
+		_highest_seen_revision,
+	)
+
+
 func set_debug_safe_area(enabled: bool) -> void:
 	_safe_debug_enabled = enabled
 	if _safe_overlay != null:
