@@ -11,6 +11,77 @@ const RESIDENT_REPLACEMENT := preload(
 )
 
 
+class ReturnToStartGateway:
+	extends Node
+	var calls := 0
+	var requested_limit := 0
+	var messages: Array[Dictionary] = [{
+		"message_id": "resident-message-return-test",
+		"resident_id": "resident-lin-lan",
+		"resident_name": "林岚",
+		"content": "下次回来，记得告诉我路上看见了什么。",
+	}]
+
+	func prepare_departure_messages(
+		_departure_id: String,
+		max_candidates: int,
+		on_complete: Callable,
+	) -> Dictionary:
+		calls += 1
+		requested_limit = max_candidates
+		on_complete.call({"ok": true, "messages": messages.duplicate(true)})
+		return {"ok": true, "started": true, "pending": true}
+
+
+class NeverCompletingReturnToStartGateway:
+	extends Node
+	var calls := 0
+
+	func prepare_departure_messages(
+		_departure_id: String,
+		_max_candidates: int,
+		_on_complete: Callable,
+	) -> Dictionary:
+		calls += 1
+		return {"ok": true, "started": true, "pending": true}
+
+
+class ReturnToStartWiringHarness:
+	extends "res://world/presentation/game_flow/GameFlowHost.gd"
+	var saved_messages: Array = []
+	var routed_departures: Array[Dictionary] = []
+	var process_quit_count := 0
+
+	func _begin_town_entry_loading(
+		_route_kind: String,
+		_generation := -1,
+		_owner := "",
+		_context: Dictionary = {},
+	) -> void:
+		pass
+
+	func _advance_town_entry_loading(
+		_progress: float,
+		_status_text: String,
+	) -> void:
+		pass
+
+	func _prepare_session_departure(
+		resident_messages: Array = [],
+	) -> Dictionary:
+		saved_messages = resident_messages.duplicate(true)
+		return {"ok": true, "errorCode": "", "retryable": false}
+
+	func _route_to_start_after_departure(
+		departure: Dictionary,
+	) -> Dictionary:
+		routed_departures.append(departure.duplicate(true))
+		return departure
+
+	func _schedule_process_quit() -> void:
+		process_quit_count += 1
+
+
 class NeverCompletingProvider:
 	extends RefCounted
 	var callback := Callable()
@@ -56,12 +127,12 @@ class GameFlowRecoveryHarness:
 		_quit_departure_id = ""
 		return {"ok": true, "errorCode": "", "retryable": false}
 
-
 func _initialize() -> void:
 	call_deferred("_run")
 
 
 func _run() -> void:
+	_verify_return_to_start_messages()
 	var data := _build_data()
 	var opening := _load_opening(data)
 	var identities: Array[Dictionary] = []
@@ -229,6 +300,72 @@ func _run() -> void:
 	restored_world.stop()
 	_finish_suite("RESIDENT_REPLACEMENT_PASS")
 
+
+func _verify_return_to_start_messages() -> void:
+	var gateway := ReturnToStartGateway.new()
+	var host := ReturnToStartWiringHarness.new()
+	var runtime := Node.new()
+	var save_service := RefCounted.new()
+	host.set("_gateway", gateway)
+	host.set("_town_runtime", runtime)
+	host.set("_session_ui_service", save_service)
+	var result := host.request_return_to_start()
+	_expect_equal(gateway.calls, 1, "返回主菜单会请求一次居民留言")
+	_expect_equal(gateway.requested_limit, 2, "返回主菜单沿用最多两条留言的限制")
+	_expect_equal(host.saved_messages, gateway.messages, "居民留言会进入离开存档")
+	_expect_equal(host.routed_departures.size(), 1, "留言保存后只返回一次主菜单")
+	_expect_equal(host.process_quit_count, 0, "返回主菜单不会退出游戏进程")
+	_expect(bool(result.get("ok", false)), "返回主菜单留言链路成功结束")
+	host.free()
+	runtime.free()
+	gateway.free()
+
+	var timeout_gateway := NeverCompletingReturnToStartGateway.new()
+	var timeout_host := ReturnToStartWiringHarness.new()
+	var timeout_runtime := Node.new()
+	var timeout_save_service := RefCounted.new()
+	timeout_host.set("_gateway", timeout_gateway)
+	timeout_host.set("_town_runtime", timeout_runtime)
+	timeout_host.set("_session_ui_service", timeout_save_service)
+	var timeout_result := timeout_host.request_return_to_start()
+	_expect_equal(
+		timeout_gateway.calls,
+		1,
+		"返回主菜单的留言请求只启动一次",
+	)
+	_expect_equal(
+		timeout_result.get("pending"),
+		true,
+		"居民留言不回调时返回主菜单进入等待状态",
+	)
+	var timeout_departure_id := String(timeout_result.get("departureId", ""))
+	timeout_host.call(
+		"_on_quit_departure_messages_timeout",
+		timeout_departure_id,
+	)
+	_expect_equal(
+		timeout_host.saved_messages,
+		[],
+		"居民留言超时后仍能保存并返回主菜单",
+	)
+	_expect_equal(
+		timeout_host.routed_departures.size(),
+		1,
+		"居民留言超时后只返回一次主菜单",
+	)
+	timeout_host.call(
+		"_on_quit_departure_messages_ready",
+		{"ok": true, "messages": [{"text": "迟到留言"}]},
+		timeout_departure_id,
+	)
+	_expect_equal(
+		timeout_host.routed_departures.size(),
+		1,
+		"居民留言超时后的迟到回调不会重复返回主菜单",
+	)
+	timeout_host.free()
+	timeout_runtime.free()
+	timeout_gateway.free()
 
 func _verify_async_recovery(
 	opening: Dictionary,
