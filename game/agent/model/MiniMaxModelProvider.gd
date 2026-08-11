@@ -41,7 +41,8 @@ const MODEL_IDS := [
 	M2_1_HIGHSPEED_MODEL,
 	M2_MODEL,
 ]
-const MAX_COMPLETION_TOKENS := 2048
+const DEFAULT_MAX_COMPLETION_TOKENS := 2048
+const MAX_COMPLETION_TOKENS := 204800
 
 
 func _provider_id() -> String:
@@ -72,12 +73,12 @@ func _default_model() -> String:
 
 
 func _default_max_tokens() -> int:
-	return MAX_COMPLETION_TOKENS
+	return DEFAULT_MAX_COMPLETION_TOKENS
 
 
 func _build_request_body(model_request: Dictionary) -> Dictionary:
 	var body := super._build_request_body(model_request)
-	var requested_tokens := int(body.get("max_tokens", MAX_COMPLETION_TOKENS))
+	var requested_tokens := int(body.get("max_tokens", DEFAULT_MAX_COMPLETION_TOKENS))
 	body["max_completion_tokens"] = clampi(
 		requested_tokens,
 		1,
