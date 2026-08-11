@@ -3,6 +3,7 @@ extends RefCounted
 
 
 const MINUTES_PER_DAY := 1440
+const NUMERIC_CHARS := "0123456789零一二两三四五六七八九十"
 const PERIOD_DEFAULT_HOURS := {
 	"清晨": 6,
 	"早晨": 8,
@@ -152,6 +153,10 @@ static func _clock_time(text: String) -> Dictionary:
 	)
 	if point == null:
 		return {}
+	# 防止无效小时被正则从数字尾部截断匹配，例如把“25点”误读成“5点”。
+	var point_start := point.get_start()
+	if point_start > 0 and NUMERIC_CHARS.contains(text.substr(point_start - 1, 1)):
+		return {}
 	var period := String(point.get_string(1))
 	var hour := _number(String(point.get_string(2)))
 	var minute := 0
@@ -194,11 +199,18 @@ static func _number(value: String) -> int:
 		var tens := 1
 		var ones := 0
 		if value.begins_with("十"):
-			ones = int(digits.get(String(parts[0]), 0)) if not parts.is_empty() else 0
+			var suffix := value.substr(1)
+			ones = int(digits.get(suffix, -1))
+			if ones < 0:
+				return -1
 		else:
-			tens = int(digits.get(String(parts[0]), 0))
+			tens = int(digits.get(String(parts[0]), -1))
+			if tens < 0:
+				return -1
 			if parts.size() > 1:
-				ones = int(digits.get(String(parts[1]), 0))
+				ones = int(digits.get(String(parts[1]), -1))
+				if ones < 0:
+					return -1
 		return tens * 10 + ones
 	return int(digits.get(value, -1))
 

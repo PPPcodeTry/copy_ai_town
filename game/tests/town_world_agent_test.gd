@@ -3183,6 +3183,15 @@ func _scenario_announcement_time_parser() -> void:
 		1440 + 9 * 60 + 30,
 		"tomorrow and half-hour wording resolve deterministically",
 	)
+	var tomorrow_late_morning := ANNOUNCEMENT_TIME_PARSER.parse(
+		"明天上午十一点集合。",
+		now,
+	) as Dictionary
+	_expect_equal(
+		tomorrow_late_morning.get("scheduled_absolute_minute"),
+		1440 + 11 * 60,
+		"Chinese eleven o'clock is not reduced to one o'clock",
+	)
 	var relative := ANNOUNCEMENT_TIME_PARSER.parse(
 		"两小时后在桥边见。",
 		now,
@@ -3207,6 +3216,10 @@ func _scenario_announcement_time_parser() -> void:
 	_expect(
 		ANNOUNCEMENT_TIME_PARSER.parse("周五下午三点集合。", now).is_empty(),
 		"unsupported real-calendar weekdays are not misread as today",
+	)
+	_expect(
+		ANNOUNCEMENT_TIME_PARSER.parse("明天下午25点集合。", now).is_empty(),
+		"invalid numeric hours are not accepted through a suffix match",
 	)
 
 
