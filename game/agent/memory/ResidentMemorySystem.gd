@@ -2,6 +2,9 @@ class_name AgentResidentMemorySystem
 extends RefCounted
 
 
+const MAX_RESIDENT_STORAGE_SEGMENT_LENGTH := 48
+const RESIDENT_STORAGE_KEY_LENGTH := 24
+
 const EvidenceQueueScript := preload("res://agent/memory/ResidentEvidenceQueue.gd")
 const AgentContractScript := preload("res://agent/AgentContract.gd")
 const AgentJsonScript := preload("res://agent/AgentJson.gd")
@@ -89,7 +92,9 @@ func _init(
 	if resolved_root.is_empty():
 		resolved_root = _allocate_standalone_root()
 	_memory_root = resolved_root.trim_suffix("/")
-	_resident_root = _memory_root.path_join(_resident_id)
+	_resident_root = _memory_root.path_join(
+		_resident_storage_segment(_resident_id),
+	)
 	_memory_path = _resident_root.path_join("resident_memory.json")
 	_evidence_path = _resident_root.path_join("world_evidence.json")
 	_memory_entries_path = _resident_root.path_join("resident_memory_entries.json")
@@ -2126,6 +2131,14 @@ func _allocate_standalone_root() -> String:
 		Time.get_ticks_usec(),
 		_standalone_generation,
 	]
+
+
+static func _resident_storage_segment(resident_id: String) -> String:
+	if resident_id.length() <= MAX_RESIDENT_STORAGE_SEGMENT_LENGTH:
+		return resident_id
+	return "resident-%s" % (
+		resident_id.sha256_text().left(RESIDENT_STORAGE_KEY_LENGTH)
+	)
 
 
 func _remember_failure(result: Dictionary) -> Dictionary:

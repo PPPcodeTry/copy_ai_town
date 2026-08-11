@@ -3,6 +3,9 @@ extends "res://agent/model/ModelProvider.gd"
 
 
 const AgentJsonScript := preload("res://agent/AgentJson.gd")
+const ENDPOINT_SECURITY := preload(
+	"res://common/ProviderEndpointSecurity.gd"
+)
 
 const LOCAL_ENV_FILE := ".tmp/.env"
 const DEFAULT_TIMEOUT_SECONDS := 30.0
@@ -44,9 +47,22 @@ func get_provider_descriptor() -> Dictionary:
 
 
 func validate_configuration() -> Array[String]:
+	var endpoint := String(_config.get("endpoint", _default_endpoint())).strip_edges()
+	if not endpoint.is_empty() and not ENDPOINT_SECURITY.scheme_is_supported(endpoint):
+		return ["Provider 地址格式无效"]
+	if not _insecure_http_transport_is_allowed():
+		return ["远程 HTTP 地址尚未获得未加密传输授权"]
 	if _api_key_required() and _resolve_api_key().is_empty():
 		return [_missing_api_key_message(true)]
 	return []
+
+
+func _insecure_http_transport_is_allowed() -> bool:
+	var endpoint := String(_config.get("endpoint", _default_endpoint())).strip_edges()
+	if not ENDPOINT_SECURITY.requires_insecure_http_consent(endpoint):
+		return true
+	var consent_value: Variant = _config.get("allow_insecure_http", false)
+	return typeof(consent_value) == TYPE_BOOL and bool(consent_value)
 
 
 func get_model_requests() -> Array[Dictionary]:

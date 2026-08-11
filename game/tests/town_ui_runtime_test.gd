@@ -2580,6 +2580,20 @@ func _scenario_ui_runtime_host_navigation() -> void:
 	_expect_context("resident_action_menu", true, resident_action_payload)
 	_expect_dispatch("avatar.focus_target", {"residentId": "resident-lin"})
 	_expect_single_active_page("resident focus route")
+	var resident_action_page := _active_route_page()
+	var resident_action_halos: Array[Node] = []
+	if resident_action_page != null:
+		resident_action_halos = resident_action_page.find_children(
+			"HaloAsset",
+			"TextureRect",
+			true,
+			false,
+		)
+	_expect_equal(
+		resident_action_halos.size(),
+		0,
+		"world resident action menu removes the rectangular halo layer",
+	)
 	# Simulate an Adapter rebind/session refresh that reset only its lifecycle
 	# phase while the Host and resident menu stayed mounted.
 	var resident_view_begin_count_before_inner := (
@@ -3437,8 +3451,77 @@ func _scenario_ui_runtime_host_navigation() -> void:
 					rebuilt_base_url_edit,
 					"Provider refresh restores Base URL input focus",
 				)
-				rebuilt_base_url_edit.text = "https://api.deepseek.com"
-				rebuilt_base_url_edit.text_changed.emit(rebuilt_base_url_edit.text)
+				_expect(
+					provider_page.find_child(
+						"InsecureHttpWarning",
+						true,
+						false,
+					) == null,
+					"Provider route does not use a passive HTTP warning label",
+				)
+				var remote_http_url := "http://api.example.com:3000/v1"
+				var dispatch_count_before_http := _adapter.dispatches.size()
+				rebuilt_base_url_edit.text = remote_http_url
+				rebuilt_base_url_edit.text_changed.emit(remote_http_url)
+				rebuilt_base_url_edit.text_submitted.emit(remote_http_url)
+				await process_frame
+				var http_confirmation := provider_page.find_child(
+					"InsecureHttpConfirmation",
+					true,
+					false,
+				) as FormalConfirmationDialog
+				_expect(
+					http_confirmation != null
+					and http_confirmation.visible
+					and http_confirmation.dialog_text.contains("API Key")
+					and http_confirmation.dialog_text.contains("居民记忆")
+					and http_confirmation.dialog_text.contains("对话内容"),
+					"Provider route explains remote HTTP exposure in the formal dialog",
+				)
+				_expect_equal(
+					_adapter.dispatches.size(),
+					dispatch_count_before_http,
+					"remote HTTP is not saved before confirmation",
+				)
+				var cancel_http := http_confirmation.find_child(
+					"Cancel",
+					true,
+					false,
+				) as Button
+				if cancel_http != null:
+					cancel_http.pressed.emit()
+				_expect_equal(
+					_adapter.dispatches.size(),
+					dispatch_count_before_http,
+					"canceling remote HTTP keeps the draft without saving",
+				)
+				rebuilt_base_url_edit.text_submitted.emit(remote_http_url)
+				await process_frame
+				var confirm_http := http_confirmation.find_child(
+					"Confirm",
+					true,
+					false,
+				) as Button
+				if confirm_http != null:
+					confirm_http.pressed.emit()
+				_expect_equal(
+					_adapter.dispatches.size(),
+					dispatch_count_before_http + 1,
+					"confirming remote HTTP dispatches one save",
+				)
+				var http_save := _adapter.dispatches.back() as Dictionary
+				_expect_equal(
+					http_save.get("intent"),
+					"provider_settings.save_base_url",
+					"remote HTTP confirmation resumes the original save action",
+				)
+				_expect_equal(
+					(http_save.get("payload", {}) as Dictionary).get(
+						"allowInsecureHttp"
+					),
+					true,
+					"remote HTTP confirmation carries explicit consent",
+				)
 	await _verify_local_provider_url_autodiscovery(
 		provider_page as ProviderSettingsScreen,
 		"ollama",

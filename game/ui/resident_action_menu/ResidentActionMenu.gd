@@ -1345,14 +1345,6 @@ func _asset_ownership_audit() -> Dictionary:
 			"componentType": "godot_label_no_frame",
 			"drawsFrame": false,
 		})
-		entries.append({
-			"layer": "operation_control",
-			"semantic": "bubble_halo.%s" % item_id,
-			"owner": control_path + "/HaloAsset",
-			"assetId": "ui.resident-action-menu.halo.imagegen-v1",
-			"componentType": "independent_alpha_image",
-			"drawsFrame": false,
-		})
 	entries.append({
 		"layer": "partition_frame",
 		"semantic": "pause_banner_outer_frame",

@@ -2,6 +2,10 @@ class_name AgentResidentAvatarMemoryModule
 extends RefCounted
 
 
+const MAX_RESIDENT_STORAGE_SEGMENT_LENGTH := 48
+const RESIDENT_STORAGE_KEY_LENGTH := 24
+
+
 const AgentJsonScript := preload("res://agent/AgentJson.gd")
 const EvidenceQueueScript := preload(
 	"res://agent/avatar_memory/ResidentAvatarEvidenceQueue.gd"
@@ -71,7 +75,9 @@ func _init(
 	)
 	_avatar_person_id = avatar_person_id
 	_avatar_name = avatar_name
-	var resident_root := memory_root.trim_suffix("/").path_join(_resident_id)
+	var resident_root := memory_root.trim_suffix("/").path_join(
+		_resident_storage_segment(_resident_id),
+	)
 	_module_root = resident_root.path_join("avatar_memory")
 	_memory_path = _module_root.path_join("avatar_memory.json")
 	_evidence_path = _module_root.path_join("avatar_evidence.json")
@@ -1096,6 +1102,14 @@ func _read_prompt(path: String) -> Dictionary:
 		return _failure("居民留言提示词为空：%s" % path)
 	_prompt_text_cache[path] = content
 	return {"ok": true, "content": content}
+
+
+static func _resident_storage_segment(resident_id: String) -> String:
+	if resident_id.length() <= MAX_RESIDENT_STORAGE_SEGMENT_LENGTH:
+		return resident_id
+	return "resident-%s" % (
+		resident_id.sha256_text().left(RESIDENT_STORAGE_KEY_LENGTH)
+	)
 
 
 func _clear_storage() -> void:

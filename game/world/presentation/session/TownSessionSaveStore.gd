@@ -16,6 +16,8 @@ const CREATE_CLAIM_RETRY_LIMIT := 10000
 const CREATE_CLAIM_RETRY_DELAY_USEC := 1000
 const EPHEMERAL_CLAIM_LIVENESS_GRACE_MSEC := 250
 const CLAIM_PATH_TOKEN_LENGTH := 24
+const EPHEMERAL_CLAIM_KEY_LENGTH := 24
+const EPHEMERAL_CLAIM_ROOT := "_claims"
 const WORLD_LOG_SEGMENT_RECORD_LIMIT := 256
 const SLOT_LEASE_ROOT := "slot_leases"
 const SLOT_ARCHIVE_CLAIM := "archive.claim"
@@ -131,7 +133,7 @@ func begin_slot_transaction(slot_id_value: Variant) -> Dictionary:
 	var lease_token := String(lease_seed.get("owner_token", ""))
 	var claim_path := _join(
 		transaction_root,
-		"%s.claim" % lease_token,
+		"%s.claim" % lease_token.left(CLAIM_PATH_TOKEN_LENGTH),
 	)
 	var acquired := _acquire_recoverable_directory_claim(claim_path)
 	if acquired.get("ok") != true:
@@ -669,7 +671,10 @@ func write_intent_stage(
 	var create_error := DirAccess.make_dir_recursive_absolute(_absolute(intent_root))
 	if create_error != OK:
 		return _failure("SESSION_SAVE_STORE_WRITE_FAILED", true)
-	var transition_claim_path := _join(intent_root, ".transition.claim")
+	var transition_claim_path := _ephemeral_claim_path(
+		"transition",
+		intent_root,
+	)
 	var transition_claim := _acquire_recoverable_directory_claim(
 		transition_claim_path,
 	)
@@ -1149,7 +1154,13 @@ func _slot_root(slot_id: String) -> String:
 
 
 func _slot_lease_root(slot_id: String) -> String:
-	return _join(_root, "%s/%s" % [SLOT_LEASE_ROOT, slot_id])
+	return _join(
+		_root,
+		"%s/%s" % [
+			SLOT_LEASE_ROOT,
+			slot_id.sha256_text().left(EPHEMERAL_CLAIM_KEY_LENGTH),
+		],
+	)
 
 
 func _slot_archive_claim_path(slot_id: String) -> String:
@@ -1556,7 +1567,7 @@ func _atomic_create_json(path: String, value: Dictionary) -> Dictionary:
 	)
 	if parent_error != OK:
 		return _failure("SESSION_SAVE_STORE_WRITE_FAILED", true)
-	var claim_path := "%s.create-claim" % path
+	var claim_path := _ephemeral_claim_path("create", path)
 	var claim := _acquire_recoverable_directory_claim(
 		claim_path,
 		path,
@@ -1574,11 +1585,9 @@ func _atomic_create_json(path: String, value: Dictionary) -> Dictionary:
 			claim_owner,
 			existing,
 		)
-	var temporary := "%s.tmp-%d-%d" % [
-		path,
-		OS.get_process_id(),
-		Time.get_ticks_usec(),
-	]
+	# The per-target claim serializes writers, so a fixed adjacent temporary name
+	# is sufficient and avoids another long Windows-only suffix.
+	var temporary := "%s.tmp" % path
 	var file := FileAccess.open(temporary, FileAccess.WRITE)
 	if file == null:
 		return _release_owned_claim_and_return(
@@ -1736,6 +1745,11 @@ func _acquire_recoverable_directory_claim(
 	retry_limit: int = CREATE_CLAIM_RETRY_LIMIT,
 ) -> Dictionary:
 	var resolved_retry_limit := maxi(retry_limit, 1)
+	var claim_parent_error := DirAccess.make_dir_recursive_absolute(
+		_absolute(claim_path.get_base_dir()),
+	)
+	if claim_parent_error not in [OK, ERR_ALREADY_EXISTS]:
+		return _failure("SESSION_SAVE_STORE_WRITE_FAILED", true)
 	var owner := _new_ephemeral_claim_owner(claim_path)
 	var candidate_path := "%s.candidate-%s" % [
 		claim_path,
@@ -2198,6 +2212,21 @@ func _claim_path_token(owner: Dictionary) -> String:
 	return String(owner.get("owner_token", "")).left(CLAIM_PATH_TOKEN_LENGTH)
 
 
+func _ephemeral_claim_path(kind: String, identity: String) -> String:
+	# Claims are recoverable coordination state, not save identity. Keeping them
+	# under one shallow hashed root prevents a deep restore journal path from
+	# crossing the legacy Windows MAX_PATH boundary before owner.json is written.
+	var key := "%s:%s" % [kind, identity]
+	return _join(
+		_root,
+		"%s/%s-%s" % [
+			EPHEMERAL_CLAIM_ROOT,
+			kind,
+			key.sha256_text().left(EPHEMERAL_CLAIM_KEY_LENGTH),
+		],
+	)
+
+
 func _read_json(path: String) -> Dictionary:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
@@ -2345,7 +2374,9 @@ func _remove_tree(path: String) -> Error:
 	var absolute := _absolute(path)
 	if not DirAccess.dir_exists_absolute(absolute):
 		return OK
-	var directory := DirAccess.open(path)
+	# Godot's Windows backend adds the native long-path prefix for absolute paths.
+	# Stay in that path form for enumeration and every recursive child operation.
+	var directory := DirAccess.open(absolute)
 	if directory == null:
 		return DirAccess.get_open_error()
 	directory.include_hidden = true
