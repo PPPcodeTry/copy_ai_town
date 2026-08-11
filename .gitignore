@@ -16,3 +16,7 @@ __pycache__/
 # 本地发布产物与临时分析文档，不进版本库
 release/
 attack-perf-fixes-*.md
+
+# 本地设计与整理文档，仅保存在当前电脑，不进入版本库
+/docs/design/
+/docs/屎山消灭计划.md
