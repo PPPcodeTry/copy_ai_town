@@ -959,6 +959,56 @@ func _run() -> void:
 		true,
 		"PauseMenuNavigationHost binds the same Adapter",
 	)
+	var failed_descent_camera := runtime.get_node("PlayerCamera") as Camera2D
+	failed_descent_camera.zoom = Vector2.ONE * 1_000_000.0
+	var failed_descent := adapter.call(
+		"dispatch",
+		"town_hud.select_tool",
+		{"toolId": "avatar"},
+	) as Dictionary
+	_expect_equal(
+		failed_descent.get("ok"),
+		true,
+		"avatar entry remains accepted when the optional descent presentation cannot start",
+	)
+	_expect_equal(
+		runtime.call("get_avatar_mode"),
+		"avatar_descent",
+		"failed presentation keeps the transition locked until the deferred recovery turn",
+	)
+	_expect_equal(
+		(runtime.call("get_avatar_descent_snapshot") as Dictionary).get("active"),
+		false,
+		"invalid camera transform makes the real descent presentation reject start",
+	)
+	var repeated_failed_descent := adapter.call(
+		"dispatch",
+		"town_hud.select_tool",
+		{"toolId": "avatar"},
+	) as Dictionary
+	_expect_equal(
+		repeated_failed_descent.get("errorCode"),
+		"AVATAR_MODE_TRANSITION_IN_PROGRESS",
+		"a repeated click cannot start or reverse the failed descent recovery",
+	)
+	await process_frame
+	var recovered_avatar_state := runtime.call("get_runtime_state") as Dictionary
+	var recovered_player := runtime.get_node("Player") as CharacterBody2D
+	var recovered_feet := recovered_player.get_node("FeetCollision") as CollisionShape2D
+	_expect_equal(
+		runtime.call("get_avatar_mode"),
+		"avatar_active",
+		"failed descent presentation completes avatar entry on the next idle turn",
+	)
+	_expect_equal(
+		recovered_avatar_state.get("playerAvatarEnabled"),
+		true,
+		"failed presentation recovery enables avatar control",
+	)
+	_expect_equal(recovered_player.collision_layer, 2, "failed presentation recovery restores the avatar collision layer")
+	_expect_equal(recovered_player.collision_mask, 13, "failed presentation recovery restores the avatar collision mask")
+	_expect_equal(recovered_feet.disabled, false, "failed presentation recovery restores feet collision")
+	_expect_equal(failed_descent_camera.zoom, Vector2.ONE, "failed presentation recovery restores gameplay camera zoom")
 
 	var agent_participant: RefCounted = gateway.call("get_agent_save_participant")
 	var context := gateway.call("get_agent_save_context") as Dictionary

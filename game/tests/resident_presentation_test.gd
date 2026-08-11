@@ -1912,6 +1912,7 @@ func _scenario_resident_outdoor_collision_route() -> void:
 	await _validate_unreachable_target_does_not_orbit()
 	await _validate_blocked_authority_resync()
 	await _validate_blocked_portal_handoff_recovery()
+	await _validate_reversed_portal_handoff_is_cancelled()
 	return
 func _validate_touching_clearance_is_blocked() -> void:
 	var records := CLEARANCE.collision_records([
@@ -2762,6 +2763,123 @@ func _validate_blocked_portal_handoff_recovery() -> void:
 		):
 			found_recovery = true
 	_expect(found_recovery, "入口受阻恢复留下明确诊断")
+	stage.queue_free()
+	await process_frame
+
+
+
+func _validate_reversed_portal_handoff_is_cancelled() -> void:
+	var stage := Node2D.new()
+	root.add_child(stage)
+	var body = RESIDENT_BODY.new()
+	stage.add_child(body)
+	body.set_automatic_motion(false)
+	var resident_id := "resident-reversed-portal-test"
+	var base_state := {
+		"residentId": resident_id,
+		"name": "折返测试居民",
+		"appearance": "",
+		"position": Vector2.ZERO,
+		"spaceId": "town_outdoor",
+		"regionId": "outdoor_road_01",
+		"currentPlace": "小镇道路",
+		"doing": "",
+		"body": {},
+		"currentAction": null,
+		"actionPhase": {"phase": "idle"},
+		"movementRevision": 1,
+	}
+	body.configure(
+		{
+			"residentId": resident_id,
+			"residentName": "折返测试居民",
+		},
+		base_state,
+	)
+	body.configure_motion(120.0, 64.0)
+	var visible_space_changes: Array[String] = []
+	body.visible_space_changed.connect(
+		func(
+			_resident_id: String,
+			_previous_space_id: String,
+			space_id: String,
+		) -> void:
+			visible_space_changes.append(space_id)
+	)
+	var outdoor_portal := Vector2(120.0, 0.0)
+	var approaching := base_state.duplicate(true)
+	approaching.merge({
+		"position": outdoor_portal,
+		"doing": "正在进门",
+		"currentAction": {"type": "去", "action_id": "portal-cross"},
+		"actionPhase": {"phase": "executing"},
+		"movementRevision": 2,
+		"isMoving": true,
+		"routeCrossesPortal": true,
+		"target": {
+			"spaceId": "town_outdoor",
+			"position": outdoor_portal,
+		},
+		"presentationPath": [Vector2.ZERO, outdoor_portal],
+	}, true)
+	body.apply_authoritative_state(approaching, 2, null, false, 1.0)
+	var indoor_position := Vector2(400.0, 520.0)
+	var entered := approaching.duplicate(true)
+	entered.merge({
+		"position": indoor_position,
+		"spaceId": "indoor_portal_test",
+		"regionId": "region_portal_test",
+		"currentPlace": "入口测试室内",
+		"movementRevision": 3,
+		"target": {
+			"spaceId": "indoor_portal_test",
+			"position": indoor_position,
+		},
+		"presentationPath": [],
+	}, true)
+	var deferred := body.apply_authoritative_state(
+		entered,
+		3,
+		null,
+		false,
+		1.0,
+	) as Dictionary
+	_expect_equal(
+		deferred.get("status"),
+		"space_transition_deferred",
+		"身体到门口前先保存 World 的室内切换",
+	)
+	var returned := approaching.duplicate(true)
+	returned.merge({
+		"position": Vector2(36.0, 0.0),
+		"doing": "取消进门",
+		"movementRevision": 4,
+		"target": {
+			"spaceId": "town_outdoor",
+			"position": Vector2(36.0, 0.0),
+		},
+		"presentationPath": [Vector2.ZERO, Vector2(36.0, 0.0)],
+	}, true)
+	body.apply_authoritative_state(returned, 4, null, false, 1.0)
+	var snapshot := body.get_presentation_snapshot()
+	_expect_equal(
+		snapshot.get("pendingSpaceTransition"),
+		false,
+		"World 折返到当前空间时取消过期的进屋交接",
+	)
+	for _frame in 180:
+		body.advance_presentation(1.0 / 60.0)
+	snapshot = body.get_presentation_snapshot()
+	_expect_equal(
+		snapshot.get("spaceId"),
+		"town_outdoor",
+		"取消后身体不会延迟跳进室内",
+	)
+	_expect_equal(
+		visible_space_changes,
+		[],
+		"身体没有真正过门就不发布可见空间变化",
+	)
 	stage.queue_free()
 	await process_frame
 
@@ -5373,6 +5491,8 @@ func _scenario_resident_character_host() -> void:
 	runtime.queue_free()
 	await _wait_frames(3)
 	return
+
+
 func _assert_character_contract(
 	body: ResidentCharacterBody,
 	active: bool,
