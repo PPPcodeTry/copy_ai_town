@@ -108,6 +108,7 @@ git status --porcelain
 - 对应的 `v<版本号>` 标签和 GitHub Release 尚不存在，避免覆盖旧版本。
 - `更新日志.md` 已涵盖这批玩家可见变化，README 的最近更新摘要已经同步。
 - `python3 -m unittest discover -s tools/release -p 'test_*.py'` 与 `tools/guards/run_guards.sh` 均通过。
+- Windows 导出任务运行在 Linux 构建机，macOS 导出任务运行在 macOS 构建机；不要把需要 Apple 签名工具的 macOS 导出移到 Linux。
 - 工作流完成后先下载 Windows 与 macOS 包人工试玩，确认包内有游戏、`更新日志.md` 和 `build-info.json`，再把 Draft Release 对外发布。
 
 发行工作流只在一次性构建副本中写入 Godot 与系统文件版本，不把发行版本写回开发源码。不要手动修改 `game/project.godot` 的版本字段来替代 `VERSION`。
@@ -221,6 +222,16 @@ Windows 包必须同时包含 `.exe` 与 `.pck`，macOS 包必须包含 `.app/Co
 
 先从日志第一条 `RELEASE_ERROR` 检查导出路径、预设名称与构建信息，不要绕过 `release_tool.py verify` 直接上传。若调整包结构，必须同时补充发行工具测试，确保 macOS 程序权限等压缩包属性不会丢失。
 
+### macOS 正式导出缺少 Xcode 命令行工具
+
+表现：macOS 导入检查通过，但正式导出提示 `Code signing: Xcode command line tools are not installed`，随后出现 `Project export for preset "macOS" failed`。
+
+直接原因：带临时签名的 macOS 导出任务运行在 Linux 构建机。Godot 可以在 Linux 上准备部分 macOS 资源，但无法调用 Apple 的签名工具完成当前预设。
+
+处理方式：让 macOS 构建项使用 GitHub 的 macOS 构建机，并下载 Godot 的 macOS universal 编辑器；导出模板安装到 macOS 的 Godot 用户目录。Windows 构建项继续使用 Linux 构建机，不要关闭签名检查来绕过失败。
+
+最终验证：远端工作流中 Windows 与 macOS 构建项分别完成正式导出和包内容复查，随后才允许建立包含两个平台资源的 Draft Release。
+
 ### 正式测试断言读取了错误的数据层
 
 表现：测试中的行为已经正确，但断言从公开投影读取只存在于 World 内部的状态字段，或用显示名称查找按稳定 ID 建立的内部状态表，得到 `null` 并使正式测试退出失败。
@@ -292,6 +303,18 @@ gh run view <运行编号> --log-failed \
 
 最终验证：修复后重新推送，等待同一远端 head 的正式测试和防复发守卫重新完成。
 
+### 2026-08-11：macOS 发行包在 Linux 构建机导出失败
+
+表现：完整正式验证和 Windows 下载包均通过；macOS 在“正式导出”步骤提示缺少 Xcode 命令行工具，因此没有建立不完整的 Draft Release。
+
+直接原因：Windows 与 macOS 共用了 `ubuntu-latest` 构建机，而 macOS 预设需要 Apple 的签名工具完成临时签名。
+
+修复：为构建矩阵分别指定运行环境；Windows 保持 Linux，macOS 改用 macOS，并按运行环境安装对应的 Godot 编辑器和导出模板。
+
+最终验证：修复提交必须先通过本地发行工具测试、守卫、Godot 无头导入和正式测试；合并后从最新 `main` 重新运行草稿发行，确认两个平台都通过并建立 Draft Release。
+
+本案例对应的失败运行：[GitHub Actions 记录](https://github.com/mewamew/my_ai_town/actions/runs/31484804450)。
+
 ## 提交前简表
 
 - [ ] `git status --short` 中没有被遗漏的 `??` 文件。
@@ -301,6 +324,7 @@ gh run view <运行编号> --log-failed \
 - [ ] `tools/guards/run_guards.sh` 通过。
 - [ ] Godot 无头导入没有脚本或引擎错误。
 - [ ] 相关测试通过；发行改动完成正式测试套件。
+- [ ] 发行工作流改动确认 Windows 使用 Linux 构建机、macOS 使用 macOS 构建机。
 - [ ] 测试后 `git status --porcelain` 没有意外变化。
 - [ ] 玩家可见改动已经写入根目录 `更新日志.md`，并已同步 README 的最新更新摘要。
 - [ ] 提交后在干净临时工作区复查一次，再推送。

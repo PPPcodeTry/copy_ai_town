@@ -124,6 +124,10 @@ const FORMAL_RUNTIME_AUDIT_ENV := "AI_TOWN_FORMAL_RUNTIME_AUDIT_PATH"
 const DAILY_AUTO_SAVE_REASON := "daily_auto_save"
 const DAILY_AUTO_SAVE_RETRY_INTERVAL_MSEC := 5000
 const DAILY_AUTO_SAVE_ERROR_HISTORY_LIMIT := 32
+# 退出留言只是可选内容，不能让玩家长时间停在全屏等待页。
+const QUIT_DEPARTURE_MESSAGES_TIMEOUT_SECONDS := 3.0
+# 正式 Provider 最长配置为 300 秒；额外留出结算余量，只处理回调契约失效。
+const REPLACEMENT_PERSONA_TIMEOUT_SECONDS := 310.0
 const REPLACEMENT_AGENT_ATTRIBUTE_FIELDS: Array[String] = [
 	"name",
 	"gender",
@@ -243,6 +247,8 @@ var _daily_auto_save_last_attempt_msec := -100000
 var _daily_auto_save_attempts := 0
 var _daily_auto_save_successes := 0
 var _replacement_generation_pending := false
+var _replacement_generation_sequence := 0
+var _active_replacement_generation_id := 0
 var _replacement_last_checked_minute := -1
 var _pending_replacement_candidate: Dictionary = {}
 var _replacement_arrival_panel: ReplacementResidentArrivalPanel
@@ -372,7 +378,15 @@ func _begin_replacement_persona_generation(death_event: Dictionary) -> void:
 			_build_replacement_candidate(death_event, source_binding, {}),
 		)
 		return
+	_replacement_generation_sequence += 1
+	var generation_id := _replacement_generation_sequence
+	_active_replacement_generation_id = generation_id
 	_replacement_generation_pending = true
+	_schedule_replacement_persona_timeout(
+		generation_id,
+		death_event,
+		source_binding,
+	)
 	provider.request_json({
 		"request_kind": "replacement_resident_persona",
 		"messages": [{
@@ -388,6 +402,7 @@ func _begin_replacement_persona_generation(death_event: Dictionary) -> void:
 		}],
 		"max_tokens": 360,
 	}, _on_replacement_persona_generated.bind(
+		generation_id,
 		death_event.duplicate(true),
 		source_binding.duplicate(true),
 	))
@@ -395,15 +410,61 @@ func _begin_replacement_persona_generation(death_event: Dictionary) -> void:
 
 func _on_replacement_persona_generated(
 	result: Dictionary,
+	generation_id: int,
 	death_event: Dictionary,
 	source_binding: Dictionary,
 ) -> void:
+	if (
+		not _replacement_generation_pending
+		or generation_id != _active_replacement_generation_id
+	):
+		return
 	_replacement_generation_pending = false
+	_active_replacement_generation_id = 0
 	var persona: Dictionary = {}
 	if bool(result.get("ok", false)) and result.get("json", {}) is Dictionary:
 		persona = (result.get("json", {}) as Dictionary).duplicate(true)
 	_present_generated_replacement(
 		_build_replacement_candidate(death_event, source_binding, persona),
+	)
+
+
+func _schedule_replacement_persona_timeout(
+	generation_id: int,
+	death_event: Dictionary,
+	source_binding: Dictionary,
+) -> void:
+	if not is_inside_tree():
+		return
+	get_tree().create_timer(
+		REPLACEMENT_PERSONA_TIMEOUT_SECONDS,
+		true,
+		false,
+		true,
+	).timeout.connect(
+		_on_replacement_persona_timeout.bind(
+			generation_id,
+			death_event.duplicate(true),
+			source_binding.duplicate(true),
+		),
+		CONNECT_ONE_SHOT,
+	)
+
+
+func _on_replacement_persona_timeout(
+	generation_id: int,
+	death_event: Dictionary,
+	source_binding: Dictionary,
+) -> void:
+	if (
+		not _replacement_generation_pending
+		or generation_id != _active_replacement_generation_id
+	):
+		return
+	_replacement_generation_pending = false
+	_active_replacement_generation_id = 0
+	_present_generated_replacement(
+		_build_replacement_candidate(death_event, source_binding, {}),
 	)
 
 
@@ -1409,6 +1470,7 @@ func request_quit_game(execute_process_quit := true) -> Dictionary:
 		)
 	if _quit_departure_id.is_empty():
 		_quit_departure_id = "departure-%d" % Time.get_ticks_usec()
+	var departure_id := _quit_departure_id
 	_quit_departure_pending = true
 	_quit_execute_process = execute_process_quit
 	_begin_town_entry_loading("quit_game")
@@ -1417,13 +1479,16 @@ func request_quit_game(execute_process_quit := true) -> Dictionary:
 		"prepare_departure_messages",
 		_quit_departure_id,
 		2,
-		Callable(self, "_on_quit_departure_messages_ready"),
+		Callable(self, "_on_quit_departure_messages_ready").bind(
+			departure_id,
+		),
 	) as Dictionary
 	if not bool(started.get("ok", false)):
 		return _continue_quit_after_optional_messages(
 			[],
 			execute_process_quit,
 		)
+	_schedule_quit_departure_messages_timeout(departure_id)
 	return {
 		"ok": true,
 		"errorCode": "",
@@ -1437,8 +1502,41 @@ func request_quit_game(execute_process_quit := true) -> Dictionary:
 	}
 
 
-func _on_quit_departure_messages_ready(result: Dictionary) -> void:
-	if not _quit_departure_pending:
+func _schedule_quit_departure_messages_timeout(departure_id: String) -> void:
+	if (
+		not is_inside_tree()
+		or not _quit_departure_pending
+		or departure_id != _quit_departure_id
+	):
+		return
+	get_tree().create_timer(
+		QUIT_DEPARTURE_MESSAGES_TIMEOUT_SECONDS,
+		true,
+		false,
+		true,
+	).timeout.connect(
+		_on_quit_departure_messages_timeout.bind(departure_id),
+		CONNECT_ONE_SHOT,
+	)
+
+
+func _on_quit_departure_messages_timeout(departure_id: String) -> void:
+	if (
+		not _quit_departure_pending
+		or departure_id != _quit_departure_id
+	):
+		return
+	_continue_quit_after_optional_messages([], _quit_execute_process)
+
+
+func _on_quit_departure_messages_ready(
+	result: Dictionary,
+	departure_id: String,
+) -> void:
+	if (
+		not _quit_departure_pending
+		or departure_id != _quit_departure_id
+	):
 		return
 	if not bool(result.get("ok", false)):
 		_continue_quit_after_optional_messages(
@@ -1472,6 +1570,7 @@ func _continue_quit_after_optional_messages(
 	)
 	_last_result = departure.duplicate(true)
 	_quit_departure_pending = false
+	_quit_departure_id = ""
 	if not bool(departure.get("ok", false)):
 		_dismiss_town_entry_loading()
 		call_deferred(
@@ -1481,7 +1580,6 @@ func _continue_quit_after_optional_messages(
 		)
 		return departure
 	_advance_town_entry_loading(1.0, "保存成功")
-	_quit_departure_id = ""
 	if _quit_execute_process:
 		_prepare_audio_shutdown()
 		_schedule_process_quit()
@@ -1558,7 +1656,9 @@ func _release_internal_session_refs() -> void:
 	_daily_auto_save_last_revision = 0
 	_daily_auto_save_failures.clear()
 	_daily_auto_save_inflight = false
+	_replacement_generation_sequence += 1
 	_replacement_generation_pending = false
+	_active_replacement_generation_id = 0
 	_replacement_last_checked_minute = -1
 	_replacement_world_admitted = false
 	_pending_replacement_candidate.clear()

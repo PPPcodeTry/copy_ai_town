@@ -83,6 +83,6 @@ static func reconcile(town, presentation, reason := "") -> Dictionary:
 			String(desired.get("placeName", "")),
 			desired.get("origin", Vector2.ZERO) as Vector2,
 		) as Dictionary
-	result["changed"] = true
+	result["changed"] = bool(result.get("ok", false))
 	result["reason"] = reason
 	return result

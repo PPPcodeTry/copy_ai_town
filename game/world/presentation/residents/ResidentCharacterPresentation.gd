@@ -4,6 +4,11 @@ extends Node
 
 signal resident_body_created(resident_id: String, body: Node2D)
 signal resident_body_removed(resident_id: String)
+signal resident_body_space_changed(
+	resident_id: String,
+	previous_space_id: String,
+	space_id: String,
+)
 signal presentation_diagnostic(diagnostic: Dictionary)
 signal resident_selected(resident_id: String, resident_name: String)
 
@@ -644,6 +649,7 @@ func _apply_prepared_identity_state(
 			return false
 		body.presentation_diagnostic.connect(_on_body_diagnostic)
 		body.resident_pressed.connect(_on_resident_pressed)
+		body.visible_space_changed.connect(_on_body_visible_space_changed)
 	var motion_configured: Dictionary = body.configure_motion(
 		RESIDENT_BODY.DEFAULT_MOTION_SPEED,
 		catch_up_distance,
@@ -1185,6 +1191,18 @@ func _on_resident_pressed(
 	if not can_select_resident(resident_id):
 		return
 	resident_selected.emit(resident_id, resident_name)
+
+
+func _on_body_visible_space_changed(
+	resident_id: String,
+	previous_space_id: String,
+	space_id: String,
+) -> void:
+	resident_body_space_changed.emit(
+		resident_id,
+		previous_space_id,
+		space_id,
+	)
 
 
 func _record_diagnostic(

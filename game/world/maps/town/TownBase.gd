@@ -953,8 +953,8 @@ func _fade_portal_from_black() -> void:
 # 传送黑屏完全遮盖、淡入开始之前的钩子。子类（TownRuntime）在此预同步
 # 居民表现层的激活空间与权威位置，使淡入后玩家看到的就是已对齐的画面。
 # entering_interior=true 表示刚进入室内房间，false 表示刚退回室外。
-func _on_portal_black_covering(_entering_interior: bool) -> void:
-	pass
+func _on_portal_black_covering(_entering_interior: bool) -> Dictionary:
+	return {"ok": true}
 
 
 func _enter_interior(body: Node2D, portal_id: String) -> void:
@@ -976,6 +976,7 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 		push_error("Interior is not available: %s" % interior_id)
 		return
 
+	var previous_visual_state := _portal_visual_state_snapshot()
 	_portal_transition_active = true
 	_player.velocity = Vector2.ZERO
 	await _fade_portal_to_black()
@@ -1017,7 +1018,14 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 		_populate_furniture_library(interior_id)
 		_refresh_cafe_furniture_panel()
 	# 黑屏完全遮盖、淡入之前：让子类预同步表现层，玩家看到画面时即为对齐状态。
-	_on_portal_black_covering(true)
+	var prepared := _on_portal_black_covering(true)
+	if prepared.get("ok") != true:
+		room.visible = false
+		_restore_portal_visual_state(previous_visual_state)
+		await _fade_portal_from_black()
+		if is_inside_tree():
+			_portal_transition_active = false
+		return
 	await _fade_portal_from_black()
 	if not is_inside_tree():
 		return
@@ -1033,6 +1041,7 @@ func _exit_interior(body: Node2D, interior_id: String) -> void:
 		or _portal_transition_active
 	):
 		return
+	var previous_visual_state := _portal_visual_state_snapshot()
 	_portal_transition_active = true
 	_player.velocity = Vector2.ZERO
 	_hide_interior_location_title()
@@ -1067,11 +1076,103 @@ func _exit_interior(body: Node2D, interior_id: String) -> void:
 		save_cafe_furniture_state()
 	_active_furniture_layout = null
 	# 房间已隐藏、淡入之前：让子类预同步回室外表现层。
-	_on_portal_black_covering(false)
+	var prepared := _on_portal_black_covering(false)
+	if prepared.get("ok") != true:
+		_restore_portal_visual_state(previous_visual_state)
+		await _fade_portal_from_black()
+		if is_inside_tree():
+			_portal_transition_active = false
+		return
 	await _fade_portal_from_black()
 	if not is_inside_tree():
 		return
 	_portal_transition_active = false
+
+
+func _portal_visual_state_snapshot() -> Dictionary:
+	var light_energies: Array[float] = []
+	for light: PointLight2D in _environment_lights:
+		light_energies.append(light.energy)
+	return {
+		"playerPosition": _player.position,
+		"zoomIndex": _zoom_index,
+		"outdoorZoomIndex": _outdoor_zoom_index,
+		"activeInteriorId": _active_interior_id,
+		"activeExteriorPortalId": _active_exterior_portal_id,
+		"blockedExteriorPortalId": _blocked_exterior_reentry_portal_id,
+		"insideFurnitureRoom": _inside_furniture_room,
+		"interiorRoot": _interior_root,
+		"interiorRootVisible": _interior_root != null and _interior_root.visible,
+		"activeFurnitureLayout": _active_furniture_layout,
+		"cafeFurnitureEditMode": _cafe_furniture_edit_mode,
+		"weatherVisible": _weather_layer.visible,
+		"leafParticlesEmitting": _leaf_particles.emitting,
+		"worldTint": _world_tint.color,
+		"lightEnergies": light_energies,
+		"cafeEntryVisible": _cafe_furniture_entry_panel.visible,
+		"cafePanelVisible": _cafe_furniture_panel.visible,
+		"mapControlVisible": (
+			_map_control_panel.visible
+			if is_instance_valid(_map_control_panel)
+			else false
+		),
+		"sceneBannerVisible": _scene_name_banner.visible,
+	}
+
+
+func _restore_portal_visual_state(snapshot: Dictionary) -> void:
+	_player.position = snapshot.get("playerPosition", _player.position) as Vector2
+	_outdoor_zoom_index = int(
+		snapshot.get("outdoorZoomIndex", _outdoor_zoom_index),
+	)
+	_active_interior_id = String(snapshot.get("activeInteriorId", ""))
+	_active_exterior_portal_id = String(
+		snapshot.get("activeExteriorPortalId", ""),
+	)
+	_blocked_exterior_reentry_portal_id = String(
+		snapshot.get("blockedExteriorPortalId", ""),
+	)
+	_inside_furniture_room = bool(snapshot.get("insideFurnitureRoom", false))
+	_interior_root = snapshot.get("interiorRoot") as InteriorRoom
+	_active_furniture_layout = snapshot.get("activeFurnitureLayout") as Node2D
+	_cafe_furniture_edit_mode = bool(
+		snapshot.get("cafeFurnitureEditMode", false),
+	)
+	if _interior_root != null:
+		_interior_root.visible = bool(
+			snapshot.get("interiorRootVisible", true),
+		)
+	if _interior_root != null and not _active_interior_id.is_empty():
+		var definition := INTERIOR_DEFINITIONS.get(
+			_active_interior_id,
+			{},
+		) as Dictionary
+		_set_camera_limits(_interior_camera_bounds(definition, _interior_root))
+	else:
+		_set_camera_limits(Rect2(Vector2.ZERO, MAP_SIZE))
+	_set_zoom_index(int(snapshot.get("zoomIndex", _zoom_index)))
+	_clear_player_blocking_normals()
+	_weather_layer.visible = bool(snapshot.get("weatherVisible", true))
+	_leaf_particles.emitting = bool(
+		snapshot.get("leafParticlesEmitting", true),
+	)
+	_world_tint.color = snapshot.get("worldTint", Color.WHITE) as Color
+	var light_energies := snapshot.get("lightEnergies", []) as Array
+	for index in mini(_environment_lights.size(), light_energies.size()):
+		_environment_lights[index].energy = float(light_energies[index])
+	_cafe_furniture_entry_panel.visible = bool(
+		snapshot.get("cafeEntryVisible", false),
+	)
+	_cafe_furniture_panel.visible = bool(
+		snapshot.get("cafePanelVisible", false),
+	)
+	if is_instance_valid(_map_control_panel):
+		_map_control_panel.visible = bool(
+			snapshot.get("mapControlVisible", false),
+		)
+	_scene_name_banner.visible = bool(
+		snapshot.get("sceneBannerVisible", false),
+	)
 
 
 func _furniture_layout_for_interior(interior_id: String) -> Node2D:

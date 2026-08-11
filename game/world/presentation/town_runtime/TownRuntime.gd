@@ -122,6 +122,11 @@ var _expanded_building_resident_marker: Node2D
 var _observed_place_name := ""
 var _view_sync_active := false
 var _view_sync_requested := false
+var _follow_view_generation := 0
+var _active_follow_view_generation := -1
+var _follow_view_rollback_space_id := ""
+var _follow_view_rollback_place_name := ""
+var _follow_view_rollback_origin := Vector2.ZERO
 var _space_view_sync_elapsed := 0.0
 var _announcement_panel: PanelContainer
 var _weather_panel: PanelContainer
@@ -1242,6 +1247,12 @@ func follow_resident(resident_name: String) -> bool:
 	var state := _world.get_resident_state(resident_name,) as Dictionary
 	if state.is_empty() or not bool(state.get("isPresent", true)):
 		return false
+	var actor := (
+		_resident_presentation.get_actor(resident_name)
+		as ResidentCharacterBody
+	)
+	if actor == null:
+		return false
 	_set_followed_resident(resident_name)
 	_set_zoom_index(DEFAULT_ZOOM_INDEX)
 	_queue_follow_view_sync()
@@ -1259,6 +1270,7 @@ func _set_followed_resident(resident_name: String) -> void:
 	if _followed_resident == normalized:
 		return
 	_followed_resident = normalized
+	_follow_view_generation += 1
 
 
 func zoom_observer_camera(step_delta: int) -> Dictionary:
@@ -1266,7 +1278,6 @@ func zoom_observer_camera(step_delta: int) -> Dictionary:
 		return _avatar_mode_failure("OBSERVER_CAMERA_NOT_ACTIVE")
 	if step_delta == 0:
 		return _avatar_mode_failure("OBSERVER_CAMERA_ZOOM_DELTA_INVALID")
-	_stop_following_for_observer_pan()
 	var previous_index := _zoom_index
 	_set_observer_zoom_index(_zoom_index + clampi(step_delta, -1, 1))
 	_update_runtime_hud()
@@ -1748,6 +1759,10 @@ func _start_world() -> void:
 		_fail_start("小动物动态世界道具初始化失败")
 		return
 	_resident_presentation.connect("resident_selected", _on_resident_selected)
+	_resident_presentation.connect(
+		"resident_body_space_changed",
+		_on_resident_body_space_changed,
+	)
 	_conflict_presentation_host = CONFLICT_PRESENTATION_HOST.new()
 	_conflict_presentation_host.name = "TownConflictPresentationHost"
 	add_child(_conflict_presentation_host)
@@ -2060,11 +2075,19 @@ func enter_avatar_mode() -> Dictionary:
 		),
 	)
 	_sync_avatar_visual_from_world(false, true, false)
-	_set_avatar_mode(AVATAR_MODE_DESCENT)
+	var presentation_started := _set_avatar_mode(AVATAR_MODE_DESCENT)
+	if presentation_started.get("ok") != true:
+		# The World has already confirmed the avatar landing. A missing or
+		# unready visual presentation must not leave movement and collision
+		# permanently locked in avatar_descent. Keep that state for the rest of
+		# this dispatch so repeated clicks are still rejected, then finish the
+		# transition on the next idle turn.
+		_complete_avatar_descent_after_presentation_start_failure.call_deferred()
 	return {
 		"ok": true,
 		"mode": _avatar_mode,
-		"durationMsec": 1450,
+		"durationMsec": int(presentation_started.get("durationMsec", 0)),
+		"presentationStarted": presentation_started.get("ok") == true,
 		"landing": (
 			landing.get("landing", {}) as Dictionary
 		).duplicate(true),
@@ -2123,18 +2146,24 @@ func exit_avatar_mode() -> Dictionary:
 	return {"ok": true, "mode": _avatar_mode}
 
 
-func _set_avatar_mode(next_mode: String) -> void:
+func _set_avatar_mode(next_mode: String) -> Dictionary:
 	var previous_mode := _avatar_mode
 	_avatar_mode = next_mode
 	enable_player_avatar = next_mode == AVATAR_MODE_ACTIVE
+	var presentation_result := {"ok": true}
 	if next_mode == AVATAR_MODE_DESCENT:
 		_prepare_avatar_descent_control()
-		if _avatar_descent_presentation != null:
-			_avatar_descent_presentation.start(
+		if is_instance_valid(_avatar_descent_presentation):
+			presentation_result = _avatar_descent_presentation.start(
 				_player_visual_root,
 				_player_shadow,
 				_camera,
 			)
+		else:
+			presentation_result = {
+				"ok": false,
+				"errorCode": "AVATAR_DESCENT_PRESENTATION_NOT_READY",
+			}
 	elif enable_player_avatar:
 		_enable_avatar_control()
 		_set_zoom_index(DEFAULT_ZOOM_INDEX)
@@ -2147,6 +2176,7 @@ func _set_avatar_mode(next_mode: String) -> void:
 	_set_building_hotspots_available(next_mode == AVATAR_MODE_OBSERVER)
 	avatar_mode_changed.emit(_avatar_mode, previous_mode)
 	_update_runtime_hud()
+	return presentation_result
 
 
 func _avatar_mode_failure(error_code: String) -> Dictionary:
@@ -2195,6 +2225,11 @@ func _on_avatar_descent_timeline_completed() -> void:
 		complete_avatar_descent()
 
 
+func _complete_avatar_descent_after_presentation_start_failure() -> void:
+	if _avatar_mode == AVATAR_MODE_DESCENT:
+		complete_avatar_descent()
+
+
 func _on_avatar_descent_input_unlocked() -> void:
 	if _avatar_mode == AVATAR_MODE_DESCENT:
 		complete_avatar_descent()
@@ -2216,9 +2251,11 @@ func _update_camera_target(reset_smoothing := false) -> void:
 func _reset_observer_camera(reset_smoothing := false) -> void:
 	_observer_drag_active = false
 	_observer_drag_button = MOUSE_BUTTON_NONE
-	_observer_camera_position = OBSERVER_START_POSITION
 	if not _is_inside_interior():
 		_set_camera_limits(Rect2(Vector2.ZERO, MAP_SIZE))
+		_observer_camera_position = OBSERVER_START_POSITION
+	else:
+		_observer_camera_position = _observer_camera_bounds().get_center()
 	_set_observer_zoom_index(OBSERVER_START_ZOOM_INDEX)
 	_update_camera_target(reset_smoothing)
 
@@ -2352,12 +2389,13 @@ func _stop_following_for_observer_pan() -> void:
 	if _followed_resident.is_empty():
 		return
 	_set_followed_resident("")
-	if _is_inside_interior() and not _view_sync_active:
-		call_deferred("_restore_outdoor_observer_view")
 
 
 func _set_observer_zoom_index(value: int) -> void:
 	_set_zoom_index(value)
+	if not _followed_resident.is_empty():
+		_update_follow_camera(true)
+		return
 	if _zoom_index == OVERVIEW_ZOOM_INDEX:
 		_observer_camera_position = MAP_SIZE * 0.5
 	_set_observer_camera_position(_observer_camera_position, true)
@@ -2366,17 +2404,38 @@ func _set_observer_zoom_index(value: int) -> void:
 func _set_observer_camera_position(position: Vector2, reset_smoothing := false) -> void:
 	var zoom_value := maxf(_camera.zoom.x, 0.001)
 	var half_view := get_viewport_rect().size * 0.5 / zoom_value
+	var camera_bounds := _observer_camera_bounds()
 	var next_position := position
-	if half_view.x * 2.0 >= MAP_SIZE.x:
-		next_position.x = MAP_SIZE.x * 0.5
+	if half_view.x * 2.0 >= camera_bounds.size.x:
+		next_position.x = camera_bounds.get_center().x
 	else:
-		next_position.x = clampf(next_position.x, half_view.x, MAP_SIZE.x - half_view.x)
-	if half_view.y * 2.0 >= MAP_SIZE.y:
-		next_position.y = MAP_SIZE.y * 0.5
+		next_position.x = clampf(
+			next_position.x,
+			camera_bounds.position.x + half_view.x,
+			camera_bounds.end.x - half_view.x,
+		)
+	if half_view.y * 2.0 >= camera_bounds.size.y:
+		next_position.y = camera_bounds.get_center().y
 	else:
-		next_position.y = clampf(next_position.y, half_view.y, MAP_SIZE.y - half_view.y)
+		next_position.y = clampf(
+			next_position.y,
+			camera_bounds.position.y + half_view.y,
+			camera_bounds.end.y - half_view.y,
+		)
 	_observer_camera_position = next_position
 	_update_camera_target(reset_smoothing)
+
+
+func _observer_camera_bounds() -> Rect2:
+	if not _is_inside_interior():
+		return Rect2(Vector2.ZERO, MAP_SIZE)
+	return Rect2(
+		Vector2(_camera.limit_left, _camera.limit_top),
+		Vector2(
+			_camera.limit_right - _camera.limit_left,
+			_camera.limit_bottom - _camera.limit_top,
+		),
+	)
 
 
 func _on_camera_viewport_size_changed() -> void:
@@ -2384,7 +2443,6 @@ func _on_camera_viewport_size_changed() -> void:
 	_update_building_resident_marker_zoom()
 	if (
 		_avatar_mode == AVATAR_MODE_OBSERVER
-		and not _is_inside_interior()
 		and _zoom_index != OVERVIEW_ZOOM_INDEX
 	):
 		_set_observer_camera_position(_observer_camera_position, true)
@@ -2416,14 +2474,21 @@ func _update_follow_camera(reset_smoothing := false) -> void:
 	if state.is_empty() or not bool(state.get("isPresent", true)):
 		_set_followed_resident("")
 		return
-	var is_outdoors := String(state.get("spaceId", "")) == "town_outdoor"
-	if (is_outdoors and _is_inside_interior()) or (
-		not is_outdoors and (_observed_place_name != String(state.get("currentPlace", "")) or not _is_inside_interior())
-	):
+	var actor := (
+		_resident_presentation.get_actor(_followed_resident)
+		as ResidentCharacterBody
+	)
+	if actor == null:
+		_set_followed_resident("")
+		return
+	var actor_space_id := actor.get_space_id()
+	if not _follow_view_matches_space(actor_space_id):
 		_queue_follow_view_sync()
 		return
-	var actor := _resident_presentation.get_actor(_followed_resident) as Node2D
-	_player.position = actor.position if actor != null else state.get("position", _player.position) as Vector2
+	if not actor.visible or not actor.position.is_finite():
+		_set_followed_resident("")
+		return
+	_player.position = actor.position
 	_observer_camera_position = _player.position
 	_update_camera_target(reset_smoothing)
 	# The current commercial HUD intentionally has no ordinary resident action
@@ -2819,6 +2884,20 @@ func _on_runtime_resident_place_changed(
 	_sync_building_resident_markers()
 
 
+func _on_resident_body_space_changed(
+	resident_id: String,
+	_previous_space_id: String,
+	_space_id: String,
+) -> void:
+	_sync_building_resident_markers()
+	var followed_actor := (
+		_resident_presentation.get_actor(_followed_resident)
+		as ResidentCharacterBody
+	)
+	if followed_actor != null and followed_actor.get_resident_id() == resident_id:
+		_queue_follow_view_sync()
+
+
 func _on_runtime_world_restored(_summary: Dictionary) -> void:
 	# The roof markers belong to TownRuntime, so restore them from the committed
 	# world snapshot in the same signal instead of waiting for a later movement
@@ -3032,6 +3111,15 @@ func _sync_building_resident_markers() -> void:
 			continue
 		var state := state_value as Dictionary
 		var space_id := String(state.get("spaceId", "")).strip_edges()
+		if _resident_presentation != null:
+			var body := (
+				_resident_presentation.get_actor(
+					String(state.get("residentId", "")),
+				)
+				as ResidentCharacterBody
+			)
+			if body != null:
+				space_id = body.get_space_id().strip_edges()
 		if (
 			space_id.is_empty()
 			or space_id == "town_outdoor"
@@ -3348,16 +3436,28 @@ func _update_lifecycle_test_display() -> void:
 	_manual_pause_button.text = "继续世界（P）" if reasons.has("manual") else "暂停世界（P）"
 
 
-func _on_portal_black_covering(entering_interior: bool) -> void:
+func _on_portal_black_covering(entering_interior: bool) -> Dictionary:
 	# 黑屏遮盖阶段预热：先把表现层切到目标空间并强制对齐权威位置，
 	# 玩家淡入后看到的就是正常运行中的画面，而不是先看见再吸附。
 	if _resident_presentation == null or _world == null:
-		return
-	SPACE_VIEW_SYNC.reconcile(
+		return {
+			"ok": false,
+			"code": "PRESENTATION_SPACE_SYNC_UNAVAILABLE",
+		}
+	if (
+		_active_follow_view_generation >= 0
+		and _active_follow_view_generation != _follow_view_generation
+	):
+		_restore_follow_view_presentation()
+		return {
+			"ok": false,
+			"code": "FOLLOW_VIEW_TRANSITION_STALE",
+		}
+	return SPACE_VIEW_SYNC.reconcile(
 		self,
 		_resident_presentation,
 		"portal_enter" if entering_interior else "portal_exit",
-	)
+	) as Dictionary
 
 
 func _enter_interior(body: Node2D, portal_id: String) -> void:
@@ -3411,6 +3511,32 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 		_avatar_place_change_active = false
 		_sync_avatar_visual_from_world(true)
 		return
+	var target_interior_id := String(
+		_exterior_portal_spec(portal_id).get("interior_id", ""),
+	)
+	var target_room := _interior_roots.get(target_interior_id) as Node2D
+	var presentation_result := (
+		_resident_presentation.set_observed_interior(
+			place_name,
+			target_room.position,
+		) as Dictionary
+		if target_room != null
+		else {
+			"ok": false,
+			"code": "PRESENTATION_INTERIOR_ROOM_UNAVAILABLE",
+		}
+	)
+	if presentation_result.get("ok") != true:
+		var rollback := _world.return_player_avatar_outdoors(
+			_avatar_outdoor_place,
+			threshold_position,
+		) as Dictionary
+		_show_player_command_feedback(
+			presentation_result if rollback.get("ok") == true else rollback,
+		)
+		_avatar_place_change_active = false
+		_sync_avatar_visual_from_world(true)
+		return
 	await super._enter_interior(body, portal_id)
 	if not is_inside_tree():
 		return
@@ -3419,9 +3545,6 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 		_play_audio_cue("door_enter")
 		_observed_place_name = place_name
 		_environment_renderer.set_outdoor_visible(false)
-		var room := _interior_roots.get(_active_interior_id) as Node2D
-		if room != null:
-			_resident_presentation.set_observed_interior(place_name, room.position)
 		_set_building_hotspots_available(false)
 		_sync_avatar_visual_from_world(true)
 	_avatar_place_change_active = false
@@ -3452,6 +3575,7 @@ func _exit_interior(body: Node2D, interior_id: String) -> void:
 		return
 	_avatar_place_change_active = true
 	var previous_place_name := _observed_place_name
+	var avatar_before_exit := _world.get_player_avatar_state() as Dictionary
 	var portal_spec := _exterior_portal_spec(_active_exterior_portal_id)
 	var safe_return_position := portal_spec.get(
 		"return",
@@ -3464,13 +3588,43 @@ func _exit_interior(body: Node2D, interior_id: String) -> void:
 		_avatar_place_change_active = false
 		_sync_avatar_visual_from_world(true)
 		return
+	var presentation_result := (
+		_resident_presentation.clear_observed_interior() as Dictionary
+	)
+	if presentation_result.get("ok") != true:
+		var rollback := (
+			_world.change_player_avatar_place(previous_place_name) as Dictionary
+		)
+		if rollback.get("ok") == true:
+			var restored_avatar := (
+				rollback.get("state", {}) as Dictionary
+				if rollback.get("state") is Dictionary
+				else _world.get_player_avatar_state() as Dictionary
+			)
+			var restored_position := avatar_before_exit.get(
+				"position",
+				Vector2.ZERO,
+			) as Vector2
+			var restored_space_id := String(
+				restored_avatar.get("spaceId", ""),
+			)
+			rollback = _world.submit_player_avatar_position(
+				restored_space_id,
+				restored_position,
+				String(avatar_before_exit.get("doing", "")),
+			) as Dictionary
+		_show_player_command_feedback(
+			presentation_result if rollback.get("ok") == true else rollback,
+		)
+		_avatar_place_change_active = false
+		_sync_avatar_visual_from_world(true)
+		return
 	await super._exit_interior(body, interior_id)
 	if not is_inside_tree():
 		return
 	_set_audio_indoor(false)
 	_play_audio_cue("door_exit")
 	_observed_place_name = ""
-	_resident_presentation.clear_observed_interior()
 	_environment_renderer.set_outdoor_visible(true)
 	_set_building_hotspots_available(true)
 	_sync_avatar_visual_from_world(true)
@@ -3487,7 +3641,7 @@ func _exit_interior(body: Node2D, interior_id: String) -> void:
 	})
 
 
-func _show_observed_interior(place_name: String, portal_id: String) -> void:
+func _show_observed_interior(place_name: String, portal_id: String) -> bool:
 	_view_sync_active = true
 	if _is_inside_interior() and _active_exterior_portal_id != portal_id:
 		# 不在退出前切空间：_exit_interior 有一系列守卫可能提前返回，
@@ -3499,34 +3653,64 @@ func _show_observed_interior(place_name: String, portal_id: String) -> void:
 		# a physical exit. Observer mode enters from an explicit building click,
 		# so a previously exited building must remain selectable immediately.
 		_blocked_exterior_reentry_portal_id = ""
+		var portal_spec := _exterior_portal_spec(portal_id)
+		var target_interior_id := String(
+			portal_spec.get("interior_id", ""),
+		)
+		var target_room := (
+			_interior_roots.get(target_interior_id) as Node2D
+		)
+		if target_room == null:
+			_view_sync_active = false
+			return false
+		var prepared := _resident_presentation.set_observed_interior(
+			place_name,
+			target_room.position,
+		) as Dictionary
+		if prepared.get("ok") != true:
+			_view_sync_active = false
+			return false
 		await _enter_interior(_player, portal_id)
 	if _is_inside_interior() and _active_exterior_portal_id == portal_id:
 		# 只有确实处于目标房间才设置观察空间；退出/进入失败时保持原状，
 		# 交给 SPACE_VIEW_SYNC 周期兜底修正到实际可见空间。
 		_observed_place_name = place_name
 		_environment_renderer.set_outdoor_visible(false)
-		var room := _interior_roots.get(_active_interior_id) as Node2D
-		_resident_presentation.set_observed_interior(place_name, room.position)
 		_set_building_hotspots_available(false)
 	_view_sync_active = false
+	return _is_inside_interior() and _active_exterior_portal_id == portal_id
 
 
-func _show_town_overview() -> void:
+func _show_town_overview() -> bool:
 	_view_sync_active = true
 	if _is_inside_interior():
 		# 先完成退出再切空间：提前切走一旦遇到退出守卫提前返回，
 		# 室内居民会被永久冻结在可见画面中。退出成功路径内部会自行
 		# clear_observed_interior 并复位 _observed_place_name。
+		var prepared := (
+			_resident_presentation.clear_observed_interior()
+			as Dictionary
+		)
+		if prepared.get("ok") != true:
+			_view_sync_active = false
+			return false
 		await _exit_interior(_player, _active_interior_id)
 	else:
+		var prepared := (
+			_resident_presentation.clear_observed_interior()
+			as Dictionary
+		)
+		if prepared.get("ok") != true:
+			_view_sync_active = false
+			return false
 		_observed_place_name = ""
-		_resident_presentation.clear_observed_interior()
 	if not enable_player_avatar:
 		_blocked_exterior_reentry_portal_id = ""
 	if not _is_inside_interior():
 		_environment_renderer.set_outdoor_visible(true)
 		_set_building_hotspots_available(true)
 	_view_sync_active = false
+	return not _is_inside_interior()
 
 
 func _queue_follow_view_sync() -> void:
@@ -3544,19 +3728,149 @@ func _sync_followed_resident_view() -> void:
 	if state.is_empty() or not bool(state.get("isPresent", true)):
 		_set_followed_resident("")
 		return
-	if String(state.get("spaceId", "")) == "town_outdoor":
+	var actor := (
+		_resident_presentation.get_actor(_followed_resident)
+		as ResidentCharacterBody
+	)
+	if actor == null:
+		_set_followed_resident("")
+		return
+	var actor_space_id := actor.get_space_id()
+	var follow_generation := _follow_view_generation
+	var followed_resident_id := actor.get_resident_id()
+	if actor_space_id == "town_outdoor":
 		if _is_inside_interior():
-			await _show_town_overview()
+			var returned := await _run_follow_town_overview_transition(
+				follow_generation,
+			)
+			if not _finish_follow_view_attempt(
+				follow_generation,
+				followed_resident_id,
+				actor_space_id,
+			):
+				return
+			if not returned:
+				_set_followed_resident("")
+				return
 		_update_follow_camera(true)
 		return
-	var place_name := String(state.get("currentPlace", ""))
+	var place_name := _place_name_for_space_id(actor_space_id)
 	var portal_id := _portal_id_for_place(place_name)
 	if portal_id.is_empty():
 		_set_followed_resident("")
 		return
 	if not _is_inside_interior() or _observed_place_name != place_name:
-		await _show_observed_interior(place_name, portal_id)
+		_capture_follow_view_rollback_presentation()
+		_active_follow_view_generation = follow_generation
+		var entered := await _show_observed_interior(place_name, portal_id)
+		if _active_follow_view_generation == follow_generation:
+			_active_follow_view_generation = -1
+		_clear_follow_view_rollback_presentation()
+		if not _finish_follow_view_attempt(
+			follow_generation,
+			followed_resident_id,
+			actor_space_id,
+		):
+			return
+		if not entered:
+			_set_followed_resident("")
+			return
 	_update_follow_camera(true)
+
+
+func _run_follow_town_overview_transition(generation: int) -> bool:
+	_capture_follow_view_rollback_presentation()
+	_active_follow_view_generation = generation
+	var returned := await _show_town_overview()
+	if _active_follow_view_generation == generation:
+		_active_follow_view_generation = -1
+	_clear_follow_view_rollback_presentation()
+	return returned
+
+
+func _finish_follow_view_attempt(
+	generation: int,
+	resident_id: String,
+	space_id: String,
+) -> bool:
+	var actor := (
+		_resident_presentation.get_actor(_followed_resident)
+		as ResidentCharacterBody
+	)
+	var current := (
+		generation == _follow_view_generation
+		and not _followed_resident.is_empty()
+		and actor != null
+		and actor.get_resident_id() == resident_id
+		and actor.get_space_id() == space_id
+	)
+	if current:
+		return true
+	if not _followed_resident.is_empty():
+		_queue_follow_view_sync()
+	return false
+
+
+func _capture_follow_view_rollback_presentation() -> void:
+	_follow_view_rollback_space_id = String(
+		_resident_presentation.get_active_space_id(),
+	)
+	_follow_view_rollback_place_name = _observed_place_name
+	_follow_view_rollback_origin = Vector2.ZERO
+	if _is_inside_interior():
+		var room := _interior_roots.get(_active_interior_id) as Node2D
+		if room != null:
+			_follow_view_rollback_origin = room.position
+
+
+func _restore_follow_view_presentation() -> Dictionary:
+	if _follow_view_rollback_space_id == "town_outdoor":
+		return (
+			_resident_presentation.clear_observed_interior() as Dictionary
+		)
+	if not _follow_view_rollback_place_name.is_empty():
+		return _resident_presentation.set_observed_interior(
+			_follow_view_rollback_place_name,
+			_follow_view_rollback_origin,
+		) as Dictionary
+	return {
+		"ok": false,
+		"code": "FOLLOW_VIEW_ROLLBACK_SPACE_UNAVAILABLE",
+	}
+
+
+func _clear_follow_view_rollback_presentation() -> void:
+	_follow_view_rollback_space_id = ""
+	_follow_view_rollback_place_name = ""
+	_follow_view_rollback_origin = Vector2.ZERO
+
+
+func _follow_view_matches_space(space_id: String) -> bool:
+	if space_id.is_empty() or _resident_presentation == null:
+		return false
+	if String(_resident_presentation.get_active_space_id()) != space_id:
+		return false
+	if space_id == "town_outdoor":
+		return not _is_inside_interior()
+	if not _is_inside_interior():
+		return false
+	return _place_name_for_space_id(space_id) == _observed_place_name
+
+
+func _place_name_for_space_id(space_id: String) -> String:
+	if (
+		space_id.is_empty()
+		or _world == null
+		or not _world.has_method("get_all_place_details")
+	):
+		return ""
+	for place_value: Variant in _world.get_all_place_details() as Array:
+		if not place_value is Dictionary:
+			continue
+		var place := place_value as Dictionary
+		if String(place.get("spaceId", "")) == space_id:
+			return String(place.get("name", ""))
+	return ""
 
 
 func _update_runtime_hud() -> void:
