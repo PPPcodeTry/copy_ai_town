@@ -72,6 +72,9 @@ const PROJECTION := preload(
 	"res://world/runtime/action/TownActionProjection.gd"
 )
 const AUDIO_CONTROLLER := preload("res://audio/TownAudioController.gd")
+const TOWN_RUNTIME := preload(
+	"res://world/presentation/town_runtime/TownRuntime.gd"
+)
 
 
 func _initialize() -> void:
@@ -85,9 +88,150 @@ func _run_all() -> void:
 	_scenario_environment()
 	_scenario_staggered_arrival()
 	_scenario_weather_behavior_diversity()
+	_scenario_frame_work_budget()
 	_scenario_action_type_registry()
 	_scenario_audio_controller_button_cue()
 	_finish_suite("TOWN_WORLD_FOUNDATION_PASS")
+
+
+func _scenario_frame_work_budget() -> void:
+	var data := _build_data()
+	var opening := _load_opening(data)
+	var world: RefCounted = WORLD.new()
+	var start_result := world.call("start", data, opening) as Dictionary
+	_expect_equal(start_result.get("ok"), true, "frame-budget World starts")
+	if start_result.get("ok") != true:
+		return
+	var now := _absolute_minute_foundation(world.call("get_time") as Dictionary)
+	var resident_ids: Array = (
+		world.call("get_resident_ids") as Array
+	).slice(0, 8)
+	var residents := world.get("_residents") as Dictionary
+	world.set("_activity_reachability_cache_minute", -1)
+	(world.get("_activity_reachability_cache") as Dictionary).clear()
+	(world.get("_activity_prepared_action_cache") as Dictionary).clear()
+	world.call(
+		"_agent_available_activities",
+		residents[String(resident_ids[0])] as Dictionary,
+		true,
+	)
+	_expect(
+		(world.get("_activity_reachability_cache") as Dictionary).size() <= 1,
+		"one Agent wake performs at most one new activity route check",
+	)
+	for index in resident_ids.size():
+		var resident_id := String(resident_ids[index])
+		var resident := residents[resident_id] as Dictionary
+		resident["decisionPending"] = false
+		resident["pendingWake"] = {}
+		resident["currentAction"] = {
+			"action_id": "frame-budget-wait-%d" % index,
+			"type": "待着",
+			"line": "等待同一分钟结算",
+			"startedAbsoluteMinute": now,
+			"completeAbsoluteMinute": now + 1,
+		}
+	var minute_result := world.call("advance", 1.0) as Dictionary
+	_expect_equal(minute_result.get("minutesAdvanced"), 1, "first frame advances one game minute")
+	_expect_equal(
+		_count_empty_actions(residents, resident_ids),
+		8,
+		"all actions finish in their authoritative game minute",
+	)
+	for resident_value: Variant in resident_ids:
+		world.call("_queue_resident_state_refresh", String(resident_value))
+	var first_presentation_batch := world.call("advance", 0.1) as Dictionary
+	_expect_equal(
+		first_presentation_batch.get("deferredPresentationRefreshesProcessed"),
+		3,
+		"one frame publishes at most three resident presentation refreshes",
+	)
+	_expect_equal(
+		first_presentation_batch.get("deferredPresentationRefreshCount"),
+		5,
+		"presentation refresh backlog remains measurable",
+	)
+	var second_presentation_batch := world.call("advance", 0.1) as Dictionary
+	_expect_equal(second_presentation_batch.get("deferredPresentationRefreshesProcessed"), 3, "second presentation frame keeps the same work limit")
+	var third_presentation_batch := world.call("advance", 0.1) as Dictionary
+	_expect_equal(third_presentation_batch.get("deferredPresentationRefreshesProcessed"), 2, "finite presentation backlog drains without starvation")
+	_expect_equal(third_presentation_batch.get("deferredPresentationRefreshCount"), 0, "presentation refresh queue becomes empty")
+	var presentation_perception_frame := world.call("advance", 0.1) as Dictionary
+	_expect_equal(presentation_perception_frame.get("deferredPerceptionProcessed"), true, "perception follows all queued presentation refreshes")
+	world.call("_defer_perception_refresh")
+	var forced_perception_refresh := false
+	for _frame_index in 12:
+		for resident_value: Variant in resident_ids:
+			world.call("_queue_resident_state_refresh", String(resident_value))
+		var starvation_result := world.call("advance", 0.01) as Dictionary
+		forced_perception_refresh = (
+			forced_perception_refresh
+			or bool(starvation_result.get("deferredPerceptionProcessed", false))
+		)
+	_expect_equal(
+		forced_perception_refresh,
+		true,
+		"continuous presentation work cannot starve perception beyond twelve advances",
+	)
+	_expect(
+		(world.get("_deferred_resident_state_refreshes") as Array).size()
+		<= resident_ids.size(),
+		"continuous presentation refreshes remain coalesced per resident",
+	)
+	# 清掉压力场景留下的表现工作，后面的地点通知断言只测自己的队列。
+	(world.get("_deferred_resident_state_refreshes") as Array).clear()
+	(world.get("_deferred_resident_state_refresh_keys") as Dictionary).clear()
+	for index in 3:
+		world.call("_queue_resident_place_change_signal", String(resident_ids[index]), {
+			"residentId": String(resident_ids[index]),
+			"from": "测试旧地点",
+			"to": "测试新地点",
+			"time": world.call("get_time"),
+			"worldRevision": world.call("get_world_revision"),
+		})
+	world.call("_queue_resident_place_change_signal", String(resident_ids[0]), {
+		"residentId": String(resident_ids[0]),
+		"from": "测试旧地点",
+		"to": "测试最新地点",
+		"time": world.call("get_time"),
+		"worldRevision": world.call("get_world_revision"),
+	})
+	_expect_equal(
+		(world.get("_deferred_resident_place_change_signals") as Array).size(),
+		3,
+		"repeated place changes coalesce per resident instead of growing forever",
+	)
+	var first_place_signal := world.call("advance", 0.1) as Dictionary
+	_expect_equal(first_place_signal.get("deferredPlaceChangeSignalsProcessed"), 1, "one frame publishes at most one expensive place-change signal")
+	_expect_equal(first_place_signal.get("deferredPlaceChangeSignalCount"), 2, "place-change backlog remains finite and measurable")
+	var second_place_signal := world.call("advance", 0.1) as Dictionary
+	var third_place_signal := world.call("advance", 0.1) as Dictionary
+	_expect_equal(second_place_signal.get("deferredPlaceChangeSignalsProcessed"), 1, "second frame publishes the next place change")
+	_expect_equal(third_place_signal.get("deferredPlaceChangeSignalCount"), 0, "place-change signal queue drains without starvation")
+	_expect_equal(
+		TOWN_RUNTIME.AGENT_DISPATCH_BUDGET_PER_FRAME,
+		1,
+		"each runtime frame admits at most one Agent request into the staged pipeline",
+	)
+	world.call("stop")
+
+
+func _count_empty_actions(residents: Dictionary, resident_ids: Array) -> int:
+	var count := 0
+	for resident_value: Variant in resident_ids:
+		var resident := residents[String(resident_value)] as Dictionary
+		if (resident.get("currentAction", {}) as Dictionary).is_empty():
+			count += 1
+	return count
+
+
+func _absolute_minute_foundation(time: Dictionary) -> int:
+	var parts := String(time.get("clock", "00:00")).split(":")
+	return (
+		(int(time.get("day", 1)) - 1) * 1440
+		+ int(parts[0]) * 60
+		+ int(parts[1])
+	)
 
 
 func _scenario_indoor_props() -> void:
@@ -677,6 +821,12 @@ func _validate_dynamic_world_projection(data: Dictionary) -> void:
 		true,
 		"World atomically accepts moved props and current collision: %s"
 		% str(move_result),
+	)
+	_expect(
+		(world.get("_activity_reachability_cache") as Dictionary).is_empty()
+			and (world.get("_activity_prepared_action_cache") as Dictionary).is_empty()
+			and int(world.get("_activity_reachability_cache_minute")) == -1,
+		"layout edits invalidate same-minute activity route cache",
 	)
 	var dynamic_data := LAYOUT_PROJECTION.apply(data, moved) as Dictionary
 	var moved_plan := PROP_QUERY.interaction_plan(

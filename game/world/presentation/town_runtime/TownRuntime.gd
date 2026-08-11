@@ -81,6 +81,12 @@ const REQUIRED_AGENT_GATEWAY_METHODS: Array[String] = [
 # in the Gateway, but fill those lanes over consecutive frames so the town
 # never pays the whole burst in one visible frame.
 const AGENT_DISPATCH_BUDGET_PER_FRAME := 1
+# A conversation click routes and builds its page synchronously. Keep the
+# request urgent, but wait for one newly drawn frame before prompt preparation
+# starts on the main thread. The deadline prevents a minimized or unavailable
+# renderer from leaving a conversation request stuck forever.
+const CONVERSATION_AGENT_DISPATCH_HOLD_PROCESS_TURNS := 1
+const CONVERSATION_AGENT_DISPATCH_MAX_FIRST_DRAW_WAIT_MSEC := 500
 
 const CONNECTION_ID_BY_PORTAL_ID := {
 	# TownBase predates the World connection name for the market interior.
@@ -173,6 +179,9 @@ var _observer_drag_active := false
 var _observer_drag_button := MOUSE_BUTTON_NONE
 var _observer_magnify_accumulator := 0.0
 var _avatar_magnify_accumulator := 0.0
+var _agent_dispatch_hold_process_turns := 0
+var _agent_dispatch_not_before_drawn_frame := -1
+var _agent_dispatch_first_draw_deadline_msec := 0
 
 
 # Formal sessions mount TownEnvironmentPresentation after the world starts.
@@ -282,8 +291,7 @@ func _process(delta: float) -> void:
 			Time.get_ticks_usec() - phase_started_usec
 		)
 		phase_started_usec = Time.get_ticks_usec()
-	if _agent_gateway != null:
-		_agent_gateway.pump(AGENT_DISPATCH_BUDGET_PER_FRAME,)
+	_pump_agent_gateway_for_frame()
 	if _frame_profile_enabled:
 		profile["agentUsec"] = (
 			Time.get_ticks_usec() - phase_started_usec
@@ -1569,7 +1577,7 @@ func player_start_conversation(target_name: String, say: String, narration: Stri
 		[],) as Dictionary
 	_show_player_command_feedback(result)
 	if result.get("ok") == true and _agent_gateway != null:
-		_agent_gateway.pump()
+		_hold_agent_dispatch_for_conversation_first_frame()
 	return result
 
 
@@ -1605,8 +1613,45 @@ func player_reply_conversation_with_photos(
 		end,) as Dictionary
 	_show_player_command_feedback(result)
 	if result.get("ok") == true and _agent_gateway != null:
-		_agent_gateway.pump()
+		_hold_agent_dispatch_for_conversation_first_frame()
 	return result
+
+
+func _hold_agent_dispatch_for_conversation_first_frame() -> void:
+	_agent_dispatch_hold_process_turns = maxi(
+		_agent_dispatch_hold_process_turns,
+		CONVERSATION_AGENT_DISPATCH_HOLD_PROCESS_TURNS,
+	)
+	_agent_dispatch_not_before_drawn_frame = maxi(
+		_agent_dispatch_not_before_drawn_frame,
+		Engine.get_frames_drawn() + 1,
+	)
+	_agent_dispatch_first_draw_deadline_msec = maxi(
+		_agent_dispatch_first_draw_deadline_msec,
+		Time.get_ticks_msec()
+			+ CONVERSATION_AGENT_DISPATCH_MAX_FIRST_DRAW_WAIT_MSEC,
+	)
+
+
+func _pump_agent_gateway_for_frame() -> void:
+	if _agent_gateway == null:
+		return
+	if _agent_dispatch_not_before_drawn_frame >= 0:
+		if DisplayServer.get_name() == "headless":
+			if _agent_dispatch_hold_process_turns > 0:
+				_agent_dispatch_hold_process_turns -= 1
+				return
+		elif (
+			Engine.get_frames_drawn()
+			< _agent_dispatch_not_before_drawn_frame
+			and Time.get_ticks_msec()
+			< _agent_dispatch_first_draw_deadline_msec
+		):
+			return
+		_agent_dispatch_hold_process_turns = 0
+		_agent_dispatch_not_before_drawn_frame = -1
+		_agent_dispatch_first_draw_deadline_msec = 0
+	_agent_gateway.pump(AGENT_DISPATCH_BUDGET_PER_FRAME,)
 
 
 func player_end_conversation(conversation_id: String, narration: String) -> Dictionary:

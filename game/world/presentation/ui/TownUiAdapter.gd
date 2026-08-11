@@ -960,8 +960,8 @@ func _on_runtime_avatar_mode_changed(
 	_previous_mode: String,
 ) -> void:
 	_refresh_scope("avatar", true)
-	_refresh_scope("town_hud", true)
-	_refresh_scope("pause_menu", true)
+	_queue_world_scope_refresh("town_hud")
+	_queue_world_scope_refresh("pause_menu")
 
 
 func _on_runtime_observed_place_changed(_result: Dictionary) -> void:
@@ -969,7 +969,7 @@ func _on_runtime_observed_place_changed(_result: Dictionary) -> void:
 	# World has already published its place revision. Refresh the runtime-owned
 	# UI scopes again from the completed visual state.
 	_refresh_scope("avatar", true)
-	_refresh_scope("town_hud", true)
+	_queue_world_scope_refresh("town_hud")
 
 
 func _connect_hud_activity_signals() -> void:
@@ -1038,7 +1038,10 @@ func _on_conversation_changed(
 	)
 	_capture_current_hud_far_conversations()
 	_refresh_scope("conversation", true)
-	_refresh_scope("town_hud", true)
+	# The conversation page now owns the visible frame. Preserve the HUD bubble
+	# state above, then rebuild the covered Town HUD through the existing
+	# frame-spread queue instead of extending the click's synchronous call stack.
+	_queue_world_scope_refresh("town_hud")
 
 
 func _capture_player_conversation_end(
@@ -1071,7 +1074,7 @@ func _on_simulation_speed_changed(_speed: int, world_revision: int) -> void:
 	if world_revision < _world_revision:
 		return
 	_world_revision = world_revision
-	_refresh_scope("town_hud", true)
+	_queue_world_scope_refresh("town_hud")
 
 
 func _on_resident_action_phase_changed(
@@ -4517,8 +4520,9 @@ func _execute_conversation_intent(intent: String, payload: Dictionary) -> Dictio
 		"conversation.retry":
 			_conversation_network_error.clear()
 			_conversation_wait_started_msec = Time.get_ticks_msec()
-			if _gateway != null and _gateway.has_method("pump"):
-				_gateway.call("pump")
+			# TownRuntime already drains one Agent request per frame. Let the next
+			# frame pick up this retry instead of synchronously draining every
+			# queued resident request from the button callback.
 			_refresh_scope("conversation", true)
 			return _success_result()
 		"conversation.spectator.select":
@@ -4907,7 +4911,11 @@ func _complete_operation(scope: String, operation: Dictionary, result: Dictionar
 		var result_revision := int(result.get("worldRevision", _read_world_revision()))
 		if result_revision >= _world_revision:
 			_world_revision = result_revision
-			_refresh_world_scopes()
+			# The operation state above is the only response the clicked page needs
+			# synchronously. Rebuild authoritative world projections one at a time
+			# on following frames so a single click cannot rebuild all six scopes.
+			for world_scope in WORLD_SCOPES:
+				_queue_world_scope_refresh(world_scope)
 	operation_completed.emit(scope, final_operation.duplicate(true))
 
 

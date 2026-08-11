@@ -231,6 +231,8 @@ var _town_ui_route := &"town"
 var _pause_open := false
 var _pause_focus_return_path := NodePath()
 var _pause_return_deferred := false
+var _pause_route_open_pending := false
+var _pause_route_open_sequence := 0
 var _in_session_load_pending := false
 var _process_quit_scheduled := false
 var _quit_departure_pending := false
@@ -1666,6 +1668,8 @@ func _unmount_town_overlays() -> void:
 	_avatar_hud = null
 	_town_ui_route = &"town"
 	_pause_open = false
+	_pause_route_open_sequence += 1
+	_pause_route_open_pending = false
 
 
 func _release_internal_session_refs() -> void:
@@ -5319,6 +5323,8 @@ func _open_pause_menu() -> void:
 	_town_runtime.call("set_main_menu_open", true)
 	_pause_host.show()
 	_pause_open = true
+	_pause_route_open_sequence += 1
+	_pause_route_open_pending = false
 	_sync_town_runtime_input_gates()
 
 
@@ -5330,6 +5336,8 @@ func _close_pause_menu() -> void:
 	_town_runtime.call("set_main_menu_open", false)
 	_pause_host.hide()
 	_pause_open = false
+	_pause_route_open_sequence += 1
+	_pause_route_open_pending = false
 	get_viewport().gui_release_focus()
 	_sync_town_runtime_input_gates()
 	call_deferred("_restore_pause_focus", focus_return_path)
@@ -5375,34 +5383,64 @@ func _on_pause_intent_requested(intent: StringName, payload: Dictionary) -> void
 					quit_result.duplicate(true),
 				)
 		"pause_menu.open_llm_settings":
-			if is_instance_valid(_town_ui_host):
-				_pause_host.hide()
-				var settings_opened := _town_ui_host.call(
-					"open_page",
-					&"provider_settings",
-				) as Dictionary
-				if not bool(settings_opened.get("ok", false)):
-					_pause_host.show()
-					if _pause_host.has_method("present_host_result"):
-						_pause_host.call(
-							"present_host_result",
-							"pause_menu.open_llm_settings",
-							settings_opened,
-						)
+			_queue_pause_town_page_open(
+				&"pause_menu.open_llm_settings",
+				&"provider_settings",
+				{},
+			)
 		"pause_menu.open_resident_models":
-			if is_instance_valid(_town_ui_host):
-				_pause_host.hide()
-				var assignment_opened := _town_ui_host.open_page(
-					&"resident_model_assignment",
-					{"mode": "in_session"},
-				) as Dictionary
-				if not bool(assignment_opened.get("ok", false)):
-					_pause_host.show()
-					if _pause_host.has_method("present_host_result"):
-						_pause_host.present_host_result(
-							"pause_menu.open_resident_models",
-							assignment_opened,
-						)
+			_queue_pause_town_page_open(
+				&"pause_menu.open_resident_models",
+				&"resident_model_assignment",
+				{"mode": "in_session"},
+			)
+
+
+func _queue_pause_town_page_open(
+	intent: StringName,
+	route: StringName,
+	payload: Dictionary,
+) -> void:
+	if (
+		_pause_route_open_pending
+		or not _pause_open
+		or not is_instance_valid(_pause_host)
+		or not is_instance_valid(_town_ui_host)
+	):
+		return
+	_pause_route_open_pending = true
+	_pause_route_open_sequence += 1
+	var request_sequence := _pause_route_open_sequence
+	var flow_generation := _flow_generation
+	# The pause screen is already a complete, rendered page. Preserve it for the
+	# click frame, then build the requested page; duplicate clicks share this one
+	# bounded pending transition.
+	if DisplayServer.get_name() == "headless":
+		await get_tree().process_frame
+	else:
+		await RenderingServer.frame_post_draw
+	if (
+		request_sequence != _pause_route_open_sequence
+		or flow_generation != _flow_generation
+		or not _pause_open
+		or not is_instance_valid(_pause_host)
+		or not is_instance_valid(_town_ui_host)
+	):
+		_pause_route_open_pending = false
+		return
+	var opened := _town_ui_host.open_page(
+		route,
+		payload.duplicate(true),
+	) as Dictionary
+	_pause_route_open_pending = false
+	if not bool(opened.get("ok", false)):
+		if _pause_host.has_method("present_host_result"):
+			_pause_host.present_host_result(
+				String(intent),
+				opened,
+			)
+		return
+	_pause_host.hide()
 
 
 func _open_in_session_load_game() -> void:

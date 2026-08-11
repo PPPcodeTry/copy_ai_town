@@ -36,7 +36,7 @@ const TOWN_RUNTIME_SCENE := preload(
 const WORLD_DATA_PATH := "res://world/data/town/town_world.json"
 
 var _runtime: Node
-var _gateway: Node
+var _gateway: TownWorldAgentGateway
 var _provider_service: RefCounted
 var _bootstrap: RefCounted
 var _store: RefCounted
@@ -263,7 +263,7 @@ func traces_from(index: int) -> Array[Dictionary]:
 func pending_decision_count() -> int:
 	if not is_instance_valid(_gateway):
 		return 0
-	return int(_gateway.call("get_debug_inflight_count"))
+	return _gateway.get_debug_pending_count()
 
 
 func resident_debug_snapshot(resident_id: String) -> Dictionary:

@@ -24,6 +24,65 @@ static func clear_cache() -> void:
 	_arrival_entry_state_cache.clear()
 
 
+static func advance(world, absolute_minute: int, clearance_px: float) -> void:
+	var arrived_resident_ids: Array[String] = []
+	for resident_id: String in world._resident_order:
+		var resident := world._residents.get(resident_id, {}) as Dictionary
+		var arrival := resident.get("arrivalState", {}) as Dictionary
+		if (
+			String(arrival.get("status", "arrived")) != "pending"
+			or absolute_minute
+				< int(arrival.get("scheduledAbsoluteMinute", 2_147_483_647))
+		):
+			continue
+		var entry_state := entry_state_for(world, resident_id, clearance_px)
+		if not entry_state.is_empty():
+			resident["position"] = entry_state.get(
+				"position",
+				resident.get("position", Vector2.ZERO),
+			)
+			resident["spaceId"] = String(
+				entry_state.get("spaceId", resident.get("spaceId", "")),
+			)
+			resident["regionId"] = String(
+				entry_state.get("regionId", resident.get("regionId", "")),
+			)
+			resident["currentPlace"] = String(
+				entry_state.get(
+					"placeName",
+					resident.get("currentPlace", ""),
+				),
+			)
+		arrival["status"] = "arrived"
+		arrival["arrivedAbsoluteMinute"] = absolute_minute
+		resident["arrivalState"] = arrival
+		activate_entry_continuity(world, resident_id, resident, absolute_minute)
+		resident["movementRevision"] = int(
+			resident.get("movementRevision", 1),
+		) + 1
+		arrived_resident_ids.append(resident_id)
+		world._append_world_log_event(
+			world._next_world_event_id(),
+			"resident_lifecycle",
+			resident_id,
+			world._resident_display_name(resident_id),
+			String(resident.get("currentPlace", "")),
+			{
+				"type": "居民抵达",
+				"lifecycleId": "resident-arrival:%s" % resident_id,
+				"status": "completed",
+				"participantIds": [resident_id],
+				"arrivedAbsoluteMinute": absolute_minute,
+			},
+		)
+		world._emit_resident_state_changed(resident_id)
+		world._schedule_decision(resident_id, false, false, false, false, true)
+	if arrived_resident_ids.is_empty():
+		return
+	world._refresh_place_service_staffing()
+	world._sync_production_tasks(absolute_minute)
+
+
 static func activate_entry_continuity(
 	world,
 	resident_id: String,

@@ -35,6 +35,18 @@ const THINKING_HOURGLASS_PATH := (
 	"res://assets/ui/conversation_unified/runtime/status/"
 	+ "unified_chat_thinking_hourglass_v1_1x.png"
 )
+const PLAYER_SHELL_TEXTURE := preload(
+	"res://assets/ui/conversation_unified/runtime/shells/"
+	+ "unified_chat_player_shell_v1.png"
+)
+const SPECTATOR_SHELL_TEXTURE := preload(
+	"res://assets/ui/conversation_unified/runtime/shells/"
+	+ "unified_chat_spectator_shell_v1.png"
+)
+const THINKING_HOURGLASS_TEXTURE := preload(
+	"res://assets/ui/conversation_unified/runtime/status/"
+	+ "unified_chat_thinking_hourglass_v1_1x.png"
+)
 const MAX_DRAFT_CHARACTERS := 280
 const MAX_DRAFT_LINES := 3
 const STREAM_MIN_CHARACTERS_PER_SECOND := 52.0
@@ -83,6 +95,7 @@ var _history_auto_follow_latest := true
 var _restore_draft_focus_after_wait := false
 var _draft_limit_reached := false
 var _conversation_photo_textures: Dictionary = {}
+var _portrait_texture_cache: Dictionary = {}
 var _ended_presentation_conversation_id := ""
 var _ended_notice_revealed := false
 var _ended_dismiss_requested := false
@@ -686,9 +699,10 @@ func _build_close_confirmation() -> void:
 func _render() -> void:
 	var spectator_mode := _mode == "spectator"
 	var conversation_ended := _conversation_ended()
-	_shell_skin.texture = ResourceLoader.load(
-		SPECTATOR_SHELL_PATH if spectator_mode else PLAYER_SHELL_PATH,
-		"Texture2D"
+	_shell_skin.texture = (
+		SPECTATOR_SHELL_TEXTURE
+		if spectator_mode
+		else PLAYER_SHELL_TEXTURE
 	) as Texture2D
 	_composer_root.visible = not spectator_mode and not conversation_ended
 	_history_scroll.size.y = (
@@ -775,7 +789,15 @@ func _apply_header_portraits(participants: Array) -> void:
 		var portrait_ref := str(data.get("portraitRef", ""))
 		var portrait: Texture2D
 		if portrait_ref.begins_with("res://"):
-			portrait = ResourceLoader.load(portrait_ref, "Texture2D") as Texture2D
+			if _portrait_texture_cache.has(portrait_ref):
+				portrait = _portrait_texture_cache.get(portrait_ref) as Texture2D
+			else:
+				portrait = ResourceLoader.load(
+					portrait_ref,
+					"Texture2D",
+				) as Texture2D
+				if portrait != null:
+					_portrait_texture_cache[portrait_ref] = portrait
 		texture_rect.texture = portrait
 		texture_rect.visible = visible_slot and portrait != null
 		initial.visible = visible_slot and portrait == null
@@ -1022,10 +1044,7 @@ func _add_thinking_bubble() -> void:
 	var hourglass := TextureRect.new()
 	hourglass.name = "ThinkingHourglass"
 	hourglass.custom_minimum_size = Vector2(30, 48)
-	hourglass.texture = ResourceLoader.load(
-		THINKING_HOURGLASS_PATH,
-		"Texture2D"
-	) as Texture2D
+	hourglass.texture = THINKING_HOURGLASS_TEXTURE
 	hourglass.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	hourglass.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	hourglass.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST

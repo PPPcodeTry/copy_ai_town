@@ -33,6 +33,7 @@ var _settings_intent_callback := Callable()
 var _settings_blocked_callback := Callable()
 var _load_game_intent_callback := Callable()
 var _load_game_blocked_callback := Callable()
+var _settings_open_pending := false
 
 
 func _ready() -> void:
@@ -63,6 +64,7 @@ func _fit_root_to_viewport() -> void:
 
 func _exit_tree() -> void:
 	_route_generation += 1
+	_settings_open_pending = false
 	_disconnect_settings_screen()
 	_disconnect_load_game_screen()
 	_disconnect_pause_screen()
@@ -145,12 +147,9 @@ func open_audio_display_settings() -> bool:
 	_capture_pause_focus()
 	_route_generation += 1
 	var generation := _route_generation
-	_pause_screen.set_process_unhandled_input(false)
-	_pause_screen.hide()
 
 	var settings := AUDIO_DISPLAY_SETTINGS_SCENE.instantiate() as Control
 	if settings == null:
-		_restore_pause_after_open_failure(generation)
 		return false
 	settings.name = "AudioDisplaySettingsRoute"
 	settings.process_mode = Node.PROCESS_MODE_ALWAYS
@@ -168,6 +167,10 @@ func open_audio_display_settings() -> bool:
 	settings.connect("action_blocked", _settings_blocked_callback)
 	_apply_adapter(settings)
 	add_child(settings)
+	# Keep the already rendered pause page visible while the settings tree and
+	# its image-heavy controls are being built, then swap both pages together.
+	_pause_screen.set_process_unhandled_input(false)
+	_pause_screen.hide()
 	route_changed.emit(_route)
 	return true
 
@@ -302,6 +305,7 @@ func debug_snapshot() -> Dictionary:
 			and _pause_screen.is_processing_unhandled_input()
 		),
 		"settingsInstanceCount": _settings_instance_count(),
+		"settingsOpenPending": _settings_open_pending,
 		"loadGameInstanceCount": _load_game_instance_count(),
 		"loadGameVisible": (
 			is_instance_valid(_load_game_screen)
@@ -392,12 +396,35 @@ func _on_pause_intent_requested(
 ) -> void:
 	var intent := StringName(intent_value)
 	if intent == OPEN_AUDIO_DISPLAY_INTENT:
-		open_audio_display_settings()
+		_open_audio_display_settings_after_draw()
 		return
 	if intent == OPEN_LOAD_GAME_INTENT:
 		intent_requested.emit(intent, payload.duplicate(true))
 		return
 	intent_requested.emit(intent, payload.duplicate(true))
+
+
+func _open_audio_display_settings_after_draw() -> void:
+	if _settings_open_pending or _route != ROUTE_PAUSE:
+		return
+	_settings_open_pending = true
+	var generation := _route_generation
+	# Let the pressed/hover state reach the screen before the settings page builds
+	# its texture-heavy control tree. The existing pause page remains the stable
+	# backdrop until open_audio_display_settings swaps the two pages.
+	if DisplayServer.get_name() == "headless":
+		await get_tree().process_frame
+	else:
+		await RenderingServer.frame_post_draw
+	if (
+		not is_inside_tree()
+		or generation != _route_generation
+		or _route != ROUTE_PAUSE
+	):
+		_settings_open_pending = false
+		return
+	open_audio_display_settings()
+	_settings_open_pending = false
 
 
 func _on_pause_action_blocked(

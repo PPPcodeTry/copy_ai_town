@@ -2561,10 +2561,19 @@ func _validate_blocked_hold_and_pause() -> void:
 func _validate_blocked_authority_resync() -> void:
 	var stage := Node2D.new()
 	root.add_child(stage)
-	_add_blocking_wall(stage, Vector2(24.0, -12.0), Vector2(8.0, 80.0))
-	_add_blocking_wall(stage, Vector2(-24.0, -12.0), Vector2(8.0, 80.0))
-	_add_blocking_wall(stage, Vector2(0.0, 12.0), Vector2(80.0, 8.0))
-	_add_blocking_wall(stage, Vector2(0.0, -36.0), Vector2(80.0, 8.0))
+	var blocking_walls: Array[StaticBody2D] = []
+	blocking_walls.append(
+		_add_blocking_wall(stage, Vector2(24.0, -12.0), Vector2(8.0, 80.0)),
+	)
+	blocking_walls.append(
+		_add_blocking_wall(stage, Vector2(-24.0, -12.0), Vector2(8.0, 80.0)),
+	)
+	blocking_walls.append(
+		_add_blocking_wall(stage, Vector2(0.0, 12.0), Vector2(80.0, 8.0)),
+	)
+	blocking_walls.append(
+		_add_blocking_wall(stage, Vector2(0.0, -36.0), Vector2(80.0, 8.0)),
+	)
 	var body = RESIDENT_BODY.new()
 	stage.add_child(body)
 	body.set_automatic_motion(false)
@@ -2617,20 +2626,34 @@ func _validate_blocked_authority_resync() -> void:
 	var snapshot := body.get_presentation_snapshot()
 	_expect_equal(
 		snapshot.get("movementBlockedHold"),
-		false,
-		"a permanently blocked presentation eventually leaves its visual hold",
+		true,
+		"a same-space obstruction remains in a stable visual hold",
 	)
 	_expect(
-		body.position.distance_to(authority_position) < 0.1,
-		"blocked presentation realigns to the latest authoritative position",
+		body.position.distance_to(authority_position) > 250.0,
+		"a blocked presentation never crosses collision to reach authority",
 	)
+	var found_stall := false
 	var found_resync := false
 	for diagnostic: Dictionary in body.take_presentation_diagnostics():
-		if String(diagnostic.get("code", "")) == (
-			"PRESENTATION_BLOCKED_AUTHORITY_RESYNC"
-		):
+		var code := String(diagnostic.get("code", ""))
+		if code == "PRESENTATION_BLOCKED_AUTHORITY_STALLED":
+			found_stall = true
+		if code == "PRESENTATION_BLOCKED_AUTHORITY_RESYNC":
 			found_resync = true
-	_expect(found_resync, "blocked authority realignment emits one diagnostic")
+	_expect(found_stall, "the prolonged obstruction emits one stalled diagnostic")
+	_expect(not found_resync, "same-space obstruction never emits a relocation diagnostic")
+	for wall: StaticBody2D in blocking_walls:
+		wall.queue_free()
+	await physics_frame
+	for _frame in 300:
+		body.advance_presentation(1.0 / 60.0)
+		if body.position.distance_to(authority_position) < 0.1:
+			break
+	_expect(
+		body.position.distance_to(authority_position) < 0.1,
+		"presentation resumes the confirmed route after collision clears",
+	)
 	stage.queue_free()
 	await process_frame
 

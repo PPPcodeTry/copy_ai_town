@@ -102,6 +102,13 @@ class RebindProvider:
 		pass
 
 
+class RebindProviderService:
+	extends ProviderServiceStub
+
+	func create_provider_for_resident(_binding: Dictionary) -> Dictionary:
+		return {"ok": true, "provider": RebindProvider.new()}
+
+
 class RebindAgentSystem:
 	extends RefCounted
 
@@ -903,7 +910,7 @@ func _test_duplicate_display_names_route_by_id() -> void:
 func _test_runtime_resident_bindings_can_be_replaced_atomically() -> void:
 	var gateway: Node = GATEWAY.new()
 	gateway.set("_session_active", true)
-	gateway.set("_provider_service", ProviderServiceStub.new())
+	gateway.set("_provider_service", RebindProviderService.new())
 	gateway.set("_agent_system", RebindAgentSystem.new())
 	gateway.set("_resident_identities", [
 		{"residentId": "resident-a", "residentName": "小林"},

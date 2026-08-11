@@ -58,6 +58,9 @@ const ACTIVE_COLLISION_MASK := (
 const LOCAL_AVOIDANCE_LOOKAHEAD := 52.0
 const LOCAL_AVOIDANCE_STEP_DISTANCE := 12.0
 const LOCAL_AVOIDANCE_MAX_SUBSTEPS := 64
+# 3 倍速正常 60 Hz 物理帧移动 7.2 像素。慢帧不能把逝去时间一次性换成
+# 更长的可见跨步；表现可以暂时落后，逻辑时钟和权威到达判定仍由 World 推进。
+const MAX_PRESENTATION_DISTANCE_PER_ADVANCE := 8.0
 const LOCAL_AVOIDANCE_ANGLES := [
 	deg_to_rad(35.0),
 	deg_to_rad(55.0),
@@ -111,6 +114,7 @@ var _non_progress_seconds := 0.0
 var _movement_blocked_hold := false
 var _blocked_hold_retry_seconds := 0.0
 var _blocked_hold_total_seconds := 0.0
+var _blocked_authority_stall_diagnostic_emitted := false
 var _presentation_paused := false
 var _pending_space_transition := false
 var _pending_space_id := ""
@@ -738,14 +742,20 @@ func advance_presentation(delta: float) -> void:
 			if _pending_space_transition:
 				_recover_blocked_portal_handoff()
 				return
-			_relocate(
-				_space_id,
-				_authority_position,
-				_authority_revision,
-				"PRESENTATION_BLOCKED_AUTHORITY_RESYNC",
-				position.distance_to(_authority_position),
-			)
-			return
+			# A same-space obstruction is a presentation failure, not permission to
+			# move the visible resident through walls. Keep the confirmed route and
+			# resume it only after the corridor clears.
+			if not _blocked_authority_stall_diagnostic_emitted:
+				_blocked_authority_stall_diagnostic_emitted = true
+				_record_diagnostic(
+					"PRESENTATION_BLOCKED_AUTHORITY_STALLED",
+					"info",
+					_authority_revision,
+					_space_id,
+					_authority_position,
+					position.distance_to(_authority_position),
+					{"relocated": false},
+				)
 		_blocked_hold_retry_seconds = maxf(
 			0.0,
 			_blocked_hold_retry_seconds - delta,
@@ -791,8 +801,11 @@ func advance_presentation(delta: float) -> void:
 	)
 	var path_distance := _remaining_navigation_distance()
 	var requested_distance := minf(
-		path_distance,
-		motion_speed * speed_multiplier * delta,
+		minf(
+			path_distance,
+			motion_speed * speed_multiplier * delta,
+		),
+		MAX_PRESENTATION_DISTANCE_PER_ADVANCE,
 	)
 	if _target_arrival_seconds_remaining > 0.0:
 		_target_arrival_seconds_remaining = maxf(
@@ -1545,6 +1558,7 @@ func _reset_target_progress(distance: float = INF) -> void:
 	_movement_blocked_hold = false
 	_blocked_hold_retry_seconds = 0.0
 	_blocked_hold_total_seconds = 0.0
+	_blocked_authority_stall_diagnostic_emitted = false
 
 
 func _rebase_target_progress(distance: float) -> void:
