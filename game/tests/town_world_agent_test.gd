@@ -464,6 +464,7 @@ func _scenario_agent_gateway_continuity() -> void:
 	_test_death_story_uses_resident_agent_json()
 	_test_inner_observation_accepts_newer_read_only_world_revision()
 	_test_memory_intervention_uses_world_time_and_agent_contract()
+	_test_frame_budgeted_pump_splits_prepare_and_dispatch()
 	_test_replacement_request_retires_old_gateway_slot()
 	_test_full_queue_only_dispatches_request_that_frees_slot()
 	_test_unconsumed_submission_rolls_back_without_social_side_effect()
@@ -538,6 +539,71 @@ func _test_null_conversation_snapshot_is_not_an_avatar_turn() -> void:
 		gateway.call("_wake_is_avatar_conversation_turn", wake),
 		false,
 		"a cleared conversation snapshot cannot crash or claim the avatar lane",
+	)
+	gateway.free()
+
+
+
+func _test_frame_budgeted_pump_splits_prepare_and_dispatch() -> void:
+	var agent := DelayedFailingAgent.new()
+	var world := PendingWorld.new()
+	var gateway: Node = GATEWAY.new()
+	gateway.set("_agent_system", agent)
+	gateway.set("_provider_service", ProviderServiceStub.new())
+	gateway.set("_world", world)
+	var connected_resident_ids: Array[String] = ["resident-a"]
+	gateway.set("_connected_resident_ids", connected_resident_ids)
+	gateway.set("_session_active", true)
+	world.add_request({
+		"residentId": "resident-a",
+		"residentName": "居民甲",
+		"wakePacket": {"decision_id": "decision-frame-budgeted"},
+	})
+
+	_expect_equal(
+		gateway.call("pump_frame_budgeted", 1),
+		1,
+		"frame-budgeted pump prepares one selected request",
+	)
+	_expect_equal(
+		agent.requested_resident_ids.size(),
+		0,
+		"request preparation does not run the Agent in the same frame",
+	)
+	_expect_equal(
+		(gateway.get("_prepared_frame_dispatches") as Array).size(),
+		1,
+		"prepared request remains bounded in the gateway",
+	)
+	_expect_equal(
+		gateway.call("get_debug_pending_count"),
+		1,
+		"debug pending count includes work prepared for the next frame",
+	)
+	_expect_equal(
+		gateway.call("pump_frame_budgeted", 0),
+		0,
+		"a zero frame budget preserves prepared work",
+	)
+	_expect_equal(
+		gateway.call("pump_frame_budgeted", 1),
+		1,
+		"the next budgeted frame dispatches the prepared request",
+	)
+	_expect_equal(
+		agent.requested_resident_ids,
+		["resident-a"],
+		"prepared request reaches the real Agent call exactly once",
+	)
+	_expect_equal(
+		(gateway.get("_prepared_frame_dispatches") as Array).size(),
+		0,
+		"prepared work drains without backlog",
+	)
+	_expect_equal(
+		gateway.call("get_debug_pending_count"),
+		1,
+		"dispatched work remains pending while its model call is inflight",
 	)
 	gateway.free()
 

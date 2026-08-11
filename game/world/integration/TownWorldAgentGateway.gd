@@ -101,6 +101,7 @@ var _errors: Array[Dictionary] = []
 var _error_sequence := 0
 var _last_submissions: Dictionary = {}
 var _inflight: Dictionary = {}
+var _prepared_frame_dispatches: Array[Dictionary] = []
 var _decision_attempts: Dictionary = {}
 var _inner_observation_inflight: Dictionary = {}
 var _death_story_inflight: Dictionary = {}
@@ -191,6 +192,7 @@ func configure_session(
 			false,
 		)
 	_inflight.clear()
+	_prepared_frame_dispatches.clear()
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -364,13 +366,33 @@ func bind_world(world: RefCounted) -> Dictionary:
 	}
 
 
-func pump(max_requests := -1) -> int:
+func pump_frame_budgeted(max_requests := 1) -> int:
+	return pump(max_requests, true)
+
+
+func pump(max_requests := -1, defer_after_refresh := false) -> int:
 	if not _frame_probe_checked:
 		_frame_probe_checked = true
 		if OS.get_environment("AI_TOWN_UI_FRAME_PROBE") == "1":
 			_frame_probe = load("res://world/presentation/ui/TownUiFrameProbe.gd")
 	if not _session_active or _world == null:
 		return 0
+	if max_requests == 0:
+		return 0
+	if not _prepared_frame_dispatches.is_empty():
+		var dispatch_started_usec := (
+			Time.get_ticks_usec() if _frame_probe != null else 0
+		)
+		var prepared := _prepared_frame_dispatches.pop_front() as Dictionary
+		_dispatch_prepared_agent_decision(prepared)
+		if _frame_probe != null:
+			_probe_record_lap("agentDispatchUsec", dispatch_started_usec)
+			_frame_probe.record(
+				Engine.get_process_frames(),
+				"agentDispatchCount",
+				1,
+			)
+		return 1
 	var probe_lap_usec := Time.get_ticks_usec() if _frame_probe != null else 0
 	var requests: Array[Dictionary]
 	if _world.has_method("take_pending_decision_envelopes_by_ids"):
@@ -419,10 +441,22 @@ func pump(max_requests := -1) -> int:
 		probe_lap_usec = _probe_record_lap("agentSelectUsec", probe_lap_usec)
 	for request in requests:
 		_mark_superseded_inflight_for_request(request)
-		_request_agent_decision(request)
+		if defer_after_refresh:
+			var prepared := _prepare_agent_decision(request)
+			if not prepared.is_empty():
+				_prepared_frame_dispatches.append(prepared)
+		else:
+			_request_agent_decision(request)
 		if _frame_probe != null:
-			probe_lap_usec = _probe_record_lap("agentDispatchUsec", probe_lap_usec)
-			_frame_probe.record(Engine.get_process_frames(), "agentDispatchCount", 1)
+			probe_lap_usec = _probe_record_lap(
+				"agentPrepareUsec" if defer_after_refresh else "agentDispatchUsec",
+				probe_lap_usec,
+			)
+			_frame_probe.record(
+				Engine.get_process_frames(),
+				"agentPrepareCount" if defer_after_refresh else "agentDispatchCount",
+				1,
+			)
 	if not requests.is_empty() and not _connected_resident_ids.is_empty():
 		var last_resident_id := String(requests.back().get("residentId", ""))
 		var last_index := _connected_resident_ids.find(last_resident_id)
@@ -1232,6 +1266,10 @@ func get_debug_inflight_count() -> int:
 	return _inflight.size()
 
 
+func get_debug_pending_count() -> int:
+	return _inflight.size() + _prepared_frame_dispatches.size()
+
+
 func get_agent_save_participant() -> RefCounted:
 	return _agent_system
 
@@ -1384,6 +1422,7 @@ func hydrate_agent_restore(
 func close_session() -> Dictionary:
 	_generation += 1
 	_inflight.clear()
+	_prepared_frame_dispatches.clear()
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -1408,6 +1447,7 @@ func discard_unpublished_new_game(
 		)
 	_generation += 1
 	_inflight.clear()
+	_prepared_frame_dispatches.clear()
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -1689,12 +1729,11 @@ func _inner_observation_request_failure(
 	}
 
 
-func _request_agent_decision(request: Dictionary) -> void:
+func _prepare_agent_decision(request: Dictionary) -> Dictionary:
 	var resident_id := String(request.get("residentId", ""))
 	var resident_name := String(request.get("residentName", ""))
 	var wake := request.get("wakePacket", {}) as Dictionary
 	var decision_id := String(wake.get("decision_id", ""))
-	var fallback_applied := false
 	if (
 		resident_id.is_empty()
 		or decision_id.is_empty()
@@ -1708,7 +1747,7 @@ func _request_agent_decision(request: Dictionary) -> void:
 			false,
 		)
 		_redispatch(resident_id, decision_id)
-		return
+		return {}
 	if _world != null and _world.has_method("refresh_pending_decision_request_by_id"):
 		var latest_request := _world.refresh_pending_decision_request_by_id(
 			resident_id,
@@ -1717,8 +1756,37 @@ func _request_agent_decision(request: Dictionary) -> void:
 		if not bool(latest_request.get("ok", false)):
 			# 优先级事件可能已经替换了这份 pending 请求；旧快照不能交给 Provider。
 			_redispatch(resident_id, decision_id)
-			return
+			return {}
 		wake = (latest_request.get("wakePacket", {}) as Dictionary).duplicate(true)
+	return {
+		"residentId": resident_id,
+		"residentName": resident_name,
+		"decisionId": decision_id,
+		"wakePacket": wake,
+		"generation": _generation,
+	}
+
+
+func _request_agent_decision(request: Dictionary) -> void:
+	var prepared := _prepare_agent_decision(request)
+	if prepared.is_empty():
+		return
+	_dispatch_prepared_agent_decision(prepared)
+
+
+func _dispatch_prepared_agent_decision(prepared: Dictionary) -> void:
+	var resident_id := String(prepared.get("residentId", ""))
+	var resident_name := String(prepared.get("residentName", ""))
+	var decision_id := String(prepared.get("decisionId", ""))
+	var wake := prepared.get("wakePacket", {}) as Dictionary
+	var prepared_generation := int(prepared.get("generation", -1))
+	if (
+		prepared_generation != _generation
+		or not _session_active
+		or _world == null
+	):
+		return
+	var fallback_applied := false
 	var generation := _generation
 	var attempt := int(_decision_attempts.get(decision_id, 0)) + 1
 	_decision_attempts[decision_id] = attempt

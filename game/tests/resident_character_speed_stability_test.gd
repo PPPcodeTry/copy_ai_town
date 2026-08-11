@@ -117,6 +117,31 @@ func _run() -> void:
 		mover.position.distance_to(Vector2(120.0, 0.0)) < 0.1,
 		"3x movement reaches the confirmed route sample without relocation",
 	)
+	route_state["position"] = Vector2(200.0, 0.0)
+	route_state["target"]["position"] = Vector2(200.0, 0.0)
+	route_state["movementRevision"] = 4
+	var slow_frame_applied := mover.apply_authoritative_state(
+		route_state,
+		4,
+		null,
+		false,
+		1.0 / 3.0,
+	)
+	_expect_equal(
+		slow_frame_applied.get("status"),
+		"following",
+		"slow-frame route remains a walking target",
+	)
+	var before_slow_frame := mover.position
+	mover.advance_presentation(0.05)
+	_expect(
+		before_slow_frame.distance_to(mover.position) <= 8.01,
+		"a 50 ms presentation update never becomes one large visible step",
+	)
+	_expect(
+		mover.position.distance_to(Vector2(200.0, 0.0)) > 0.1,
+		"slow-frame smoothing does not rewrite visual position to authority",
+	)
 	for diagnostic_value: Variant in mover.take_presentation_diagnostics():
 		if not diagnostic_value is Dictionary:
 			continue

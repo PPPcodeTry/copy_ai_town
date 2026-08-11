@@ -271,15 +271,22 @@ func _process(delta: float) -> void:
 	phase_started_usec = (
 		Time.get_ticks_usec() if _frame_profile_enabled else 0
 	)
-	_world.advance(delta)
+	var world_advance := _world.advance(delta) as Dictionary
 	if _frame_profile_enabled:
 		profile["worldUsec"] = (
 			Time.get_ticks_usec() - phase_started_usec
 		)
 		phase_started_usec = Time.get_ticks_usec()
-	if _agent_gateway != null:
-		_agent_gateway.pump(AGENT_DISPATCH_BUDGET_PER_FRAME,)
+	# 游戏分钟结算可能同时结束多位居民的动作并发布表现状态；这之后马上跑
+	# 一次 Agent，会把两段各自有上限的工作叠成一次可见的长帧。请求仍留在
+	# Gateway 队列里，交给下一帧处理。
+	var world_heavy_work_performed := _world_work_defers_agent_dispatch(
+		world_advance,
+	)
+	if _agent_gateway != null and not world_heavy_work_performed:
+		_agent_gateway.pump_frame_budgeted(AGENT_DISPATCH_BUDGET_PER_FRAME,)
 	if _frame_profile_enabled:
+		profile["agentDeferredCount"] = 1 if world_heavy_work_performed else 0
 		profile["agentUsec"] = (
 			Time.get_ticks_usec() - phase_started_usec
 		)
@@ -328,10 +335,23 @@ func _process(delta: float) -> void:
 			Time.get_ticks_usec() - profile_started_usec
 		)
 		_last_frame_profile = profile
-		_record_frame_probe()
+	_record_frame_probe()
 	if not _startup_completion_emitted:
 		_startup_completion_emitted = true
 		startup_completed.emit(get_startup_result())
+
+
+static func _world_work_defers_agent_dispatch(world_advance: Dictionary) -> bool:
+	return (
+		int(world_advance.get("minutesAdvanced", 0)) > 0
+		or int(
+			world_advance.get("deferredPresentationRefreshesProcessed", 0)
+		) > 0
+		or int(
+			world_advance.get("deferredPlaceChangeSignalsProcessed", 0)
+		) > 0
+		or bool(world_advance.get("deferredPerceptionProcessed", false))
+	)
 
 
 # A1 探针:把本帧既有分项按渲染帧编号写入探针,adapter / HUD 段由各自宿主写入;
@@ -1558,7 +1578,7 @@ func player_start_conversation(target_name: String, say: String, narration: Stri
 		[],) as Dictionary
 	_show_player_command_feedback(result)
 	if result.get("ok") == true and _agent_gateway != null:
-		_agent_gateway.pump()
+		_agent_gateway.pump_frame_budgeted(AGENT_DISPATCH_BUDGET_PER_FRAME,)
 	return result
 
 
@@ -1594,7 +1614,7 @@ func player_reply_conversation_with_photos(
 		end,) as Dictionary
 	_show_player_command_feedback(result)
 	if result.get("ok") == true and _agent_gateway != null:
-		_agent_gateway.pump()
+		_agent_gateway.pump_frame_budgeted(AGENT_DISPATCH_BUDGET_PER_FRAME,)
 	return result
 
 
@@ -1788,7 +1808,7 @@ func _start_world() -> void:
 		_fail_start("Agent Gateway 初始化失败：%s" % "; ".join(gateway_result.get("errors", [])))
 		return
 	if _agent_gateway != null:
-		_agent_gateway.pump(AGENT_DISPATCH_BUDGET_PER_FRAME,)
+		_agent_gateway.pump_frame_budgeted(AGENT_DISPATCH_BUDGET_PER_FRAME,)
 	_ui_adapter = UI_ADAPTER.new()
 	_ui_adapter.name = "TownUiAdapter"
 	add_child(_ui_adapter)
