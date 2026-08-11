@@ -7,6 +7,7 @@ const HELP_FEEDBACK_PANEL := preload(
 	"res://ui/startup/StartupHelpFeedbackPanel.gd"
 )
 const FEEDBACK_REPORT := preload("res://ui/startup/GameFeedbackReport.gd")
+const BUILD_INFO := preload("res://ui/common/GameBuildInfo.gd")
 
 
 func _initialize() -> void:
@@ -260,7 +261,38 @@ func _run() -> void:
 		)
 	checks += _expect(
 		not decoded_issue_url.contains("游戏版本"),
-		"Release 版本来源确定前，Issue 不得自动填写游戏版本。",
+		"源码开发环境没有构建信息时，Issue 不得冒充发行版本。",
+		failures,
+	)
+	checks += _expect(
+		BUILD_INFO.load_release_info("res://tests/not-a-build-info.json").is_empty(),
+		"构建信息文件不存在时必须按源码开发环境处理。",
+		failures,
+	)
+	checks += _expect(
+		BUILD_INFO.parse_json_text("not-json").is_empty(),
+		"损坏的构建信息不得进入玩家反馈。",
+		failures,
+	)
+	var parsed_build_info := BUILD_INFO.parse_json_text(JSON.stringify({
+		"schemaVersion": 1,
+		"version": "0.1.0-beta.1",
+		"tag": "v0.1.0-beta.1",
+		"channel": "beta",
+		"commit": "abcdef1",
+		"buildDate": "2026-08-11T00:00:00+00:00",
+	}))
+	checks += _expect(
+		String(parsed_build_info.get("version", "")) == "0.1.0-beta.1",
+		"合法构建信息必须能读取统一版本号。",
+		failures,
+	)
+	var release_issue_url := FEEDBACK_REPORT.build_issue_url({
+		"gameVersion": "0.1.0-beta.1",
+	}).uri_decode()
+	checks += _expect(
+		release_issue_url.contains("游戏版本：0.1.0-beta.1"),
+		"发行包提交 Issue 时必须自动携带游戏版本。",
 		failures,
 	)
 	checks += _expect(
