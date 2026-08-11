@@ -12,6 +12,8 @@ const SLOT_MANIFEST_FILE := "slot.json"
 const SNAPSHOT_MANIFEST_FILE := "snapshot.json"
 const RESIDENT_SET_FILE := "resident_set.json"
 const CONTEXT_FIELDS := ["slot_id", "session_id", "save_revision"]
+const STAGING_DIRECTORY := "_staging"
+const STAGING_KEY_LENGTH := 24
 
 var _store_root := DEFAULT_STORE_ROOT
 
@@ -73,7 +75,7 @@ func create_new_game(context: Variant, resident_payloads: Variant) -> Dictionary
 		return {"ok": false, "errors": payload_errors}
 	var context_data := validation["context"] as Dictionary
 	var final_root := _slot_root(context_data)
-	var staging_root := "%s.tmp-%s" % [final_root, Time.get_ticks_usec()]
+	var staging_root := _new_staging_root("slot", final_root)
 	var create_error := DirAccess.make_dir_recursive_absolute(_absolute(staging_root))
 	if create_error != OK:
 		return {"ok": false, "errors": ["无法创建 Agent 存档临时目录：%s" % error_string(create_error)]}
@@ -229,7 +231,7 @@ func _write_snapshot(
 	var final_root := _snapshot_root(context, slot_root_override)
 	if DirAccess.dir_exists_absolute(_absolute(final_root)):
 		return {"ok": false, "errors": ["save_revision 已存在，Agent 快照不可覆盖"]}
-	var staging_root := "%s.tmp-%s" % [final_root, Time.get_ticks_usec()]
+	var staging_root := _new_staging_root("snapshot", final_root)
 	var create_error := DirAccess.make_dir_recursive_absolute(_absolute(staging_root))
 	if create_error != OK:
 		return {"ok": false, "errors": ["无法创建 Agent 快照临时目录：%s" % error_string(create_error)]}
@@ -467,6 +469,24 @@ func _snapshot_root(context: Dictionary, slot_root_override := "") -> String:
 	return _join(
 		_session_root(context, slot_root_override),
 		"revisions/%d" % int(context["save_revision"]),
+	)
+
+
+func _new_staging_root(kind: String, identity: String) -> String:
+	var entropy := "%s:%s:%d:%d:%d" % [
+		kind,
+		identity,
+		OS.get_process_id(),
+		Time.get_ticks_usec(),
+		randi(),
+	]
+	return _join(
+		_store_root,
+		"%s/%s-%s" % [
+			STAGING_DIRECTORY,
+			kind,
+			entropy.sha256_text().left(STAGING_KEY_LENGTH),
+		],
 	)
 
 

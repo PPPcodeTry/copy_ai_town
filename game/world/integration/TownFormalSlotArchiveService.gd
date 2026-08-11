@@ -2152,7 +2152,7 @@ func _remove_tree(path: String) -> bool:
 	var absolute_path := _absolute(path)
 	if not DirAccess.dir_exists_absolute(absolute_path):
 		return not FileAccess.file_exists(path)
-	var directory := DirAccess.open(path)
+	var directory := DirAccess.open(absolute_path)
 	if directory == null:
 		return false
 	for file_name: String in directory.get_files():
@@ -3357,11 +3357,12 @@ func _write_json(path: String, value: Dictionary) -> bool:
 
 
 func _write_json_atomic(path: String, value: Dictionary) -> bool:
-	var staging_path := "%s.tmp-%d-%d" % [
-		path,
-		OS.get_process_id(),
-		Time.get_ticks_usec(),
-	]
+	var staging_path := _temporary_json_path(path)
+	var staging_parent_error := DirAccess.make_dir_recursive_absolute(
+		_absolute(staging_path.get_base_dir()),
+	)
+	if staging_parent_error not in [OK, ERR_ALREADY_EXISTS]:
+		return false
 	var file := FileAccess.open(staging_path, FileAccess.WRITE)
 	if file == null:
 		return false
@@ -3386,10 +3387,17 @@ func _write_json_atomic(path: String, value: Dictionary) -> bool:
 	return true
 
 
+func _temporary_json_path(path: String) -> String:
+	return _join(
+		_backup_root,
+		"_tmp/json-%s.tmp" % path.sha256_text().left(24),
+	)
+
+
 func _remove_empty_archive_root(archive_root: String) -> void:
 	if not DirAccess.dir_exists_absolute(_absolute(archive_root)):
 		return
-	var directory := DirAccess.open(archive_root)
+	var directory := DirAccess.open(_absolute(archive_root))
 	if directory == null:
 		return
 	var is_empty := (
