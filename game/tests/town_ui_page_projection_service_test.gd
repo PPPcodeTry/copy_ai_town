@@ -144,16 +144,22 @@ class FakeWorld:
 			"text": text,
 			"time": {"day": 1, "clock": "09:05", "period": "上午"},
 		}
+		if text == "今晚广场见。":
+			item["scheduled_absolute_minute"] = 20 * 60
+			item["scheduled_time_label"] = "第1天 20:00"
 		announcements.append(item)
 		revision += 1
 		announcement_published.emit(item.duplicate(true))
 		world_revision_changed.emit(revision)
+		var schedule_warning := text == "周五下午三点见。"
 		return {
 			"ok": true,
 			"errorCode": "",
 			"retryable": false,
 			"announcement": item,
 			"worldRevision": revision,
+			"scheduleRecognized": item.has("scheduled_absolute_minute"),
+			"scheduleWarning": schedule_warning,
 		}
 
 	func get_resident_identity_snapshot() -> Dictionary:
@@ -659,6 +665,41 @@ func _run() -> void:
 		((announcements.get("data", {}) as Dictionary).get("items", []) as Array).size(),
 		1,
 		"confirmed announcement appears from World",
+	)
+	var scheduled_feedback := (
+		(announcements.get("data", {}) as Dictionary).get("feedback", {})
+		as Dictionary
+	)
+	_expect(
+		String(scheduled_feedback.get("message", "")).contains("第1天 20:00"),
+		"时间公告发布后立即告诉玩家系统识别到的世界时刻",
+	)
+	service.dispatch("announcements.composer.open")
+	service.dispatch(
+		"announcements.draft.update",
+		{"text": "周五下午三点见。"},
+	)
+	var warning_publish := service.dispatch(
+		"announcements.publish",
+		{"text": "周五下午三点见。"},
+	)
+	_expect(
+		bool(warning_publish.get("ok", false)),
+		"时间不能解析时仍保留公告本身",
+	)
+	announcements = service.get_view_model("announcements")
+	var warning_feedback := (
+		(announcements.get("data", {}) as Dictionary).get("feedback", {})
+		as Dictionary
+	)
+	_expect_equal(
+		warning_feedback.get("kind"),
+		"warning",
+		"时间未识别不用成功样式掩盖",
+	)
+	_expect(
+		String(warning_feedback.get("message", "")).contains("没有识别"),
+		"时间未识别会说清没有到点提醒",
 	)
 
 	service.set_page_context("resident_action_menu", {

@@ -696,6 +696,73 @@ func _scenario_ui_adapter_conversation_spectator() -> void:
 		"capabilityMode": "development",
 		"formalReady": false,
 	})
+	adapter.call(
+		"_on_hud_resident_reaction_created",
+		"林岚",
+		{
+			"reactionId": "announcement-reaction-1",
+			"decisionId": "decision-announcement-1",
+			"sourceActionId": "",
+			"sourceEventId": "event-announcement-1",
+			"announcementId": "announcement-1",
+			"residentId": "resident-lin",
+			"text": "这场电影我想去看看。",
+			"reactionKind": "announcement",
+			"worldRevision": 41,
+		},
+	)
+	var announcement_reactions := (
+		adapter.get("_hud_public_thoughts") as Dictionary
+	)
+	_expect_equal(
+		announcement_reactions.size(),
+		1,
+		"announcement reaction reaches the resident head-bubble queue",
+	)
+	if not announcement_reactions.is_empty():
+		var announcement_reaction := (
+			announcement_reactions.values()[0] as Dictionary
+		)
+		_expect_equal(
+			announcement_reaction.get("actionId"),
+			"event-announcement-1",
+			"head-bubble identity can use an announcement event source",
+		)
+		_expect_equal(
+			announcement_reaction.get("publicThought"),
+			"这场电影我想去看看。",
+			"head bubble preserves the resident-authored announcement thought",
+		)
+		_expect_equal(
+			announcement_reaction.get("thoughtKind"),
+			"announcement_reaction",
+			"announcement response uses its own HUD semantic",
+		)
+		var reaction_item := adapter.call(
+			"_hud_public_thought_item",
+			"announcement-reaction-1",
+			"event-announcement-1",
+			"resident-lin",
+			"林岚",
+			"这场电影我想去看看。",
+			41,
+			0,
+			10000,
+			"town_outdoor",
+			"announcement_reaction",
+			{"announcementId": "announcement-1"},
+		) as Dictionary
+		var reaction_action := reaction_item.get("action", {}) as Dictionary
+		_expect_equal(
+			reaction_action.get("intent"),
+			"town_hud.open_town_log",
+			"公告回应气泡打开右侧事件链，而不是公告编辑页",
+		)
+		_expect_equal(
+			(reaction_action.get("payload", {}) as Dictionary).get("threadId"),
+			"announcement:announcement-1",
+			"公告回应直接定位到对应事件链",
+		)
 
 	var initial := adapter.call("get_view_model", "conversation") as Dictionary
 	_expect_complete_view_model(initial)
@@ -2480,6 +2547,7 @@ func _scenario_announcement_distribution_integration() -> void:
 	_test_read_and_relay_do_not_duplicate(world)
 	_test_resident_notice_is_global(world)
 	_test_resident_notice_survives_restore(world, data, opening)
+	_test_timed_announcement_due(world)
 	world.call("stop")
 	return
 func _prepare_residents(opening: Dictionary) -> void:
@@ -2650,6 +2718,28 @@ func _test_resident_notice_is_global(world: RefCounted) -> void:
 			_has_agent_matter(world, resident_id, matter_id),
 			"关联事项立即进入 %s 的已知事项" % resident_id,
 		)
+	var manager_state := (
+		(world.get("_residents") as Dictionary).get(MANAGER_ID, {}) as Dictionary
+	)
+	var manager_announcement_events: Array = []
+	manager_announcement_events.append_array(
+		manager_state.get("eventQueue", []) as Array,
+	)
+	manager_announcement_events.append_array(
+		manager_state.get("inflightEvents", []) as Array,
+	)
+	var publisher_received_own_event := false
+	for event_value: Variant in manager_announcement_events:
+		if (
+			event_value is Dictionary
+			and String((event_value as Dictionary).get("announcement_id", ""))
+			== announcement_id
+		):
+			publisher_received_own_event = true
+	_expect(
+		not publisher_received_own_event,
+		"居民发布者知道自己的公告，但不会收到一条自我回应事件",
+	)
 	_expect_equal(
 		(world.call(
 			"get_private_messages_for_resident",
@@ -2726,6 +2816,104 @@ func _test_resident_notice_survives_restore(
 			"announcement_broadcast",
 		),
 		"恢复后仍保留其他居民的全局知情来源",
+	)
+
+
+func _test_timed_announcement_due(world: RefCounted) -> void:
+	var timed: Dictionary = {}
+	for value: Variant in world.call("get_announcements") as Array:
+		var announcement := value as Dictionary
+		if String(announcement.get("announcement_id", "")) == "announcement-1":
+			timed = announcement
+			break
+	var due_minute := int(timed.get("scheduled_absolute_minute", -1))
+	_expect(
+		due_minute > _absolute_minute(world.call("get_time")),
+		"今晚公告识别出未来约定时间",
+	)
+	_expect_equal(
+		String(timed.get("scheduled_time_label", "")),
+		"第1天 20:00",
+		"今晚使用稳定的世界时间标签",
+	)
+	var guard := 0
+	while _absolute_minute(world.call("get_time")) < due_minute and guard < 12:
+		world.call("cycle_time_period_for_test")
+		guard += 1
+	_expect(
+		_absolute_minute(world.call("get_time")) >= due_minute,
+		"测试时钟能够推进到公告约定时间",
+	)
+	var due_event_id := ""
+	for value: Variant in world.call("get_public_event_log") as Array:
+		var record := value as Dictionary
+		var payload := record.get("payload", {}) as Dictionary
+		if (
+			String(payload.get("type", "")) == "公告到点"
+			and String(payload.get("announcement_id", "")) == "announcement-1"
+		):
+			due_event_id = String(record.get("eventId", ""))
+			break
+	_expect(not due_event_id.is_empty(), "约定时间到达后形成一次公告到点事件")
+	world.call(
+		"_emit_resident_reaction",
+		BYSTANDER_ID,
+		"timed-announcement-response",
+		{},
+		[{
+			"source_event_id": due_event_id,
+			"text": "时间到了，我现在过去看看。",
+		}],
+		[{
+			"event_id": due_event_id,
+			"type": "公告到点",
+			"announcement_id": "announcement-1",
+			"text": "今晚广场有露天电影。",
+		}],
+	)
+	var detail := world.call(
+		"get_world_log_thread_detail",
+		"announcement:announcement-1",
+		{},
+	) as Dictionary
+	_expect_equal(detail.get("ok"), true, "时间公告可从右侧事件链读取")
+	_expect(
+		String((detail.get("thread", {}) as Dictionary).get("title", "")).contains(
+			"今晚广场有露天电影",
+		),
+		"居民回应追加后仍保留公告作为事件链标题",
+	)
+	_expect(
+		String((detail.get("thread", {}) as Dictionary).get("title", "")).begins_with(
+			"公告发布",
+		),
+		"到点提醒和居民回应不会改掉公告事件链的根标题",
+	)
+	var record_types: Array[String] = []
+	for value: Variant in detail.get("records", []) as Array:
+		record_types.append(String(
+			((value as Dictionary).get("payload", {}) as Dictionary).get("type", ""),
+		))
+	_expect(
+		record_types.has("公告发布")
+		and record_types.has("公告到点")
+		and record_types.has("居民公开反应"),
+		"公告发布、到点提醒与居民回应保留在同一条右侧事件链",
+	)
+	var past_time := world.call(
+		"publish_announcement",
+		"今天上午十点在广场集合。",
+	) as Dictionary
+	_expect_equal(past_time.get("ok"), true, "未识别时间不影响公告本身发布")
+	_expect_equal(
+		past_time.get("scheduleWarning"),
+		true,
+		"过去的模糊时刻会明确告诉界面需要提醒玩家",
+	)
+	_expect_equal(
+		past_time.get("scheduleRecognized"),
+		false,
+		"时间解析失败不会伪装成已设置到点提醒",
 	)
 
 

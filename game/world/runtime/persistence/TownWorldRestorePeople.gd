@@ -97,6 +97,11 @@ const SAVED_EVENT_FIELDS := {
 		"event_id", "time", "type", "announcement_id", "publisher_resident_id",
 		"text", "matter_id", "residentId",
 	],
+	"公告到点": [
+		"event_id", "time", "type", "announcement_id", "publisher_resident_id",
+		"text", "matter_id", "scheduled_absolute_minute", "scheduled_time_label",
+		"status", "residentId",
+	],
 	"公告阅读": [
 		"event_id", "time", "type", "announcement_id", "publisher_resident_id",
 		"text", "matter_id", "read_at", "residentId",
@@ -1418,6 +1423,11 @@ static func _validate_pending_event(
 	# must still be a real boolean (validated below).
 	if event_type == "搭话":
 		optional_event_fields.append("response_required")
+	if event_type in ["公告发布", "公告到点"]:
+		optional_event_fields.append("publisher_name")
+	if event_type == "公告发布":
+		optional_event_fields.append("scheduled_absolute_minute")
+		optional_event_fields.append("scheduled_time_label")
 	_validate_exact_keys(
 		event,
 		SAVED_EVENT_FIELDS[event_type] as Array,
@@ -1441,6 +1451,15 @@ static func _validate_pending_event(
 		"公告发布":
 			if _sequence_from_id(_string_or_empty(event.get("announcement_id")), "announcement-") <= 0 or not _nonempty_string(event.get("text")):
 				errors.append("世界存档居民 %s 的公告事件无效" % resident_id)
+		"公告到点":
+			if (
+				_sequence_from_id(_string_or_empty(event.get("announcement_id")), "announcement-") <= 0
+				or not _nonempty_string(event.get("text"))
+				or typeof(event.get("scheduled_absolute_minute")) != TYPE_INT
+				or not _nonempty_string(event.get("scheduled_time_label"))
+				or String(event.get("status", "")) != "due"
+			):
+				errors.append("世界存档居民 %s 的公告到点事件无效" % resident_id)
 		"公告阅读":
 			if (
 				_sequence_from_id(

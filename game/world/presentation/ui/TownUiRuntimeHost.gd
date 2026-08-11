@@ -1128,11 +1128,9 @@ func _play_audio_cue(cue_id: String, volume_db: float = 0.0) -> void:
 func _on_hud_intent_requested(intent: StringName, payload: Dictionary) -> void:
 	match String(intent):
 		"town_hud.open_event":
-			_open_page_with_feedback(
-				&"bulletin_board",
-				_bulletin_route_payload(payload),
-				"公告栏暂时打不开，请稍后再试。",
-			)
+			# 兼容旧 HUD 意图：公告事件属于小镇日志事件链，
+			# 不再把玩家带回用来撰写公告的公告栏。
+			_open_town_log(payload)
 		"town_hud.open_bulletin":
 			_open_page_with_feedback(
 				&"bulletin_board",
