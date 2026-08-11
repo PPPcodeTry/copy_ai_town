@@ -503,6 +503,21 @@ func _test_remote_http_runtime_consent() -> void:
 		"PROVIDER_INSECURE_HTTP_CONSENT_REQUIRED",
 		"runtime rejects remote HTTP without propagated consent",
 	)
+	var unsupported_scheme := provider_config.duplicate(true)
+	unsupported_scheme["endpoint"] = "HTTP://model-host.example:3000/v1"
+	var unsupported := service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"openai-compatible-2": unsupported_scheme,
+		},
+	}) as Dictionary
+	_expect_equal(
+		unsupported.get("errorCode"),
+		"PROVIDER_CONFIG_INVALID",
+		"runtime rejects unsupported endpoint schemes before consent checks",
+	)
 	provider_config["allow_insecure_http"] = true
 	var approved := service.call("configure", {
 		"capabilityMode": "formal",

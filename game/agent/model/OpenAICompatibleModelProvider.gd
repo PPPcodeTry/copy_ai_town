@@ -47,6 +47,9 @@ func get_provider_descriptor() -> Dictionary:
 
 
 func validate_configuration() -> Array[String]:
+	var endpoint := String(_config.get("endpoint", _default_endpoint())).strip_edges()
+	if not endpoint.is_empty() and not ENDPOINT_SECURITY.scheme_is_supported(endpoint):
+		return ["Provider 地址格式无效"]
 	if not _insecure_http_transport_is_allowed():
 		return ["远程 HTTP 地址尚未获得未加密传输授权"]
 	if _api_key_required() and _resolve_api_key().is_empty():

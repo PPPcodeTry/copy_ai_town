@@ -77,6 +77,11 @@ func configure(config_value: Variant, request_host_value: Variant = null) -> Dic
 			return _failure("PROVIDER_CONFIGS_INVALID", false)
 		var endpoint := String(provider_config.get("endpoint", "")).strip_edges()
 		if (
+			not endpoint.is_empty()
+			and not ENDPOINT_SECURITY.scheme_is_supported(endpoint)
+		):
+			return _failure("PROVIDER_CONFIG_INVALID", false)
+		if (
 			ENDPOINT_SECURITY.requires_insecure_http_consent(endpoint)
 			and not bool(consent_value)
 		):
