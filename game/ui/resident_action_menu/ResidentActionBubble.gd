@@ -28,10 +28,6 @@ const BUTTON_TEXTURES := {
 		+ "resident_action_button_kill_v3.png"
 	),
 }
-const HALO_TEXTURE := preload(
-	"res://assets/ui/resident_action_menu/final/"
-	+ "resident_action_halo.png"
-)
 const APPROVED_TAIL_DIRECTIONS := {
 	"follow": "down",
 	"status": "right",
@@ -82,16 +78,14 @@ var semantic_order := 0
 var visual_state := STATE_IDLE
 var state_emphasized := false
 var reduce_motion := false
-var breath_period_seconds := 2.1
 var tail_side := ""
 var action_enabled := false
 var disabled_reason := ""
 
-var _halo: TextureRect
 var _art: TextureRect
 var _label: Label
 var _display_text := ""
-var _breath_elapsed := 0.0
+var _state_elapsed := 0.0
 var _opening := false
 var _opening_elapsed := 0.0
 var _opening_delay := 0.0
@@ -115,15 +109,6 @@ func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 
-	_halo = TextureRect.new()
-	_halo.name = "HaloAsset"
-	_halo.texture = HALO_TEXTURE
-	_halo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_halo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_halo.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	_halo.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_halo)
-
 	_art = TextureRect.new()
 	_art.name = "ApprovedButtonArt"
 	_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -143,7 +128,7 @@ func _ready() -> void:
 	_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	add_child(_label)
 	_update_asset_geometry()
-	# 几何只随尺寸与按压状态变化；逐帧工作只保留可见时的呼吸动画。
+	# 几何只随尺寸与按压状态变化；逐帧工作只保留可见时的状态动画。
 	resized.connect(_update_asset_geometry)
 	button_down.connect(_update_asset_geometry)
 	button_up.connect(_update_asset_geometry)
@@ -175,10 +160,6 @@ func configure(
 			+ _display_text.substr(split)
 		)
 	reduce_motion = bool(motion.get("reduceMotion", false))
-	breath_period_seconds = maxf(
-		0.8,
-		float(motion.get("breathPeriodMs", 2100)) / 1000.0
-	)
 	custom_minimum_size = component_size
 	size = component_size
 	visible = true
@@ -319,7 +300,6 @@ func debug_asset_ownership() -> Dictionary:
 		"iconContentOwner": _art.name,
 		"textOwner": _label.name,
 		"tailOwner": _art.name,
-		"haloOwner": _halo.name,
 		"duplicateOuterFrame": false,
 		"duplicateIconSlotFrame": false,
 		"shellComponentType": "page_local_complete_operation_texture",
@@ -348,7 +328,7 @@ func debug_action_contract() -> Dictionary:
 
 
 func _process(delta: float) -> void:
-	_breath_elapsed += delta
+	_state_elapsed += delta
 	if _opening:
 		_opening_elapsed += delta
 		if _opening_elapsed < _opening_delay:
@@ -403,8 +383,6 @@ func _update_asset_geometry() -> void:
 		if get_draw_mode() == BaseButton.DRAW_PRESSED
 		else Vector2.ZERO
 	)
-	_halo.position = Vector2(-6, -6)
-	_halo.size = size + Vector2(12, 12)
 	_art.position = pressed_offset
 	_art.size = size
 	var canonical_rect := LABEL_RECTS_160.get(
@@ -437,42 +415,6 @@ func _update_asset_visual_state() -> void:
 		art_tint = Color(1.0, 0.96, 0.88, 1.0)
 	_art.modulate = art_tint
 
-	var halo_alpha := 0.0
-	var halo_tint := Color.WHITE
-	if (
-		not reduce_motion
-		and not disabled
-		and visual_state == STATE_IDLE
-	):
-		halo_alpha = (
-			0.12
-			+ (sin(_breath_elapsed / breath_period_seconds * TAU) + 1.0)
-			* 0.055
-		)
-	if is_hovered():
-		halo_alpha = maxf(halo_alpha, 0.24)
-	if state_emphasized:
-		match visual_state:
-			STATE_LOADING:
-				halo_alpha = 0.34
-			STATE_SUCCESS:
-				halo_alpha = 0.48
-				halo_tint = Color("9bc45f")
-			STATE_REJECTED:
-				halo_alpha = 0.45
-				halo_tint = Color("d77b45")
-			STATE_ERROR:
-				halo_alpha = 0.55
-				halo_tint = Color("c84e3e")
-	_halo.visible = halo_alpha > 0.0
-	_halo.modulate = Color(
-		halo_tint.r,
-		halo_tint.g,
-		halo_tint.b,
-		halo_alpha
-	)
-
-
 func _disabled_reason_copy(reason: String) -> String:
 	if reason.is_empty():
 		return ""
@@ -486,7 +428,7 @@ func _draw_state_badge(paper_rect: Rect2) -> void:
 	)
 	match visual_state:
 		STATE_LOADING:
-			var phase := int(_breath_elapsed * 6.0) % 3
+			var phase := int(_state_elapsed * 6.0) % 3
 			for index: int in 3:
 				var color := COLOR_HONEY
 				color.a = 1.0 if index == phase else 0.45

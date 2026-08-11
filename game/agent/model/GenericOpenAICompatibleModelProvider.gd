@@ -111,6 +111,13 @@ func request_model_catalog(on_complete: Callable) -> Dictionary:
 	var endpoint := model_catalog_endpoint()
 	if endpoint.is_empty():
 		return _catalog_failure("PROVIDER_BASE_URL_INVALID", false)
+	if not ENDPOINT_SECURITY.scheme_is_supported(endpoint):
+		return _catalog_failure("PROVIDER_BASE_URL_INVALID", false)
+	if not _insecure_http_transport_is_allowed():
+		return _catalog_failure(
+			"PROVIDER_INSECURE_HTTP_CONSENT_REQUIRED",
+			false,
+		)
 	var api_key := _resolve_api_key()
 	if _api_key_required() and api_key.is_empty():
 		return _catalog_failure("PROVIDER_API_KEY_REQUIRED", false)

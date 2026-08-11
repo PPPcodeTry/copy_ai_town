@@ -404,6 +404,7 @@ func _initialize() -> void:
 	}) as Dictionary
 	_expect_equal(unknown_modality.get("ok"), false, "unknown input modalities are rejected")
 	_test_compatible_runtime_models()
+	_test_remote_http_runtime_consent()
 	_test_volcengine_custom_endpoint_model()
 	_test_multiple_compatible_connections()
 	_test_provider_health_isolation()
@@ -477,6 +478,90 @@ func _test_compatible_runtime_models() -> void:
 				model_id,
 				"the resident's real wire model reaches the provider",
 			)
+
+
+func _test_remote_http_runtime_consent() -> void:
+	var service: RefCounted = ProviderServiceScript.new()
+	var provider_config := {
+		"connection_type": "openai-compatible-profile",
+		"display_name": "局域网模型服务",
+		"endpoint": "http://model-host.example:3000/v1",
+		"api_key": "temporary-test-key",
+		"api_models": ["remote-model"],
+		"api_model": "remote-model",
+	}
+	var rejected := service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"openai-compatible-2": provider_config,
+		},
+	}) as Dictionary
+	_expect_equal(
+		rejected.get("errorCode"),
+		"PROVIDER_INSECURE_HTTP_CONSENT_REQUIRED",
+		"runtime rejects remote HTTP without propagated consent",
+	)
+	var unsupported_scheme := provider_config.duplicate(true)
+	unsupported_scheme["endpoint"] = "HTTP://model-host.example:3000/v1"
+	var unsupported := service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"openai-compatible-2": unsupported_scheme,
+		},
+	}) as Dictionary
+	_expect_equal(
+		unsupported.get("errorCode"),
+		"PROVIDER_CONFIG_INVALID",
+		"runtime rejects unsupported endpoint schemes before consent checks",
+	)
+	provider_config["allow_insecure_http"] = true
+	var approved := service.call("configure", {
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"allowFake": false,
+		"providerConfigs": {
+			"openai-compatible-2": provider_config,
+		},
+	}) as Dictionary
+	_expect_equal(
+		approved.get("ok"),
+		true,
+		"runtime accepts remote HTTP only with propagated consent",
+	)
+	var catalog: RefCounted = CatalogScript.new()
+	var unapproved_provider := catalog.call(
+		"create_provider",
+		"openai-compatible",
+		null,
+		{
+			"endpoint": "http://model-host.example:3000/v1",
+			"api_key": "temporary-test-key",
+			"api_model": "remote-model",
+		},
+	) as Dictionary
+	var provider := (
+		unapproved_provider.get("provider")
+		as OpenAICompatibleModelProvider
+	)
+	_expect(
+		provider != null and not provider.validate_configuration().is_empty(),
+		"model request provider independently rejects missing consent",
+	)
+	if provider == null:
+		return
+	var catalog_request := provider.request_model_catalog(
+		func(_result: Dictionary) -> void:
+			pass
+	) as Dictionary
+	_expect_equal(
+		catalog_request.get("errorCode"),
+		"PROVIDER_INSECURE_HTTP_CONSENT_REQUIRED",
+		"model catalog request rejects remote HTTP before network access",
+	)
 
 
 func _test_volcengine_custom_endpoint_model() -> void:
@@ -821,13 +906,42 @@ func _test_local_endpoint_and_model_persistence() -> void:
 		["qwen3:8b", "gemma3:4b"],
 		"local model ids survive a config reload",
 	)
-	var unsafe_config := local_config.duplicate(true)
-	unsafe_config["providers"]["ollama"]["endpoint"] = "http://example.com/v1"
-	var rejected := store.call("save_config", unsafe_config) as Dictionary
+	var remote_http_config := local_config.duplicate(true)
+	remote_http_config["providers"]["ollama"]["endpoint"] = (
+		"http://example.com:3000/v1"
+	)
+	var unapproved_remote := store.call(
+		"save_config",
+		remote_http_config,
+	) as Dictionary
 	_expect_equal(
-		rejected.get("ok"),
+		unapproved_remote.get("ok"),
 		false,
-		"unencrypted remote compatible endpoints remain forbidden",
+		"remote HTTP cannot be persisted without endpoint-bound consent",
+	)
+	remote_http_config["providers"]["ollama"][
+		"insecureHttpConsentEndpoint"
+	] = "http://example.com:3000/v1"
+	var approved_remote := store.call(
+		"save_config",
+		remote_http_config,
+	) as Dictionary
+	_expect_equal(
+		approved_remote.get("ok"),
+		true,
+		"remote HTTP persists with consent for the exact endpoint",
+	)
+	remote_http_config["providers"]["ollama"]["endpoint"] = (
+		"http://other.example.com:3000/v1"
+	)
+	var stale_consent := store.call(
+		"save_config",
+		remote_http_config,
+	) as Dictionary
+	_expect_equal(
+		stale_consent.get("ok"),
+		false,
+		"changing the remote HTTP endpoint invalidates previous consent",
 	)
 	var legacy_path := "%s/legacy-settings.json" % CONFIG_TEST_ROOT
 	var legacy_file := FileAccess.open(legacy_path, FileAccess.WRITE)
@@ -928,19 +1042,34 @@ func _test_settings_service_custom_model_flow() -> void:
 		true,
 		"local custom connection saves without an API key",
 	)
+	var rejected_remote_connection := settings.call(
+		"dispatch",
+		"provider_settings.save_connection",
+		{
+			"providerId": "openai-compatible",
+			"baseUrl": "http://compatible.example:3000/v1",
+			"apiKey": "temporary-test-key",
+		},
+	) as Dictionary
+	_expect_equal(
+		rejected_remote_connection.get("errorCode"),
+		"PROVIDER_INSECURE_HTTP_CONSENT_REQUIRED",
+		"remote HTTP connection requires explicit consent",
+	)
 	var saved_remote_connection := settings.call(
 		"dispatch",
 		"provider_settings.save_connection",
 		{
 			"providerId": "openai-compatible",
-			"baseUrl": "https://compatible.example/v1",
+			"baseUrl": "http://compatible.example:3000/v1",
 			"apiKey": "temporary-test-key",
+			"allowInsecureHttp": true,
 		},
 	) as Dictionary
 	_expect_equal(
 		saved_remote_connection.get("ok"),
 		true,
-		"remote custom connection saves its address and key together",
+		"approved remote connection saves its address and key together",
 	)
 	var saved_remote_provider := _provider_from_view_model(
 		settings.call("get_view_model") as Dictionary,
@@ -948,13 +1077,18 @@ func _test_settings_service_custom_model_flow() -> void:
 	)
 	_expect_equal(
 		saved_remote_provider.get("baseUrl"),
-		"https://compatible.example/v1",
-		"combined connection save projects the normalized address",
+		"http://compatible.example:3000/v1",
+		"combined connection save accepts and projects a remote HTTP address",
 	)
 	_expect_equal(
 		(saved_remote_provider.get("key", {}) as Dictionary).get("saved"),
 		true,
 		"combined connection save reports only masked credential state",
+	)
+	_expect_equal(
+		saved_remote_provider.get("insecureHttpApproved"),
+		true,
+		"saved remote HTTP connection projects its endpoint approval",
 	)
 	var saved_model := settings.call("dispatch", "provider_settings.save_api_model", {
 		"providerId": "302-ai",
