@@ -8849,6 +8849,7 @@ func _publish_community_announcement(
 	_trim_announcement_history()
 	var announcement_event := _materialize_world_event({
 		"type": "公告发布",
+		"announcement_priority": ANNOUNCEMENT_RESIDENT_RUNTIME.priority_for_publisher(self, publisher_id),
 		"announcement_id": String(
 			announcement.get("announcement_id", "")
 		),
@@ -9640,6 +9641,8 @@ func submit_agent_decision(resident_name: String, decision: Dictionary) -> Dicti
 		inflight_events,
 	)
 	probe_lap_usec = WORLD_PERFORMANCE_PROBE.record_lap(probe_lap_usec, "submission_prechecks")
+	var announcement_priority_error := ANNOUNCEMENT_RESIDENT_RUNTIME.player_priority_handling_error(decision, inflight_events)
+	if not announcement_priority_error.is_empty(): return announcement_priority_error
 	if not invitation_requires_reply and not pending_post_injury_reaction.is_empty():
 		var post_injury_error := _post_injury_reaction_action_error(
 			resident,
@@ -16936,9 +16939,8 @@ func _enqueue_world_event(
 		AGENT_WAKE_STATE_RUNTIME.mark_dirty(resident)
 	world_event_created.emit(_resident_display_name(resident_name), identified_event)
 	if schedule_event:
+		if ANNOUNCEMENT_RESIDENT_RUNTIME.schedule_player_priority_decision(self, resident_name, event): return identified_event
 		var event_type := String(event.get("type", ""))
-		# 公告到点要及时形成可见反应，但不是安全或对话类中断：
-		# 允许居民在继续当前行动的同一轮附带回应，不强制取消原行动。
 		var wake_while_current_action := event_type in [
 			"有人来了",
 			"有人走了",

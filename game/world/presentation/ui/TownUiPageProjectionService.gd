@@ -277,11 +277,22 @@ func set_page_context(scope: String, context: Dictionary) -> Dictionary:
 		_announcement_panel_open = true
 	if scope == "town_log":
 		var next_open := bool(context.get("open", false))
-		if next_open and not _town_log_open:
+		var requested_thread_id := String(
+			context.get("threadId", ""),
+		).strip_edges()
+		if (
+			next_open
+			and (
+				not _town_log_open
+				or not requested_thread_id.is_empty()
+			)
+		):
 			_town_log_open = true
 			_reload_town_log_threads()
 		else:
 			_town_log_open = next_open
+		if next_open and not requested_thread_id.is_empty():
+			_load_town_log_detail(requested_thread_id, false)
 	if scope == "inner_observation" and not bool(context.get("open", false)):
 		_close_inner_observation_state()
 	refresh(scope)

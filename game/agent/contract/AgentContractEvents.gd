@@ -57,6 +57,12 @@ static func _validate_event_fields(
 			errors,
 		)
 		AgentContract._require_non_empty_string(event, "text", "%s.text" % path, errors)
+		if (
+			event.has("announcement_priority")
+			and String(event.get("announcement_priority", ""))
+			not in ["player", "ordinary"]
+		):
+			errors.append("%s.announcement_priority 不是合法公告优先级" % path)
 		if event_type == "公告阅读":
 			AgentContract._require_string(
 				event,

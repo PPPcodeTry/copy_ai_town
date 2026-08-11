@@ -677,6 +677,7 @@ func _run_all() -> void:
 	_scenario_conversation()
 	_scenario_ui_adapter_player_conversation_identity()
 	_scenario_announcement_distribution_integration()
+	_scenario_player_announcement_priority()
 	_scenario_relationship_evidence_progress()
 	_scenario_announcement_long_history()
 	_scenario_announcement_pending_arrival()
@@ -2550,6 +2551,169 @@ func _scenario_announcement_distribution_integration() -> void:
 	_test_timed_announcement_due(world)
 	world.call("stop")
 	return
+
+
+func _scenario_player_announcement_priority() -> void:
+	var data := BUILDER.build_from_source(SOURCE_DIR)
+	var opening_result := OPENING.load_config(OPENING_PATH, data) as Dictionary
+	_expect_equal(opening_result.get("ok"), true, "公告优先级开局可加载")
+	if opening_result.get("ok") != true:
+		return
+	var opening := (
+		opening_result.get("config", {}) as Dictionary
+	).duplicate(true)
+	var world: RefCounted = WORLD.new()
+	_expect_equal(
+		world.call("start", data, opening).get("ok"),
+		true,
+		"公告优先级 World 可启动",
+	)
+	for request: Dictionary in world.call(
+		"take_pending_decision_requests",
+	) as Array[Dictionary]:
+		var wake := request.get("wakePacket", {}) as Dictionary
+		world.call(
+			"submit_agent_decision",
+			String(request.get("residentName", "")),
+			_wait_announcement_long_history(wake),
+		)
+	var residents := world.get("_residents") as Dictionary
+	var target := residents.get(SPEAKER_ID, {}) as Dictionary
+	_expect(
+		not (target.get("currentAction", {}) as Dictionary).is_empty(),
+		"目标居民先有一项持续中的普通行动",
+	)
+	var resident_notice := world.call(
+		"publish_resident_announcement",
+		MANAGER_ID,
+		"镇公所今天整理旧档案。",
+	) as Dictionary
+	_expect_equal(resident_notice.get("ok"), true, "居民公告可以正常发布")
+	_expect_equal(
+		target.get("decisionPending"),
+		false,
+		"居民公告不会打断持续中的普通行动",
+	)
+	var player_notice := world.call(
+		"publish_announcement",
+		"请所有人现在到中央广场集合。",
+	) as Dictionary
+	_expect_equal(player_notice.get("ok"), true, "玩家公告可以正常发布")
+	_expect_equal(
+		target.get("decisionPending"),
+		true,
+		"玩家公告立即唤醒正在行动的居民",
+	)
+	_expect_equal(
+		target.get("decisionMayInterruptCurrent"),
+		true,
+		"玩家公告允许居民替换当前普通行动",
+	)
+	var requests := world.call(
+		"take_pending_decision_requests_by_ids",
+		[SPEAKER_ID],
+	) as Array
+	_expect_equal(requests.size(), 1, "玩家公告立即形成一轮居民决定")
+	if requests.size() == 1:
+		var wake := (
+			(requests[0] as Dictionary).get("wakePacket", {}) as Dictionary
+		)
+		var player_event_found := false
+		var reactions: Array[Dictionary] = []
+		for event_value: Variant in wake.get("events", []) as Array:
+			var event := event_value as Dictionary
+			if String(event.get("type", "")) not in ["公告发布", "公告到点"]:
+				continue
+			player_event_found = (
+				player_event_found
+				or String(event.get("announcement_priority", "")) == "player"
+			)
+			reactions.append({
+				"source_event_id": String(event.get("event_id", "")),
+				"text": "我会明确处理这条公告。",
+			})
+		_expect(player_event_found, "玩家公告以最高优先级进入唤醒包")
+		var continue_result := world.call(
+			"submit_agent_decision",
+			SPEAKER_ID,
+			{
+				"decision_id": String(wake.get("decision_id", "")),
+				"handling": "continue_current",
+				"announcement_reactions": reactions,
+			},
+		) as Dictionary
+		_expect_equal(
+			continue_result.get("errorCode"),
+			"PLAYER_ANNOUNCEMENT_ACTION_REQUIRED",
+			"World 本身拒绝只表态后继续普通工作",
+		)
+		_expect_equal(
+			continue_result.get("consumed"),
+			false,
+			"被拒绝的继续工作不会消耗本轮决定",
+		)
+		var replacement_id := "%s-player-priority" % String(
+			wake.get("decision_id", ""),
+		)
+		var replacement := world.call(
+			"submit_agent_decision",
+			SPEAKER_ID,
+			{
+				"decision_id": String(wake.get("decision_id", "")),
+				"handling": "replace_current",
+				"announcement_reactions": reactions,
+				"action": {
+					"action_id": replacement_id,
+					"type": "待着",
+					"line": "停下手头工作，重新安排眼前行动。",
+				},
+			},
+		) as Dictionary
+		_expect_equal(replacement.get("ok"), true, "居民可提交新行动处理玩家公告")
+		_expect_equal(
+			String((target.get("currentAction", {}) as Dictionary).get("action_id", "")),
+			replacement_id,
+			"玩家公告最终替换了持续中的普通行动",
+		)
+	var timed := world.call(
+		"publish_announcement",
+		"两小时后请到中央广场集合。",
+	) as Dictionary
+	var due_minute := int(
+		(timed.get("announcement", {}) as Dictionary).get(
+			"scheduled_absolute_minute",
+			-1,
+		),
+	)
+	_expect(due_minute >= 0, "玩家时间公告识别出到点时刻")
+	world.call("_advance_announcement_schedules", due_minute)
+	_expect_equal(
+		target.get("decisionPending"),
+		true,
+		"玩家公告到点会再次立即唤醒居民",
+	)
+	_expect_equal(
+		target.get("decisionMayInterruptCurrent"),
+		true,
+		"玩家公告到点仍可替换普通行动",
+	)
+	var due_requests := world.call(
+		"take_pending_decision_requests_by_ids",
+		[SPEAKER_ID],
+	) as Array
+	var player_due_found := false
+	if due_requests.size() == 1:
+		for value: Variant in (
+			(due_requests[0] as Dictionary).get("wakePacket", {}) as Dictionary
+		).get("events", []) as Array:
+			var event := value as Dictionary
+			if (
+				String(event.get("type", "")) == "公告到点"
+				and String(event.get("announcement_priority", "")) == "player"
+			):
+				player_due_found = true
+	_expect(player_due_found, "玩家公告到点保留最高优先级标记")
+	world.call("stop")
 func _prepare_residents(opening: Dictionary) -> void:
 	var positions := {
 		POSTAL_ID: [4631, 2790],

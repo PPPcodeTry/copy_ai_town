@@ -1267,6 +1267,7 @@ static func _announcement_publish_payload_keys_valid(
 	var allowed := required.duplicate()
 	allowed.append_array([
 		"publisher_name",
+		"announcement_priority",
 		"scheduled_absolute_minute",
 		"scheduled_time_label",
 	])

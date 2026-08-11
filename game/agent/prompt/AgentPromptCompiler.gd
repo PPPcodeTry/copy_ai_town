@@ -859,6 +859,11 @@ func _render_events(events: Array) -> String:
 					event.get("publisher_name", ""),
 				).strip_edges()
 				var timing_note := ""
+				var priority_note := (
+					"；这是玩家发布的最高优先级公告，本轮必须停止普通工作并提交新的实际行动；若不能或不愿照做，也要用新行动明确处理，不能继续当前动作"
+					if String(event.get("announcement_priority", "")) == "player"
+					else ""
+				)
 				if int(event.get("scheduled_absolute_minute", -1)) >= 0:
 					timing_note = "；约定时间：%s；%s" % [
 						_safe(event.get("scheduled_time_label", "")),
@@ -868,12 +873,13 @@ func _render_events(events: Array) -> String:
 							else "时间尚未到，不要提前把未来安排当成现在已经发生"
 						),
 					]
-				lines.append("%s；公告 %s；发布者：%s；内容：%s%s" % [
+				lines.append("%s；公告 %s；发布者：%s；内容：%s%s%s" % [
 					prefix,
 					_safe(event.get("announcement_id", "")),
 					_person(publisher_id, publisher_name),
 					_safe(event.get("text", "")),
 					timing_note,
+					priority_note,
 				])
 			"公告转告":
 				lines.append(
@@ -1328,7 +1334,12 @@ func _build_derived_constraints(wake_packet: Dictionary) -> Dictionary:
 	if bool(post_injury_reaction.get("required", false)):
 		return _post_injury_reaction_constraints(wake_packet, snapshot, post_injury_reaction)
 	var handling: Array[String] = ["replace_current"]
-	if typeof(me.get("current_action")) == TYPE_DICTIONARY:
+	if (
+		typeof(me.get("current_action")) == TYPE_DICTIONARY
+		and not AgentContractScript.wake_has_player_priority_announcement(
+			wake_packet,
+		)
+	):
 		handling.push_front("continue_current")
 	var place := snapshot.get("place", {}) as Dictionary
 	var destination_names: Array = (

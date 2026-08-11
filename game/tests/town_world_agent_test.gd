@@ -2929,6 +2929,41 @@ func _scenario_agent_activity_reaction_contract() -> void:
 		"",
 		"World accepts a due reaction without replacing the current action",
 	)
+	var player_priority_wake := due_wake.duplicate(true)
+	player_priority_wake["decision_id"] = "reaction-player-announcement-priority"
+	player_priority_wake["events"][0]["announcement_priority"] = "player"
+	var player_priority_continue := due_continue_decision.duplicate(true)
+	player_priority_continue["decision_id"] = (
+		"reaction-player-announcement-priority"
+	)
+	player_priority_continue["announcement_reactions"][0]["source_event_id"] = (
+		"event-announcement-due-continue"
+	)
+	_expect(
+		_errors_contain(
+			CONTRACT.validate_decision(
+				player_priority_continue,
+				initialization,
+				player_priority_wake,
+				{},
+			),
+			"玩家公告必须停止普通工作",
+		),
+		"player announcement priority rejects continue_current",
+	)
+	var priority_compiler: RefCounted = COMPILER.new(initialization)
+	var player_priority_request := priority_compiler.call(
+		"compile",
+		player_priority_wake,
+		"",
+	) as Dictionary
+	_expect_equal(
+		(
+			player_priority_request.get("derived_constraints", {}) as Dictionary
+		).get("handling"),
+		["replace_current"],
+		"player announcement prompt only exposes replacement actions",
+	)
 
 	var no_result_wake := wake.duplicate(true)
 	no_result_wake["decision_id"] = "reaction-none"

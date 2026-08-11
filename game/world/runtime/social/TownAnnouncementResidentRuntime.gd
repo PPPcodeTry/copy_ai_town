@@ -7,6 +7,61 @@ const ACTION_VALIDATION := preload(
 const SYSTEM_BULLETIN_PUBLISHER_ID := "world"
 
 
+static func priority_for_publisher(
+	host: TownWorldRuntime,
+	publisher_id: String,
+) -> String:
+	return (
+		"player"
+		if publisher_id.strip_edges() == host._player_avatar_id()
+		else "ordinary"
+	)
+
+
+static func has_player_priority(events: Array) -> bool:
+	for value: Variant in events:
+		if value is not Dictionary:
+			continue
+		var event := value as Dictionary
+		if (
+			String(event.get("type", "")) in ["公告发布", "公告到点"]
+			and String(event.get("announcement_priority", "")) == "player"
+		):
+			return true
+	return false
+
+
+static func player_priority_handling_error(
+	decision: Dictionary,
+	events: Array,
+) -> Dictionary:
+	if (
+		String(decision.get("handling", "")) != "continue_current"
+		or not has_player_priority(events)
+	):
+		return {}
+	return {
+		"ok": false,
+		"stale": false,
+		"consumed": false,
+		"errorCode": "PLAYER_ANNOUNCEMENT_ACTION_REQUIRED",
+		"retryable": true,
+		"errors": ["玩家公告必须停止普通工作并提交新的实际行动"],
+	}
+
+
+static func schedule_player_priority_decision(
+	host: TownWorldRuntime,
+	resident_id: String,
+	event: Dictionary,
+) -> bool:
+	if not has_player_priority([event]):
+		return false
+	# 玩家公告可替换普通工作；对话和受伤后的强制回应仍由决定合同优先。
+	host._schedule_decision(resident_id, true, false, true, false, true)
+	return true
+
+
 static func emit_reactions(
 	host: TownWorldRuntime,
 	resident_id: String,
@@ -125,6 +180,7 @@ static func advance_schedules(
 		).strip_edges()
 		var due_event := host._materialize_world_event({
 			"type": "公告到点",
+			"announcement_priority": priority_for_publisher(host, publisher_id),
 			"announcement_id": announcement_id,
 			"publisher_resident_id": publisher_id,
 			"publisher_name": publisher_name(host, publisher_id),

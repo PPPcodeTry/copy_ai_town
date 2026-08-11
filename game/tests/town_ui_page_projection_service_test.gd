@@ -1489,6 +1489,40 @@ func _run() -> void:
 		not bool((development_resident_actions.get("openInner", {}) as Dictionary).get("enabled", true)),
 		"model-backed inner observation remains gated until formal readiness",
 	)
+	world.world_log.call("append_public_event", {
+		"eventId": "announcement-focus-event-1",
+		"kind": "world_event",
+		"time": {"day": 1, "clock": "09:13", "period": "上午"},
+		"worldRevision": world.revision,
+		"residentId": "",
+		"residentName": "",
+		"placeName": "",
+		"payload": {
+			"event_id": "announcement-focus-event-1",
+			"type": "公告发布",
+			"announcement_id": "announcement-focus-1",
+			"publisher_resident_id": "player-avatar",
+			"publisher_name": "旅行者",
+			"text": "现在到中央广场集合。",
+			"time": {"day": 1, "clock": "09:13", "period": "上午"},
+		},
+	})
+	service.set_page_context("town_log", {
+		"open": true,
+		"threadId": "announcement:announcement-focus-1",
+	})
+	var focused_log_data := (
+		service.get_view_model("town_log").get("data", {}) as Dictionary
+	)
+	_expect_equal(
+		focused_log_data.get("selectedThreadId"),
+		"announcement:announcement-focus-1",
+		"HUD page context opens the requested announcement thread",
+	)
+	_expect(
+		focused_log_data.get("detail") is Dictionary,
+		"HUD page context loads the requested announcement detail",
+	)
 
 	service.unbind()
 	runtime.free()

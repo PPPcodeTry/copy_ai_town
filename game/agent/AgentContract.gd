@@ -343,6 +343,8 @@ static func validate_decision(
 	if handling == "continue_current":
 		if decision.has("action"):
 			errors.append("continue_current 不允许 action")
+		if wake_has_player_priority_announcement(wake_packet):
+			errors.append("玩家公告必须停止普通工作并提交新的实际行动")
 		var current_action: Variant = (wake_packet.get("snapshot", {}) as Dictionary) \
 			.get("me", {}).get("current_action")
 		if current_action == null:
@@ -795,6 +797,21 @@ static func announcement_reaction_source_event_ids(
 		if not event_id.is_empty() and not result.has(event_id):
 			result.append(event_id)
 	return result
+
+
+static func wake_has_player_priority_announcement(
+	wake_packet: Dictionary,
+) -> bool:
+	for value: Variant in wake_packet.get("events", []) as Array:
+		if value is not Dictionary:
+			continue
+		var event := value as Dictionary
+		if (
+			String(event.get("type", "")) in ["公告发布", "公告到点"]
+			and String(event.get("announcement_priority", "")) == "player"
+		):
+			return true
+	return false
 
 
 static func current_action_id(wake_packet: Dictionary) -> String:

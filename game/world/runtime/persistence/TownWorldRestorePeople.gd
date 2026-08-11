@@ -1425,6 +1425,7 @@ static func _validate_pending_event(
 		optional_event_fields.append("response_required")
 	if event_type in ["公告发布", "公告到点"]:
 		optional_event_fields.append("publisher_name")
+		optional_event_fields.append("announcement_priority")
 	if event_type == "公告发布":
 		optional_event_fields.append("scheduled_absolute_minute")
 		optional_event_fields.append("scheduled_time_label")
@@ -1435,6 +1436,15 @@ static func _validate_pending_event(
 		errors,
 		optional_event_fields,
 	)
+	if (
+		event_type in ["公告发布", "公告到点"]
+		and event.has("announcement_priority")
+		and String(event.get("announcement_priority", ""))
+		not in ["player", "ordinary"]
+	):
+		errors.append(
+			"世界存档居民 %s 的公告优先级无效" % resident_id
+		)
 	if _sequence_from_id(_string_or_empty(event.get("event_id")), "world-event-") <= 0:
 		errors.append("世界存档居民 %s 的事件缺少 event_id" % resident_id)
 	if not event.get("residentId") is String or event.get("residentId") != resident_id:
