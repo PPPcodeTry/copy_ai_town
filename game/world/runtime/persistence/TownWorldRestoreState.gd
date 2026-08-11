@@ -11,6 +11,9 @@ const RESTORE_ANIMALS := preload(
 	"res://world/runtime/persistence/TownWorldRestoreAnimals.gd"
 )
 const SAVE_CODEC := preload("res://world/runtime/persistence/TownWorldSaveCodec.gd")
+const SAVE_SCHEMA_REGISTRY := preload(
+	"res://world/presentation/session/TownSaveSchemaRegistry.gd"
+)
 const ACTIVITY_RUNTIME := preload(
 	"res://world/runtime/activity/TownWorldActivityRuntime.gd"
 )
@@ -306,6 +309,18 @@ static func prepare_full(
 	opening_config: Dictionary,
 	state: Dictionary,
 ) -> Dictionary:
+	var current_activity_source_fingerprint := String(
+		(
+			world_data.get("activityIntegrationReceipt", {}) as Dictionary
+		).get("sourceFingerprint", "")
+	)
+	var migration := SAVE_SCHEMA_REGISTRY.migrate_world_state(
+		state,
+		current_activity_source_fingerprint,
+	)
+	if migration.get("ok") != true:
+		return {"ok": false, "errors": ["世界存档旧版本迁移失败"]}
+	state = migration.get("state", state) as Dictionary
 	var prepared := prepare(
 		world_data,
 		opening_config,

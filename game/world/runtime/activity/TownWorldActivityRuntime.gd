@@ -1244,6 +1244,16 @@ func prepare_restore(
 			"ACTIVITY_STATE_CHANGED",
 			["activityRuntime 存档计数或集合非法"],
 		)
+	var migration := TownSaveSchemaRegistry.migrate_activity_runtime_state(
+		state,
+		_source_fingerprint,
+	)
+	if migration.get("ok") != true:
+		return _failure(
+			"ACTIVITY_STATE_CHANGED",
+			["activityRuntime 旧存档迁移失败"],
+		)
+	state = migration.get("state", state) as Dictionary
 	var reservation_by_key := {}
 	for value_item: Variant in state.get("reservations", []) as Array:
 		if not value_item is Dictionary:
