@@ -2333,6 +2333,33 @@ func _verify_save_restore(
 	(historical_activity_runtime.get("executions", []) as Array).append(
 		historical_execution,
 	)
+	var historical_serving_execution := {
+		"idempotencyKey": "resident_su_tang_01|legacy-dining-serve|serve-meal|0",
+		"payloadFingerprint": "legacy-dining-serve-payload",
+		"residentId": "resident_su_tang_01",
+		"actionId": "activity-legacy-dining-serve",
+		"sourceContract": "agent.activity",
+		"sourceActionId": "legacy-dining-serve",
+		"activityId": "activity_dining_serve_meal",
+		"activityLabel": "把备好的饭菜递给顾客",
+		"placeId": "公共食堂",
+		"role": "worker",
+		"slotId": "slot_dining_serve_meal_01",
+		"memberAnchorId": "member_dining_serve_meal_01",
+		"targetType": "prop",
+		"targetPropName": "公共食堂备餐柜",
+		"targetActionVerb": "取餐",
+		"reason": "旧版食堂递餐活动迁移测试",
+		"reservationGeneration": 1,
+		"reservationRevision": 1,
+		"remainingTicks": 0,
+		"effectCommit": true,
+		"committedEffects": {"energy": -1},
+		"status": "completed",
+	}
+	(historical_activity_runtime.get("executions", []) as Array).append(
+		historical_serving_execution,
+	)
 	var migrated_world: RefCounted = WORLD.new()
 	var migrated_restore := migrated_world.call(
 		"restore_from_snapshot",
@@ -2367,6 +2394,7 @@ func _verify_save_restore(
 		"migrated activity save is rewritten to the current source fingerprint",
 	)
 	var migrated_dough_target := ""
+	var migrated_serving_target := ""
 	for execution_value: Variant in migrated_activity_state.get(
 		"executions",
 		[],
@@ -2374,10 +2402,17 @@ func _verify_save_restore(
 		var execution := execution_value as Dictionary
 		if String(execution.get("slotId", "")) == "slot_baker_prepare_dough_01":
 			migrated_dough_target = String(execution.get("targetPropName", ""))
+		if String(execution.get("slotId", "")) == "slot_dining_serve_meal_01":
+			migrated_serving_target = String(execution.get("targetPropName", ""))
 	_expect_equal(
 		migrated_dough_target,
 		"公共食堂面团操作台",
 		"migrated activity execution uses the current dough station target",
+	)
+	_expect_equal(
+		migrated_serving_target,
+		"公共食堂递餐口",
+		"migrated activity execution uses the current serving target",
 	)
 	var migrated_service_capacity := -1
 	for service_value: Variant in (

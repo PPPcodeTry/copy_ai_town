@@ -45,6 +45,24 @@ const ACTIVITY_SAVE_MIGRATIONS := [
 				"from": "公共食堂备餐柜",
 				"to": "公共食堂面团操作台",
 			},
+			{
+				"activityId": "activity_dining_serve_meal",
+				"slotId": "slot_dining_serve_meal_01",
+				"targetType": "prop",
+				"targetActionVerb": "取餐",
+				"field": "targetPropName",
+				"from": "公共食堂备餐柜",
+				"to": "公共食堂递餐口",
+			},
+			{
+				"activityId": "activity_dining_serve_meal",
+				"slotId": "slot_dining_serve_meal_01",
+				"targetType": "prop",
+				"targetActionVerb": "取餐",
+				"field": "targetActionVerb",
+				"from": "取餐",
+				"to": "递餐",
+			},
 		],
 		"placeServiceStateRewrites": [
 			{
