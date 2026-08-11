@@ -172,6 +172,20 @@ class ReleaseToolTest(unittest.TestCase):
             self.assertIn("最新细节", notes)
             self.assertNotIn("旧内容", notes)
 
+    def test_release_notes_distinguish_stable_version(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_temp:
+            root = Path(raw_temp)
+            (root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
+            (root / "更新日志.md").write_text(
+                "# 更新日志\n\n## 2026 年 8 月 11 日更新\n\n稳定版内容\n",
+                encoding="utf-8",
+            )
+            output = root / "notes.md"
+            release_tool.generate_release_notes(root, output)
+            notes = output.read_text(encoding="utf-8")
+            self.assertIn("这是正式发行版本。", notes)
+            self.assertNotIn("预发行版本", notes)
+
 
 if __name__ == "__main__":
     unittest.main()

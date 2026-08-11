@@ -329,11 +329,16 @@ def generate_release_notes(repo_root: Path, output_path: Path) -> None:
     )
     if match is None:
         raise ReleaseError("更新日志中没有可用于发行说明的更新章节。")
+    release_type = (
+        "这是供人工验收的预发行版本。"
+        if version.is_prerelease
+        else "这是正式发行版本。"
+    )
     notes = (
         f"# My AI Town {version.tag}\n\n"
         f"{match.group(0).strip()}\n\n"
         "## 下载说明\n\n"
-        "- 这是供人工验收的预发行版本。\n"
+        f"- {release_type}\n"
         "- macOS 版本暂未进行 Apple 公证，首次打开时可能需要在系统设置中确认。\n"
         "- 可使用 `SHA256SUMS` 核对下载文件是否完整。\n"
     )
