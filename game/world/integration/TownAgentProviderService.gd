@@ -6,6 +6,9 @@ const RESULT_SHAPES := preload(
 	"res://world/contract/TownWorldResultShapes.gd"
 )
 const CATALOG := preload("res://agent/model/ModelProviderCatalog.gd")
+const ENDPOINT_SECURITY := preload(
+	"res://common/ProviderEndpointSecurity.gd"
+)
 const CAPABILITY_MODES: Array[String] = ["development", "formal"]
 const FAKE_PROVIDER_ID := "fake"
 const MAX_SAFE_INTEGER := 9007199254740991
@@ -56,12 +59,31 @@ func configure(config_value: Variant, request_host_value: Variant = null) -> Dic
 	if not configs_value is Dictionary:
 		return _failure("PROVIDER_CONFIGS_INVALID", false)
 	for config_key: Variant in (configs_value as Dictionary).keys():
+		var provider_config_value: Variant = (
+			configs_value as Dictionary
+		).get(config_key)
 		if (
 			typeof(config_key) != TYPE_STRING
 			or not _canonical_id_is_valid(config_key as String)
-			or not (configs_value as Dictionary).get(config_key) is Dictionary
+			or not provider_config_value is Dictionary
 		):
 			return _failure("PROVIDER_CONFIGS_INVALID", false)
+		var provider_config := provider_config_value as Dictionary
+		var consent_value: Variant = provider_config.get(
+			"allow_insecure_http",
+			false,
+		)
+		if typeof(consent_value) != TYPE_BOOL:
+			return _failure("PROVIDER_CONFIGS_INVALID", false)
+		var endpoint := String(provider_config.get("endpoint", "")).strip_edges()
+		if (
+			ENDPOINT_SECURITY.requires_insecure_http_consent(endpoint)
+			and not bool(consent_value)
+		):
+			return _failure(
+				"PROVIDER_INSECURE_HTTP_CONSENT_REQUIRED",
+				false,
+			)
 	var source_value: Variant = config.get("source", "runtime")
 	if (
 		typeof(source_value) != TYPE_STRING

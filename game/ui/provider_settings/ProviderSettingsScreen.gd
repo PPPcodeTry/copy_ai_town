@@ -24,6 +24,9 @@ const CompositeDesktop = preload(
 const FormalDialog = preload(
 	"res://ui/common/formal_dialog/FormalConfirmationDialog.gd"
 )
+const ENDPOINT_SECURITY := preload(
+	"res://common/ProviderEndpointSecurity.gd"
+)
 const CONNECTION_NAME_INPUT_TEXTURE := preload(
 	"res://assets/ui/common/formal_dialog_v1/runtime/"
 	+ "formal_dialog_connection_name_input_v2_1024x192.png"
@@ -50,6 +53,7 @@ var _discard_confirmation: FormalDialog
 var _delete_model_confirmation: FormalDialog
 var _delete_connection_confirmation: FormalDialog
 var _connection_name_dialog: FormalDialog
+var _insecure_http_confirmation: FormalDialog
 var _connection_name_edit: LineEdit
 var _connection_name_mode := ""
 var _connection_name_provider_id := ""
@@ -61,6 +65,7 @@ var _pending_connection_deletion: Dictionary = {}
 var _last_connection_deletion: Dictionary = {}
 var _blocked_model_assignment_context: Dictionary = {}
 var _pending_provider_selection: Dictionary = {}
+var _pending_insecure_http_save: Dictionary = {}
 var _discard_confirmation_action := ""
 var _layout_profile := ""
 var _layout_root: Control
@@ -91,6 +96,7 @@ func _ready() -> void:
 	_build_delete_model_confirmation()
 	_build_delete_connection_confirmation()
 	_build_connection_name_dialog()
+	_build_insecure_http_confirmation()
 	_build_delete_model_blocked_dialog()
 	if _view_model.is_empty():
 		_view_model = _empty_view_model()
@@ -208,6 +214,29 @@ func _build_connection_name_dialog() -> void:
 	)
 	_connection_name_dialog.set_custom_content(_connection_name_edit)
 	add_child(_connection_name_dialog)
+
+
+func _build_insecure_http_confirmation() -> void:
+	if is_instance_valid(_insecure_http_confirmation):
+		return
+	_insecure_http_confirmation = FormalDialog.new()
+	_insecure_http_confirmation.name = "InsecureHttpConfirmation"
+	_insecure_http_confirmation.title = "允许未加密连接？"
+	_insecure_http_confirmation.dialog_text = (
+		"这个地址使用未加密的 HTTP。API Key、提示词、居民记忆和对话内容"
+		+ "可能被同一网络中的其他人读取。\n\n"
+		+ "只在你信任这个服务和网络时继续。"
+	)
+	_insecure_http_confirmation.ok_button_text = "仍然使用"
+	_insecure_http_confirmation.cancel_button_text = "返回修改"
+	_insecure_http_confirmation.semantic_kind = "warning"
+	_insecure_http_confirmation.confirmed.connect(
+		_confirm_insecure_http_save
+	)
+	_insecure_http_confirmation.canceled.connect(
+		_cancel_insecure_http_save
+	)
+	add_child(_insecure_http_confirmation)
 
 
 func _request_create_compatible_connection() -> void:
@@ -395,6 +424,7 @@ func bind_adapter(adapter: Object) -> void:
 	_provider_page = -1
 	_model_page = -1
 	_pending_provider_selection.clear()
+	_pending_insecure_http_save.clear()
 	_discard_confirmation_action = ""
 	_adapter = adapter
 	if _adapter == null:
@@ -1208,8 +1238,60 @@ func _on_composite_ui_action(
 			)
 			if not provider.is_empty():
 				_select_provider(provider)
+		&"provider_settings.save_base_url", \
+		&"provider_settings.save_connection":
+			_request_provider_save(action, payload)
 		_:
 			_dispatch_intent(action, payload)
+
+
+func _request_provider_save(
+	action: StringName,
+	payload: Dictionary,
+) -> void:
+	var endpoint_value: Variant = payload.get("baseUrl", "")
+	if typeof(endpoint_value) != TYPE_STRING:
+		_dispatch_intent(action, payload)
+		return
+	var endpoint := endpoint_value as String
+	if (
+		endpoint != endpoint.strip_edges()
+		or not ENDPOINT_SECURITY.requires_insecure_http_consent(endpoint)
+	):
+		_dispatch_intent(action, payload)
+		return
+	var provider := _find_provider(String(payload.get("providerId", "")))
+	if (
+		String(provider.get("baseUrl", "")) == endpoint
+		and bool(provider.get("insecureHttpApproved", false))
+	):
+		var approved_payload := payload.duplicate(true)
+		approved_payload["allowInsecureHttp"] = true
+		_dispatch_intent(action, approved_payload)
+		return
+	_pending_insecure_http_save = {
+		"action": action,
+		"payload": payload.duplicate(true),
+	}
+	_insecure_http_confirmation.popup_centered()
+
+
+func _confirm_insecure_http_save() -> void:
+	if _pending_insecure_http_save.is_empty():
+		return
+	var action := StringName(
+		_pending_insecure_http_save.get("action", &"")
+	)
+	var payload := (
+		_pending_insecure_http_save.get("payload", {}) as Dictionary
+	).duplicate(true)
+	_pending_insecure_http_save.clear()
+	payload["allowInsecureHttp"] = true
+	_dispatch_intent(action, payload)
+
+
+func _cancel_insecure_http_save() -> void:
+	_pending_insecure_http_save.clear()
 
 
 func _build_header() -> Control:

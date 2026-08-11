@@ -12,6 +12,9 @@ const CONFIG_STORE := preload(
 const CREDENTIAL_STORE := preload(
 	"res://world/presentation/ui/TownProviderCredentialStore.gd"
 )
+const ENDPOINT_SECURITY := preload(
+	"res://common/ProviderEndpointSecurity.gd"
+)
 const THREE_ZERO_TWO_PROVIDER := preload(
 	"res://agent/model/ThreeZeroTwoAIModelProvider.gd"
 )
@@ -540,6 +543,18 @@ func _load_public_snapshot() -> Dictionary:
 				),
 			},
 			"baseUrl": String(stored_provider.get("endpoint", "")),
+			"insecureHttpApproved": (
+				ENDPOINT_SECURITY.requires_insecure_http_consent(
+					String(stored_provider.get("endpoint", ""))
+				)
+				and ENDPOINT_SECURITY.consent_matches(
+					String(stored_provider.get("endpoint", "")),
+					String(stored_provider.get(
+						"insecureHttpConsentEndpoint",
+						"",
+					)),
+				)
+			),
 			"defaultBaseUrl": String(source.get("defaultBaseUrl", "")),
 			"apiModel": selected_model_id if custom_models else "",
 			"apiModels": api_models,
@@ -794,6 +809,9 @@ func _save_base_url(payload: Dictionary) -> Dictionary:
 		return _failure("PROVIDER_BASE_URL_INVALID", false)
 	if not endpoint.is_empty() and not _base_url_scheme_is_allowed(endpoint):
 		return _failure("PROVIDER_BASE_URL_INVALID", false)
+	var consent := _insecure_http_consent(payload, endpoint)
+	if not bool(consent.get("ok", false)):
+		return consent
 	var candidate := _stored_config.duplicate(true)
 	var providers := candidate.get("providers", {}) as Dictionary
 	var provider := (providers.get(provider_id, {}) as Dictionary).duplicate(true)
@@ -801,6 +819,11 @@ func _save_base_url(payload: Dictionary) -> Dictionary:
 		provider.erase("endpoint")
 	else:
 		provider["endpoint"] = endpoint
+	_store_insecure_http_consent(
+		provider,
+		endpoint,
+		bool(consent.get("approved", false)),
+	)
 	providers[provider_id] = provider
 	candidate["providers"] = providers
 	return _persist_candidate_reconfigure_and_reload(
@@ -990,6 +1013,9 @@ func _save_connection(payload: Dictionary) -> Dictionary:
 		return _failure("PROVIDER_BASE_URL_INVALID", false)
 	if not endpoint.is_empty() and not _base_url_scheme_is_allowed(endpoint):
 		return _failure("PROVIDER_BASE_URL_INVALID", false)
+	var consent := _insecure_http_consent(payload, endpoint)
+	if not bool(consent.get("ok", false)):
+		return consent
 	if api_key != api_key.strip_edges():
 		return _failure("PROVIDER_API_KEY_REQUIRED", false)
 	if (
@@ -1021,6 +1047,11 @@ func _save_connection(payload: Dictionary) -> Dictionary:
 		provider.erase("endpoint")
 	else:
 		provider["endpoint"] = endpoint
+	_store_insecure_http_consent(
+		provider,
+		endpoint,
+		bool(consent.get("approved", false)),
+	)
 	if (
 		_is_dynamic_compatible_profile(provider_id, provider)
 		and not endpoint.is_empty()
@@ -1695,7 +1726,14 @@ func _provider_configs_for_runtime() -> Dictionary:
 			config["api_key"] = api_key
 		var endpoint := String(source.get("endpoint", "")).strip_edges()
 		if not endpoint.is_empty():
+			if not ENDPOINT_SECURITY.consent_matches(
+				endpoint,
+				String(source.get("insecureHttpConsentEndpoint", "")),
+			):
+				continue
 			config["endpoint"] = endpoint
+			if ENDPOINT_SECURITY.requires_insecure_http_consent(endpoint):
+				config["allow_insecure_http"] = true
 		var api_models := _stored_api_models(source)
 		if not api_models.is_empty():
 			config["api_models"] = api_models
@@ -1777,20 +1815,38 @@ func _stored_api_models(provider: Dictionary) -> Array[String]:
 
 
 func _base_url_scheme_is_allowed(endpoint: String) -> bool:
-	if endpoint.begins_with("https://"):
-		return true
-	if not endpoint.begins_with("http://"):
-		return false
-	var authority := endpoint.trim_prefix("http://").split("/", false)[0]
-	var host := authority
-	if authority.begins_with("["):
-		var closing := authority.find("]")
-		if closing < 0:
-			return false
-		host = authority.left(closing + 1)
-	elif authority.contains(":"):
-		host = authority.get_slice(":", 0)
-	return host.to_lower() in ["localhost", "127.0.0.1", "[::1]"]
+	return ENDPOINT_SECURITY.scheme_is_supported(endpoint)
+
+
+func _insecure_http_consent(
+	payload: Dictionary,
+	endpoint: String,
+) -> Dictionary:
+	var approval_value: Variant = payload.get("allowInsecureHttp", false)
+	if typeof(approval_value) != TYPE_BOOL:
+		return _failure("PROVIDER_INSECURE_HTTP_CONSENT_INVALID", false)
+	var requires_consent := (
+		ENDPOINT_SECURITY.requires_insecure_http_consent(endpoint)
+	)
+	if requires_consent and not bool(approval_value):
+		return _failure("PROVIDER_INSECURE_HTTP_CONSENT_REQUIRED", false)
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+		"approved": requires_consent and bool(approval_value),
+	}
+
+
+func _store_insecure_http_consent(
+	provider: Dictionary,
+	endpoint: String,
+	approved: bool,
+) -> void:
+	if approved:
+		provider["insecureHttpConsentEndpoint"] = endpoint
+		return
+	provider.erase("insecureHttpConsentEndpoint")
 
 
 func _masked_key(api_key: String) -> String:
@@ -2188,7 +2244,11 @@ func _player_message_for_error_code(code: String) -> String:
 		"PROVIDER_DISABLED":
 			return "当前 Provider 已停用。请先启用，再检查连接。"
 		"PROVIDER_BASE_URL_INVALID":
-			return "Base URL 必须使用 HTTPS；本机服务可使用 localhost 的 HTTP 地址。"
+			return "Base URL 必须以 http:// 或 https:// 开头。"
+		"PROVIDER_INSECURE_HTTP_CONSENT_REQUIRED":
+			return "这个 HTTP 地址尚未获得未加密传输授权，请返回设置后重新确认。"
+		"PROVIDER_INSECURE_HTTP_CONSENT_INVALID":
+			return "未加密传输授权无效，请返回设置后重新确认。"
 		"PROVIDER_AUTH_FAILED":
 			return "API Key 未通过认证。请重新输入并保存 Key，然后重试。"
 		"PROVIDER_BILLING_FAILED":

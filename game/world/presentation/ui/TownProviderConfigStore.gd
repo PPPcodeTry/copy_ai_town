@@ -8,6 +8,9 @@ const RESULT_SHAPES := preload(
 const PROVIDER_STORE_FILES := preload(
 	"res://world/presentation/ui/TownProviderStoreFiles.gd"
 )
+const ENDPOINT_SECURITY := preload(
+	"res://common/ProviderEndpointSecurity.gd"
+)
 const DEFAULT_PATH := "user://provider_settings.json"
 const SCHEMA_VERSION := 2
 const PLAINTEXT_CREDENTIAL_KEYS := [
@@ -28,6 +31,7 @@ const PROVIDER_CONFIG_KEYS := [
 	"connectionType",
 	"displayName",
 	"authRequired",
+	"insecureHttpConsentEndpoint",
 ]
 
 var _path := DEFAULT_PATH
@@ -285,6 +289,7 @@ func _validate_config(
 				)
 			):
 				return _failure("PROVIDER_CONFIG_INVALID")
+		var endpoint_text := ""
 		if provider.has("endpoint"):
 			var endpoint: Variant = provider.get("endpoint")
 			if (
@@ -295,6 +300,28 @@ func _validate_config(
 				)
 			):
 				return _failure("PROVIDER_CONFIG_INVALID")
+			endpoint_text = endpoint as String
+		var approved_endpoint := ""
+		if provider.has("insecureHttpConsentEndpoint"):
+			var approval: Variant = provider.get(
+				"insecureHttpConsentEndpoint"
+			)
+			if typeof(approval) != TYPE_STRING:
+				return _failure("PROVIDER_CONFIG_INVALID")
+			approved_endpoint = approval as String
+			if (
+				approved_endpoint.is_empty()
+				or approved_endpoint != endpoint_text
+				or not ENDPOINT_SECURITY.requires_insecure_http_consent(
+					endpoint_text
+				)
+			):
+				return _failure("PROVIDER_CONFIG_INVALID")
+		if (
+			ENDPOINT_SECURITY.requires_insecure_http_consent(endpoint_text)
+			and approved_endpoint != endpoint_text
+		):
+			return _failure("PROVIDER_CONFIG_INVALID")
 		if provider.has("apiModels"):
 			var models_value: Variant = provider.get("apiModels")
 			if not models_value is Array:
@@ -400,8 +427,6 @@ func _endpoint_is_valid(endpoint: String) -> bool:
 			port = authority.substr(colon_index + 1)
 	if host.is_empty() or host.begins_with(".") or host.ends_with("."):
 		return false
-	if scheme == "http://" and not _loopback_host_is_valid(host):
-		return false
 	if host.begins_with("["):
 		var address := host.substr(1, host.length() - 2)
 		if not address.is_valid_ip_address():
@@ -441,13 +466,6 @@ func _endpoint_is_valid(endpoint: String) -> bool:
 	elif authority.ends_with(":"):
 		return false
 	return true
-
-
-func _loopback_host_is_valid(host: String) -> bool:
-	var normalized := host.to_lower()
-	if normalized == "localhost" or normalized == "[::1]":
-		return true
-	return normalized.begins_with("127.") and _canonical_ipv4_is_valid(normalized)
 
 
 func _canonical_ipv4_is_valid(host: String) -> bool:
