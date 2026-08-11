@@ -594,11 +594,8 @@ func _build_provider_detail(
 	if provider.is_empty():
 		return
 	_build_selected_header(provider, detail_rect)
-	if bool(provider.get("customGroup", false)):
-		_build_key_section(provider, detail_rect)
-		_build_base_url_section(provider, detail_rect)
-	else:
-		_build_key_section(provider, detail_rect)
+	_build_key_section(provider, detail_rect)
+	if not _uses_local_service_url(provider):
 		_build_base_url_section(provider, detail_rect)
 	_build_models_section(provider, detail_rect)
 	_build_connection_section(provider, detail_rect)
@@ -1870,6 +1867,7 @@ func _build_key_section(
 ) -> void:
 	var custom_group := bool(provider.get("customGroup", false))
 	var auth_required := bool(provider.get("authRequired", true))
+	var local_service := _uses_local_service_url(provider)
 	var region_rect := _region_rect("api_key_section")
 	var owner := _owner_control(
 		provider_detail,
@@ -1885,7 +1883,7 @@ func _build_key_section(
 		owner,
 		region_rect,
 		"api_key_label",
-		"API Key",
+		"服务地址" if local_service else "API Key",
 		ProviderTheme.COMPOSITE_INK
 	)
 	var key_data := provider.get("key", {}) as Dictionary
@@ -1893,26 +1891,26 @@ func _build_key_section(
 		owner,
 		region_rect,
 		"api_key_value",
-		"ApiKeyInput",
+		"BaseUrlInput" if local_service else "ApiKeyInput",
 		"api_key_input",
 		"ui.provider-settings.composite.api-key-input.v1"
 	)
-	key_edit.secret = not _show_key
+	key_edit.secret = false if local_service else not _show_key
 	key_edit.secret_character = "•"
-	key_edit.text = _draft_key
+	key_edit.text = _draft_base_url if local_service else _draft_key
 	key_edit.placeholder_text = (
-		"本地服务无需填写"
-		if custom_group and not auth_required
+		_base_url_placeholder(provider, true)
+		if local_service
 		else
 		str(key_data.get("maskedValue", "••••••••••••"))
 		if bool(key_data.get("saved", false))
 		else "请输入 API Key"
 	)
-	if custom_group and not auth_required:
-		key_edit.secret = false
-		key_edit.editable = false
 	key_edit.text_changed.connect(func(value: String) -> void:
-		ui_action.emit(&"ui.draft_key", {"value": value})
+		ui_action.emit(
+			&"ui.draft_base_url" if local_service else &"ui.draft_key",
+			{"value": value},
+		)
 		var reveal_button := find_child(
 			"RevealKeyButton",
 			true,
@@ -1937,6 +1935,7 @@ func _build_key_section(
 		_draft_key.is_empty()
 		and not bool(key_data.get("saved", false))
 	)
+	reveal.visible = not local_service
 	reveal.tooltip_text = "隐藏 Key" if _show_key else "显示 Key"
 	reveal.pressed.connect(func() -> void:
 		ui_action.emit(&"ui.toggle_key_visibility", {})
@@ -1954,6 +1953,7 @@ func _build_key_section(
 		(
 			not _action_enabled("saveConnection")
 			or _operation_loading()
+			or (local_service and _draft_base_url.strip_edges().is_empty())
 			or (
 				auth_required
 				and _draft_key.is_empty()
@@ -1969,7 +1969,11 @@ func _build_key_section(
 		)
 	)
 	save.tooltip_text = (
-		"保存连接并读取模型" if custom_group else "保存 Key"
+		"保存地址并读取模型"
+		if local_service
+		else "保存连接并读取模型"
+		if custom_group
+		else "保存 Key"
 	)
 	save.pressed.connect(func() -> void:
 		if custom_group:
@@ -1977,10 +1981,8 @@ func _build_key_section(
 				&"provider_settings.save_connection",
 				{
 					"providerId": str(provider.get("providerId", "")),
-					"baseUrl": (
-						base_url_edit.text
-						if base_url_edit != null
-						else ""
+					"baseUrl": key_edit.text if local_service else (
+						base_url_edit.text if base_url_edit != null else ""
 					),
 					"apiKey": key_edit.text if auth_required else "",
 				},
@@ -2008,6 +2010,7 @@ func _build_key_section(
 		or not bool(key_data.get("saved", false))
 		or _operation_loading()
 	)
+	delete.visible = not local_service
 	delete.tooltip_text = "删除 Key"
 	delete.pressed.connect(func() -> void:
 		ui_action.emit(
@@ -2510,6 +2513,8 @@ func _build_models_section(
 					_view_model.get("error", {}) as Dictionary
 				)
 				if catalog_failed
+				else "填写并保存服务地址后自动读取"
+				if _uses_local_service_url(provider)
 				else "填写并保存 API Key 后自动读取"
 			),
 			ProviderTheme.COMPOSITE_MUTED,
@@ -3517,6 +3522,13 @@ func _find_provider(provider_id: String) -> Dictionary:
 			return provider
 	var providers := _data.get("providers", []) as Array
 	return providers[0] as Dictionary if not providers.is_empty() else {}
+
+
+func _uses_local_service_url(provider: Dictionary) -> bool:
+	return (
+		bool(provider.get("customGroup", false))
+		and not bool(provider.get("authRequired", true))
+	)
 
 
 func _action_enabled(action_key: String) -> bool:
