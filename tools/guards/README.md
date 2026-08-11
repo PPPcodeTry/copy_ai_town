@@ -8,7 +8,7 @@
 tools/guards/run_guards.sh
 ```
 
-## 五个守卫
+## 七项固定检查
 
 | 脚本 | 判定 | 基线/清单 |
 |---|---|---|
@@ -17,6 +17,8 @@ tools/guards/run_guards.sh
 | `zero_reference_scan.py` | 白名单/基线外新零引用候选即失败 | `zero_reference_baseline.json` + `zero_reference_whitelist.json` |
 | `required_tests_check.py` | 必须存在的测试缺失、重复注册、checks=N 未钉住即失败 | `required_tests.json` |
 | `cross_platform_text_check.py` | 文本统一以 LF 检出，字节摘要约束不受 Windows 换行转换影响 | `.gitattributes` + 白模冻结清单 |
+| `sync_readme_updates.py --check` | 仓库首页的最近更新摘要与玩家更新日志一致 | `更新日志.md` |
+| `release/test_release_tool.py` + `release_tool.py source-check` | 版本号格式、双平台打包结构、构建信息和校验和符合发行约定 | `VERSION` + `更新日志.md` |
 
 ## 动态调用清单制要点
 

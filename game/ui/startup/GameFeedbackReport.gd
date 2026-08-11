@@ -2,6 +2,7 @@ extends RefCounted
 
 
 const ISSUE_URL := "https://github.com/mewamew/my_ai_town/issues/new"
+const BUILD_INFO := preload("res://ui/common/GameBuildInfo.gd")
 
 
 static func build_issue_url(overrides: Dictionary = {}) -> String:
@@ -18,7 +19,7 @@ static func build_issue_url(overrides: Dictionary = {}) -> String:
 
 static func collect_runtime_info() -> Dictionary:
 	var engine_version := Engine.get_version_info()
-	return {
+	var runtime_info := {
 		"godotVersion": String(engine_version.get("string", "unknown")),
 		"operatingSystem": "%s %s" % [OS.get_name(), OS.get_version()],
 		"architecture": Engine.get_architecture_name(),
@@ -29,6 +30,10 @@ static func collect_runtime_info() -> Dictionary:
 		"renderingMethod": RenderingServer.get_current_rendering_method(),
 		"renderingDriver": RenderingServer.get_current_rendering_driver_name(),
 	}
+	var release_info := BUILD_INFO.load_release_info()
+	if not release_info.is_empty():
+		runtime_info["gameVersion"] = String(release_info.get("version", ""))
+	return runtime_info
 
 
 static func _build_issue_body(runtime_info: Dictionary) -> String:
@@ -65,7 +70,11 @@ static func _build_issue_body(runtime_info: Dictionary) -> String:
 
 
 static func _runtime_info_lines(runtime_info: Dictionary) -> PackedStringArray:
-	return PackedStringArray([
+	var lines := PackedStringArray()
+	var game_version := String(runtime_info.get("gameVersion", "")).strip_edges()
+	if not game_version.is_empty():
+		lines.append("- 游戏版本：%s" % game_version)
+	lines.append_array(PackedStringArray([
 		"- Godot：%s" % String(runtime_info.get("godotVersion", "unknown")),
 		"- 操作系统：%s" % String(runtime_info.get("operatingSystem", "unknown")),
 		"- 系统架构：%s" % String(runtime_info.get("architecture", "unknown")),
@@ -79,4 +88,5 @@ static func _runtime_info_lines(runtime_info: Dictionary) -> PackedStringArray:
 			String(runtime_info.get("renderingMethod", "unknown")),
 			String(runtime_info.get("renderingDriver", "unknown")),
 		],
-	])
+	]))
+	return lines
