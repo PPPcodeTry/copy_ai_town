@@ -130,6 +130,10 @@ const SOCIAL_MATTER_RUNTIME := preload(
 const COMMUNITY_BULLETIN_RUNTIME := preload(
 	"res://world/runtime/social/TownCommunityBulletinRuntime.gd"
 )
+const ANNOUNCEMENT_TIME_PARSER := preload(
+	"res://world/runtime/social/TownAnnouncementTimeParser.gd"
+)
+const ANNOUNCEMENT_RESIDENT_RUNTIME := preload("res://world/runtime/social/TownAnnouncementResidentRuntime.gd")
 const SOCIAL_MATTER_SOURCE_ADAPTER := preload(
 	"res://world/runtime/social/TownSocialMatterSourceAdapter.gd"
 )
@@ -224,6 +228,7 @@ const AUTONOMOUS_CONVERSATION_IDLE_TIMEOUT_SECONDS := 45.0
 const RESIDENT_CONVERSATION_PAIR_COOLDOWN_MINUTES := 30
 const MAX_ENDED_CONVERSATION_HISTORY := 64
 const MAX_ANNOUNCEMENT_HISTORY := 64
+const MAX_AGENT_KNOWN_ANNOUNCEMENTS := 12
 const MAX_DELIVERED_PRIVATE_MESSAGES := 64
 const MAX_SELF_CARRIED_CARGO_QUANTITY := 2
 const PERCEPTION_EXIT_HYSTERESIS_PX := 48.0
@@ -1846,6 +1851,7 @@ func advance(real_seconds: float) -> Dictionary:
 		lap_usec = _advance_profile_lap(advance_profile, "occupationPresenceUsec", lap_usec)
 		_advance_social_matters(absolute_minute)
 		lap_usec = _advance_profile_lap(advance_profile, "socialMattersUsec", lap_usec)
+		_advance_announcement_schedules(absolute_minute)
 		_advance_passive_activity_needs(absolute_minute)
 		lap_usec = _advance_profile_lap(advance_profile, "passiveNeedsUsec", lap_usec)
 		if posmod(absolute_minute, 30) == 0:
@@ -1928,6 +1934,7 @@ func cycle_time_period_for_test() -> Dictionary:
 		_advance_actions(absolute_minute)
 		_advance_resident_conditions(absolute_minute)
 		_advance_social_matters(absolute_minute)
+		_advance_announcement_schedules(absolute_minute)
 		_advance_passive_activity_needs(absolute_minute)
 		PERCEPTION_RUNTIME._refresh_perception(self, true)
 		_schedule_life_rhythm_decisions(absolute_minute)
@@ -8770,6 +8777,13 @@ func _publish_community_announcement(
 	) as Dictionary
 	var event_sequence_before := _event_sequence
 	var announcement_event_id := _next_world_event_id()
+	var announcement_schedule := ANNOUNCEMENT_TIME_PARSER.parse(
+		text,
+		int(_environment.get_absolute_minute()),
+	) as Dictionary
+	var time_expression_detected := (
+		ANNOUNCEMENT_TIME_PARSER.has_time_expression(text)
+	)
 	var result := _community_bulletin.publish(
 		publisher_id,
 		text,
@@ -8778,6 +8792,7 @@ func _publish_community_announcement(
 		get_time(),
 		delivery_mode,
 		announcement_event_id,
+		announcement_schedule,
 	) as Dictionary
 	if result.get("ok") != true:
 		_event_sequence = event_sequence_before
@@ -8834,11 +8849,16 @@ func _publish_community_announcement(
 	_trim_announcement_history()
 	var announcement_event := _materialize_world_event({
 		"type": "公告发布",
+		"announcement_priority": ANNOUNCEMENT_RESIDENT_RUNTIME.priority_for_publisher(self, publisher_id),
 		"announcement_id": String(
 			announcement.get("announcement_id", "")
 		),
 		"publisher_resident_id": String(
 			announcement.get("publisher_id", publisher_id)
+		),
+		"publisher_name": ANNOUNCEMENT_RESIDENT_RUNTIME.publisher_name(
+			self,
+			String(announcement.get("publisher_id", publisher_id)),
 		),
 		"text": String(announcement.get("text", "")),
 		"matter_id": (
@@ -8851,9 +8871,15 @@ func _publish_community_announcement(
 		"time": (
 			announcement.get("time", get_time()) as Dictionary
 		).duplicate(true),
+		"scheduled_absolute_minute": int(
+			announcement.get("scheduled_absolute_minute", -1),
+		),
+		"scheduled_time_label": String(
+			announcement.get("scheduled_time_label", ""),
+		),
 	}, announcement_event_id)
 	for resident_value: Variant in broadcast_result.get(
-		"resident_ids",
+		"reaction_resident_ids",
 		[],
 	) as Array:
 		_enqueue_world_event(
@@ -8889,6 +8915,10 @@ func _publish_community_announcement(
 		"announcement": announcement,
 		"eventId": String(announcement_event.get("event_id", "")),
 		"broadcastEventId": broadcast_event_id,
+		"scheduleRecognized": not announcement_schedule.is_empty(),
+		"scheduleWarning": (
+			time_expression_detected and announcement_schedule.is_empty()
+		),
 	})
 
 
@@ -9611,6 +9641,8 @@ func submit_agent_decision(resident_name: String, decision: Dictionary) -> Dicti
 		inflight_events,
 	)
 	probe_lap_usec = WORLD_PERFORMANCE_PROBE.record_lap(probe_lap_usec, "submission_prechecks")
+	var announcement_priority_error := ANNOUNCEMENT_RESIDENT_RUNTIME.player_priority_handling_error(decision, inflight_events)
+	if not announcement_priority_error.is_empty(): return announcement_priority_error
 	if not invitation_requires_reply and not pending_post_injury_reaction.is_empty():
 		var post_injury_error := _post_injury_reaction_action_error(
 			resident,
@@ -9690,6 +9722,12 @@ func submit_agent_decision(resident_name: String, decision: Dictionary) -> Dicti
 			resident_name,
 			decision_id,
 			decision.get("reaction", {}) as Dictionary,
+			(
+				decision.get("announcement_reactions", []) as Array
+				if decision.get("announcement_reactions", []) is Array
+				else []
+			),
+			inflight_events,
 			inflight_results,
 		)
 		return _complete_agent_submission(
@@ -9750,6 +9788,12 @@ func submit_agent_decision(resident_name: String, decision: Dictionary) -> Dicti
 		resident_name,
 		decision_id,
 		decision.get("reaction", {}) as Dictionary,
+		(
+			decision.get("announcement_reactions", []) as Array
+			if decision.get("announcement_reactions", []) is Array
+			else []
+		),
+		inflight_events,
 		inflight_results,
 	)
 	if not conflict_intent.is_empty():
@@ -11967,6 +12011,8 @@ func _world_event_coalescing_key(event: Dictionary) -> String:
 			return "天气变了|%s" % String(event.get("weather", ""))
 		"公告发布":
 			return "公告发布|%s" % String(event.get("announcement_id", ""))
+		"公告到点":
+			return "公告到点|%s" % String(event.get("announcement_id", ""))
 		"钟声公告":
 			return "钟声公告|%s" % String(event.get("announcement_id", ""))
 		"公告阅读":
@@ -12526,58 +12572,19 @@ func _emit_resident_reaction(
 	resident_id: String,
 	decision_id: String,
 	reaction: Dictionary,
+	announcement_reactions: Array = [],
+	inflight_events: Array = [],
 	inflight_results: Array = [],
 ) -> void:
-	var resolved_reaction := reaction.duplicate(true)
-	if resolved_reaction.is_empty():
-		resolved_reaction = _required_result_reaction(inflight_results)
-	if resolved_reaction.is_empty():
-		return
-	var source_action_id := String(
-		resolved_reaction.get("source_action_id", "")
-	).strip_edges()
-	var payload := {
-		"reactionId": "%s::reaction" % decision_id,
-		"decisionId": decision_id,
-		"sourceActionId": source_action_id,
-		"residentId": resident_id,
-		"text": String(resolved_reaction.get("text", "")).strip_edges(),
-		"time": get_time(),
-		"worldRevision": _world_revision,
-	}
-	resident_reaction_created.emit(
-		_resident_display_name(resident_id),
-		payload.duplicate(true),
+	ANNOUNCEMENT_RESIDENT_RUNTIME.emit_reactions(
+		self,
+		resident_id,
+		decision_id,
+		reaction,
+		announcement_reactions,
+		inflight_events,
+		inflight_results,
 	)
-
-
-func _required_result_reaction(results: Array) -> Dictionary:
-	var source_action_id := _reaction_source_action_id(results)
-	if source_action_id.is_empty():
-		return {}
-	for index in range(results.size() - 1, -1, -1):
-		var value: Variant = results[index]
-		if not value is Dictionary:
-			continue
-		var result := value as Dictionary
-		if String(result.get("action_id", "")).strip_edges() != source_action_id:
-			continue
-		var status := String(result.get("status", ""))
-		var text := ""
-		match status:
-			"completed":
-				text = "这件事总算做完了。"
-			"interrupted":
-				text = "刚才被打断了。"
-			"rejected", "failed":
-				text = "这次没能办成。"
-		if text.is_empty():
-			return {}
-		return {
-			"source_action_id": source_action_id,
-			"text": text,
-		}
-	return {}
 
 
 func _validate_action_shape(action: Dictionary) -> String:
@@ -15757,32 +15764,12 @@ func _agent_life_destination_options(
 func _agent_known_announcements(
 	resident_id: String,
 ) -> Array[Dictionary]:
-	var records := {}
-	for value: Variant in _community_bulletin.knowledge_for(
+	return ANNOUNCEMENT_RESIDENT_RUNTIME.known_announcements(
+		self,
+		_community_bulletin,
 		resident_id,
-	) as Array:
-		var record := value as Dictionary
-		records[String(record.get("announcement_id", ""))] = record
-	var result: Array[Dictionary] = []
-	for announcement: Dictionary in _community_bulletin.get_announcements(
-		true,
-	) as Array[Dictionary]:
-		var announcement_id := String(
-			announcement.get("announcement_id", ""),
-		)
-		if not records.has(announcement_id):
-			continue
-		var record := records.get(announcement_id, {}) as Dictionary
-		result.append({
-			"announcement_id": announcement_id,
-			"text": String(announcement.get("text", "")),
-			"publisher_resident_id": String(
-				announcement.get("publisher_id", ""),
-			),
-			"acquired_via": String(record.get("acquired_via", "")),
-			"active": bool(announcement.get("active", false)),
-		})
-	return result
+		MAX_AGENT_KNOWN_ANNOUNCEMENTS,
+	)
 
 
 func _agent_visible_props(resident: Dictionary) -> Array[String]:
@@ -16952,10 +16939,12 @@ func _enqueue_world_event(
 		AGENT_WAKE_STATE_RUNTIME.mark_dirty(resident)
 	world_event_created.emit(_resident_display_name(resident_name), identified_event)
 	if schedule_event:
+		if ANNOUNCEMENT_RESIDENT_RUNTIME.schedule_player_priority_decision(self, resident_name, event): return identified_event
 		var event_type := String(event.get("type", ""))
 		var wake_while_current_action := event_type in [
 			"有人来了",
 			"有人走了",
+			"公告到点",
 		]
 		_schedule_decision(
 			resident_name,
@@ -22728,6 +22717,10 @@ func _record_announcement_broadcast_knowledge(
 		_environment.get_absolute_minute(),
 	)
 	var resident_ids: Array[String] = []
+	var reaction_resident_ids: Array[String] = []
+	var publisher_id := String(
+		announcement.get("publisher_id", ""),
+	).strip_edges()
 	for resident_id: String in _resident_order:
 		if not _residents.has(resident_id):
 			continue
@@ -22749,10 +22742,17 @@ func _record_announcement_broadcast_knowledge(
 				),
 			}
 		resident_ids.append(resident_id)
+		if resident_id != publisher_id and _resident_is_alive(resident_id):
+			reaction_resident_ids.append(resident_id)
 	return {
 		"ok": true,
 		"resident_ids": resident_ids,
+		"reaction_resident_ids": reaction_resident_ids,
 	}
+
+
+func _advance_announcement_schedules(absolute_minute: int) -> void:
+	ANNOUNCEMENT_RESIDENT_RUNTIME.advance_schedules(self, _community_bulletin, absolute_minute)
 
 func _deliver_town_bell_announcement(
 	announcement: Dictionary,
