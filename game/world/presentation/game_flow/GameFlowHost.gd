@@ -231,6 +231,7 @@ var _process_quit_scheduled := false
 var _quit_departure_pending := false
 var _quit_departure_id := ""
 var _quit_execute_process := true
+var _return_to_start_after_departure := false
 var _flow_generation := 1
 var _startup_view_model_revision := 0
 var _last_result: Dictionary = {}
@@ -1334,10 +1335,31 @@ func get_daily_auto_save_diagnostics() -> Dictionary:
 
 
 func request_return_to_start() -> Dictionary:
-	var departure := _prepare_session_departure()
+	if _quit_departure_pending:
+		return {
+			"ok": true,
+			"errorCode": "",
+			"retryable": false,
+			"pending": true,
+			"departureId": _quit_departure_id,
+		}
+	_return_to_start_after_departure = true
+	var departure := request_quit_game(false)
 	if not bool(departure.get("ok", false)):
-		_last_result = departure.duplicate(true)
+		_return_to_start_after_departure = false
 		return departure
+	# 没有正式城镇运行时，request_quit_game 会同步完成保存，不经过
+	# _continue_quit_after_optional_messages；这里仍要完成返回主菜单。
+	if (
+		not bool(departure.get("pending", false))
+		and _return_to_start_after_departure
+	):
+		_return_to_start_after_departure = false
+		return _route_to_start_after_departure(departure)
+	return departure
+
+
+func _route_to_start_after_departure(departure: Dictionary) -> Dictionary:
 	var startup_scene := load(STARTUP_SCENE_PATH) as PackedScene
 	if startup_scene == null:
 		return _record_route_open_failure(
@@ -1472,16 +1494,24 @@ func _continue_quit_after_optional_messages(
 	)
 	_last_result = departure.duplicate(true)
 	_quit_departure_pending = false
+	_quit_departure_id = ""
+	var return_to_start := _return_to_start_after_departure
+	_return_to_start_after_departure = false
 	if not bool(departure.get("ok", false)):
 		_dismiss_town_entry_loading()
 		call_deferred(
 			"_present_pause_departure_failure",
-			"pause_menu.quit_game",
+			(
+				"pause_menu.return_to_start"
+				if return_to_start
+				else "pause_menu.quit_game"
+			),
 			departure.duplicate(true),
 		)
 		return departure
 	_advance_town_entry_loading(1.0, "保存成功")
-	_quit_departure_id = ""
+	if return_to_start:
+		return _route_to_start_after_departure(departure)
 	if _quit_execute_process:
 		_prepare_audio_shutdown()
 		_schedule_process_quit()
@@ -1572,6 +1602,7 @@ func _release_internal_session_refs() -> void:
 	_resident_selection_vm.clear()
 	_quit_departure_pending = false
 	_quit_departure_id = ""
+	_return_to_start_after_departure = false
 
 
 func _bind_current_scene() -> void:
