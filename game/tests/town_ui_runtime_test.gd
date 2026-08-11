@@ -4859,9 +4859,33 @@ func _verify_local_provider_url_autodiscovery(
 		save_button != null and not save_button.disabled,
 		"%s enables saving from its service URL" % display_name,
 	)
+	var local_provider := (
+		(initial_vm.get("data", {}) as Dictionary).get("providers", []) as Array
+	)[0] as Dictionary
+	screen.call("_perform_provider_selection", local_provider)
+	await process_frame
+	await process_frame
+	var switched_url_edit := screen.find_child(
+		"BaseUrlInput",
+		true,
+		false,
+	) as LineEdit
+	var switched_save_button := screen.find_child(
+		"SaveKeyButton",
+		true,
+		false,
+	) as Button
+	_expect(
+		switched_url_edit != null and switched_url_edit.text == default_url,
+		"%s provider selection keeps the default service URL visible" % display_name,
+	)
+	_expect(
+		switched_save_button != null and not switched_save_button.disabled,
+		"%s provider selection keeps service URL saving enabled" % display_name,
+	)
 	var dispatch_start := _adapter.dispatches.size()
-	if save_button != null and not save_button.disabled:
-		save_button.pressed.emit()
+	if switched_save_button != null and not switched_save_button.disabled:
+		switched_save_button.pressed.emit()
 	await process_frame
 	var save_dispatch := (
 		_adapter.dispatches[dispatch_start] as Dictionary

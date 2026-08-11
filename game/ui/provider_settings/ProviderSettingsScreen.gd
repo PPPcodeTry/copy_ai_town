@@ -359,8 +359,13 @@ func _has_unsaved_local_draft() -> bool:
 	var selected := _find_provider(_selected_provider_id)
 	if selected.is_empty():
 		return false
+	var saved_base_url := (
+		_connection_base_url(selected)
+		if _uses_local_service_url(selected)
+		else String(selected.get("baseUrl", ""))
+	)
 	return (
-		_draft_base_url != String(selected.get("baseUrl", ""))
+		_draft_base_url != saved_base_url
 		or not _draft_api_model.is_empty()
 	)
 
@@ -2890,7 +2895,11 @@ func _perform_provider_selection(provider: Dictionary) -> void:
 	_draft_key_baseline = ""
 	_draft_key_dirty = false
 	_show_key = false
-	_draft_base_url = str(provider.get("baseUrl", ""))
+	_draft_base_url = (
+		_connection_base_url(provider)
+		if _uses_local_service_url(provider)
+		else str(provider.get("baseUrl", ""))
+	)
 	_draft_api_model = ""
 	_dispatch_intent(
 		&"provider_settings.select_provider",
