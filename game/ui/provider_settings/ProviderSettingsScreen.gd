@@ -359,8 +359,13 @@ func _has_unsaved_local_draft() -> bool:
 	var selected := _find_provider(_selected_provider_id)
 	if selected.is_empty():
 		return false
+	var saved_base_url := (
+		_connection_base_url(selected)
+		if _uses_local_service_url(selected)
+		else String(selected.get("baseUrl", ""))
+	)
 	return (
-		_draft_base_url != String(selected.get("baseUrl", ""))
+		_draft_base_url != saved_base_url
 		or not _draft_api_model.is_empty()
 	)
 
@@ -472,7 +477,11 @@ func apply_view_model(view_model: Dictionary) -> bool:
 			_draft_key_baseline = ""
 			_draft_key_dirty = false
 			_show_key = false
-			_draft_base_url = str(selected.get("baseUrl", ""))
+			_draft_base_url = (
+				_connection_base_url(selected)
+				if _uses_local_service_url(selected)
+				else str(selected.get("baseUrl", ""))
+			)
 			_draft_api_model = ""
 		elif (
 			operation_status_text == "success"
@@ -1692,8 +1701,9 @@ func _build_detail() -> Control:
 		detail.add_child(_build_custom_connection_picker(selected))
 	detail.add_child(_detail_divider())
 	detail.add_child(_build_key_section(selected))
-	detail.add_child(_detail_divider())
-	detail.add_child(_build_base_url_section(selected))
+	if not _uses_local_service_url(selected):
+		detail.add_child(_detail_divider())
+		detail.add_child(_build_base_url_section(selected))
 	detail.add_child(_detail_divider())
 	detail.add_child(_build_models_section(selected))
 	detail.add_child(_detail_divider())
@@ -1839,8 +1849,9 @@ func _build_custom_connection_picker(selected: Dictionary) -> Control:
 
 
 func _build_key_section(provider: Dictionary) -> Control:
+	var local_service := _uses_local_service_url(provider)
 	var panel := PanelContainer.new()
-	panel.name = "ApiKeyPanel"
+	panel.name = "ServiceUrlPanel" if local_service else "ApiKeyPanel"
 	panel.add_theme_stylebox_override(
 		"panel",
 		ProviderTheme.empty_style()
@@ -1851,8 +1862,8 @@ func _build_key_section(provider: Dictionary) -> Control:
 	column.add_theme_constant_override("separation", 8)
 	panel.add_child(column)
 	column.add_child(_section_heading(
-		"API Key",
-		"仅保存在本机" if bool(provider.get("authRequired", true)) else "可选，仅保存在本机",
+		"服务地址" if local_service else "API Key",
+		"保存后自动读取模型" if local_service else "仅保存在本机",
 	))
 
 	var form: Container
@@ -1865,19 +1876,17 @@ func _build_key_section(provider: Dictionary) -> Control:
 
 	var key_data := provider.get("key", {}) as Dictionary
 	_key_edit = LineEdit.new()
-	_key_edit.name = "ApiKeyInput"
-	_key_edit.secret = not _show_key
+	_key_edit.name = "BaseUrlInput" if local_service else "ApiKeyInput"
+	_key_edit.secret = false if local_service else not _show_key
 	_key_edit.secret_character = "•"
 	_key_edit.placeholder_text = (
-		"已安全保存，输入新 Key 可替换"
+		"请输入本地服务地址"
+		if local_service
+		else "已安全保存，输入新 Key 可替换"
 		if bool(key_data.get("saved", false))
-		else (
-			"请输入 API Key"
-			if bool(provider.get("authRequired", true))
-			else "本地服务通常无需填写"
-		)
+		else "请输入 API Key"
 	)
-	_key_edit.text = _draft_key
+	_key_edit.text = _draft_base_url if local_service else _draft_key
 	_key_edit.custom_minimum_size = Vector2(
 		220 if _is_phone_profile() else 320,
 		_field_height()
@@ -1899,11 +1908,14 @@ func _build_key_section(provider: Dictionary) -> Control:
 		[24, 12, 24, 12]
 	)
 	_key_edit.text_changed.connect(func(value: String) -> void:
-		_draft_key = value
-		_draft_key_dirty = (
-			not value.is_empty()
-			and value != _draft_key_baseline
-		)
+		if local_service:
+			_draft_base_url = value
+		else:
+			_draft_key = value
+			_draft_key_dirty = (
+				not value.is_empty()
+				and value != _draft_key_baseline
+			)
 		_sync_key_save_enabled()
 	)
 	form.add_child(_key_edit)
@@ -1923,7 +1935,10 @@ func _build_key_section(provider: Dictionary) -> Control:
 	reveal.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	reveal.name = "RevealKeyButton"
 	reveal.set_meta("gate_id", "key_reveal")
+	reveal.visible = not local_service
 	reveal.disabled = (
+		local_service
+		or
 		_draft_key.is_empty()
 		and not bool(key_data.get("saved", false))
 	)
@@ -1943,13 +1958,17 @@ func _build_key_section(provider: Dictionary) -> Control:
 	_save_key_button.set_meta("gate_id", "key_save")
 	_sync_key_save_enabled()
 	_save_key_button.pressed.connect(func() -> void:
-		var submitted_key := _draft_key
+		var payload := {
+			"providerId": str(provider.get("providerId", "")),
+			"apiKey": "" if local_service else _draft_key,
+		}
+		if local_service:
+			payload["baseUrl"] = _draft_base_url
 		_dispatch_intent(
-			&"provider_settings.save_key",
-			{
-				"providerId": str(provider.get("providerId", "")),
-				"apiKey": submitted_key,
-			}
+			&"provider_settings.save_connection"
+			if local_service
+			else &"provider_settings.save_key",
+			payload,
 		)
 		_queue_layout_rebuild()
 	)
@@ -1962,7 +1981,10 @@ func _build_key_section(provider: Dictionary) -> Control:
 	delete.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	delete.name = "DeleteKeyButton"
 	delete.set_meta("gate_id", "key_delete")
+	delete.visible = not local_service
 	delete.disabled = (
+		local_service
+		or
 		not _action_enabled("deleteKey")
 		or not bool(key_data.get("saved", false))
 		or _operation_loading()
@@ -2098,6 +2120,8 @@ func _build_models_section(provider: Dictionary) -> Control:
 				)
 				else "保存 API Key 后将自动读取可用模型。"
 				if str(provider.get("providerId", "")) == "volcengine-ark"
+				else "保存服务地址后将自动读取可用模型。"
+				if _uses_local_service_url(provider)
 				else "当前 Provider 没有可展示模型。"
 			)
 		))
@@ -2503,6 +2527,14 @@ func _refresh_operation_state() -> void:
 func _sync_key_save_enabled() -> void:
 	if not is_instance_valid(_save_key_button):
 		return
+	var selected := _find_provider(_selected_provider_id)
+	if _uses_local_service_url(selected):
+		_save_key_button.disabled = (
+			_draft_base_url.strip_edges().is_empty()
+			or not _action_enabled("saveConnection")
+			or _operation_loading()
+		)
+		return
 	_save_key_button.disabled = (
 		_draft_key.is_empty()
 		or not _draft_key_dirty
@@ -2813,6 +2845,22 @@ func _provider_belongs_to_custom_group(provider: Dictionary) -> bool:
 	] or provider_id.begins_with("openai-compatible-")
 
 
+func _uses_local_service_url(provider: Dictionary) -> bool:
+	return (
+		bool(provider.get("customGroup", false))
+		and not bool(provider.get("authRequired", true))
+	)
+
+
+func _connection_base_url(provider: Dictionary) -> String:
+	var saved_url := str(provider.get("baseUrl", "")).strip_edges()
+	return (
+		saved_url
+		if not saved_url.is_empty()
+		else str(provider.get("defaultBaseUrl", "")).strip_edges()
+	)
+
+
 func _action_enabled(action_key: String) -> bool:
 	var action := UiViewModel.action(_view_model, action_key)
 	return UiViewModel.action_enabled(action)
@@ -2847,7 +2895,11 @@ func _perform_provider_selection(provider: Dictionary) -> void:
 	_draft_key_baseline = ""
 	_draft_key_dirty = false
 	_show_key = false
-	_draft_base_url = str(provider.get("baseUrl", ""))
+	_draft_base_url = (
+		_connection_base_url(provider)
+		if _uses_local_service_url(provider)
+		else str(provider.get("baseUrl", ""))
+	)
 	_draft_api_model = ""
 	_dispatch_intent(
 		&"provider_settings.select_provider",
