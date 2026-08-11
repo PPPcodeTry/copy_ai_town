@@ -53,6 +53,7 @@ const WORLD_PERFORMANCE_PROBE := preload(
 const ACTIVITY_OPTION_QUERY := preload(
 	"res://world/runtime/activity/TownActivityOptionQuery.gd"
 )
+const ACTIVITY_REACHABILITY_CACHE := preload("res://world/runtime/activity/TownActivityReachabilityCache.gd")
 const FRAME_BUDGET_RUNTIME := preload(
 	"res://world/runtime/presentation/TownWorldFrameBudgetRuntime.gd"
 )
@@ -1022,6 +1023,7 @@ func apply_indoor_layout_projection(projection: Dictionary) -> Dictionary:
 	_world_data = next_data
 	_place_by_name_cache.clear()
 	_presentation_cue_cache.clear()
+	ACTIVITY_REACHABILITY_CACHE.clear(self)
 	var baseline := INDOOR_LAYOUT_PROJECTION.snapshot_for_space(
 		_base_world_data,
 		space_id,
@@ -1760,9 +1762,7 @@ func _advance_profile_count(key: String, amount: int) -> void:
 
 func _reset_deferred_frame_work() -> void:
 	FRAME_BUDGET_RUNTIME.reset(self)
-	_activity_reachability_cache.clear()
-	_activity_prepared_action_cache.clear()
-	_activity_reachability_cache_minute = -1
+	ACTIVITY_REACHABILITY_CACHE.clear(self)
 
 
 func _finish_advance_profile(advance_started_usec: int) -> void:

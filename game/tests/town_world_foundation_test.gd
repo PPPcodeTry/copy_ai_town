@@ -822,6 +822,12 @@ func _validate_dynamic_world_projection(data: Dictionary) -> void:
 		"World atomically accepts moved props and current collision: %s"
 		% str(move_result),
 	)
+	_expect(
+		(world.get("_activity_reachability_cache") as Dictionary).is_empty()
+			and (world.get("_activity_prepared_action_cache") as Dictionary).is_empty()
+			and int(world.get("_activity_reachability_cache_minute")) == -1,
+		"layout edits invalidate same-minute activity route cache",
+	)
 	var dynamic_data := LAYOUT_PROJECTION.apply(data, moved) as Dictionary
 	var moved_plan := PROP_QUERY.interaction_plan(
 		dynamic_data,
