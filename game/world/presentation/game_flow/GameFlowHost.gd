@@ -1424,12 +1424,14 @@ func request_return_to_start() -> Dictionary:
 func _route_to_start_after_departure(departure: Dictionary) -> Dictionary:
 	var startup_scene := load(STARTUP_SCENE_PATH) as PackedScene
 	if startup_scene == null:
+		_dismiss_town_entry_loading()
 		return _record_route_open_failure(
 			"GAME_FLOW_STARTUP_ROUTE_FAILED",
 			"启动页面暂时打不开，请稍后再试。",
 		)
 	var route_error := get_tree().change_scene_to_packed(startup_scene)
 	if route_error != OK:
+		_dismiss_town_entry_loading()
 		return _present_route_failure_result(
 			_failure("GAME_FLOW_STARTUP_ROUTE_FAILED", false, [{
 				"godotError": route_error,
