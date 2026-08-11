@@ -8,6 +8,8 @@ const MAX_IMAGE_PIXELS := 36 * 1024 * 1024
 const PREVIEW_EDGE := 256
 const STORAGE_ROOT := "user://town_conversation_photos"
 const TEST_STORAGE_ROOT := "user://tests/town_conversation_photos"
+const TEMPORARY_ROOT := "_tmp"
+const TEMPORARY_KEY_LENGTH := 24
 const PHOTO_WRITE_BLOCK_SCHEMA := "ai-town-conversation-photo-archive-block"
 const SAVE_STORE := preload(
 	"res://world/presentation/session/TownSessionSaveStore.gd"
@@ -410,7 +412,12 @@ func _persist_entry(ref: String, entry: Dictionary) -> bool:
 	):
 		return false
 	var destination := _photo_path(ref)
-	var temporary := "%s.tmp" % destination
+	var temporary := _temporary_photo_path(destination)
+	var temporary_parent_error := DirAccess.make_dir_recursive_absolute(
+		ProjectSettings.globalize_path(temporary.get_base_dir()),
+	)
+	if temporary_parent_error not in [OK, ERR_ALREADY_EXISTS]:
+		return false
 	var file := FileAccess.open(temporary, FileAccess.WRITE)
 	if file == null:
 		return false
@@ -471,6 +478,14 @@ func _load_persisted_entry(ref: String, mime_type: String) -> Dictionary:
 
 func _photo_path(ref: String) -> String:
 	return "%s/%s.bin" % [_session_storage_root, ref]
+
+
+func _temporary_photo_path(destination: String) -> String:
+	return "%s/%s/photo-%s.tmp" % [
+		_storage_root,
+		TEMPORARY_ROOT,
+		destination.sha256_text().left(TEMPORARY_KEY_LENGTH),
+	]
 
 
 func _remove_archive_blocker(slot_id: String) -> bool:
@@ -589,7 +604,7 @@ func _remove_tree(path: String) -> Error:
 	var absolute := ProjectSettings.globalize_path(path)
 	if not DirAccess.dir_exists_absolute(absolute):
 		return OK
-	var directory := DirAccess.open(path)
+	var directory := DirAccess.open(absolute)
 	if directory == null:
 		return DirAccess.get_open_error()
 	directory.include_hidden = true

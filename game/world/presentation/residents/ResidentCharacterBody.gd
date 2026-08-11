@@ -2,6 +2,13 @@ class_name ResidentCharacterBody
 extends CharacterBody2D
 
 
+signal visible_space_changed(
+	resident_id: String,
+	previous_space_id: String,
+	space_id: String,
+)
+
+
 signal presentation_diagnostic(diagnostic: Dictionary)
 signal resident_pressed(resident_id: String, resident_name: String)
 signal death_dissolve_finished(resident_id: String)
@@ -464,6 +471,11 @@ func apply_authoritative_state(
 	if _authority_route_active:
 		_continuous_route_follow = true
 	var next_space_id := String(state.get("spaceId", ""))
+	# World can publish the far side of a portal before the visible body reaches
+	# the doorway. If a newer authoritative sample returns to the body's current
+	# space, the old handoff is no longer valid and must not complete later.
+	if _pending_space_transition and next_space_id == _space_id:
+		_clear_pending_space_transition()
 	var correction_distance := position.distance_to(next_position)
 	if next_space_id != _space_id:
 		if (
@@ -1304,6 +1316,7 @@ func _relocate(
 	code: String,
 	distance: float,
 ) -> Dictionary:
+	var previous_space_id := _space_id
 	_space_id = space_id
 	_update_ground_shadow_depth()
 	position = target_position
@@ -1326,6 +1339,12 @@ func _relocate(
 	_character_rig.reset_locomotion()
 	_refresh_sleep_body_nodes()
 	_apply_sleep_visual_body_position()
+	if previous_space_id != _space_id:
+		visible_space_changed.emit(
+			_resident_id,
+			previous_space_id,
+			_space_id,
+		)
 	return _record_diagnostic(
 		code,
 		"info",

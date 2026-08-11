@@ -1781,9 +1781,16 @@ func _on_inner_observation_intent(
 	_request_id: String,
 ) -> void:
 	var result := _dispatch_adapter(String(intent), payload)
+	if not bool(result.get("ok", false)):
+		var inner_page := _active_page as InnerObservationOverlay
+		if is_instance_valid(inner_page) and _active_route == &"inner_observation":
+			inner_page.recover_immediate_dispatch_failure(
+				intent,
+				result.duplicate(true),
+			)
+		return
 	if (
 		String(intent) == "inner_observation.exit"
-		and bool(result.get("ok", false))
 	):
 		_close_resident_view_and_restore_origin()
 
