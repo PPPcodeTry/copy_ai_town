@@ -13,6 +13,17 @@ import release_tool
 
 
 class ReleaseToolTest(unittest.TestCase):
+    def test_release_workflow_uses_native_macos_runner(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        workflow = (repo_root / ".github/workflows/release-build.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("runs-on: ${{ matrix.runner }}", workflow)
+        self.assertIn("runner: ubuntu-latest", workflow)
+        self.assertIn("runner: macos-latest", workflow)
+        self.assertIn("Godot_v${GODOT_VERSION}-stable_macos.universal.zip", workflow)
+        self.assertIn("$HOME/Library/Application Support/Godot/export_templates", workflow)
+
     def test_version_contract(self) -> None:
         beta = release_tool.parse_version("0.1.0-beta.1\n")
         self.assertEqual(beta.tag, "v0.1.0-beta.1")
