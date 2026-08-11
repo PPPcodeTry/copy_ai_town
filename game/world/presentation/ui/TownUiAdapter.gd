@@ -3872,7 +3872,11 @@ func _hud_resident_directory(runtime_state: Dictionary) -> Dictionary:
 		if location_label.is_empty():
 			location_label = String(state.get("spaceId", "")).strip_edges()
 		var behavior_label := String(state.get("doing", "")).strip_edges()
-		var portrait_texture := _resident_portrait_texture(resident_id)
+		# ResidentDirectoryDrawer 默认收起。头像资源只在玩家打开目录时加载，
+		# 避免首个 HUD 刷新同步读取 15 张图片，阻塞正常游玩帧。
+		var portrait_texture: Texture2D = null
+		if _resident_portraits_loaded:
+			portrait_texture = _resident_portrait_texture(resident_id)
 		items.append({
 			"residentId": resident_id,
 			"residentName": resident_name,
@@ -4560,6 +4564,12 @@ func _execute_avatar_intent(intent: String, payload: Dictionary) -> Dictionary:
 
 func _execute_town_hud_intent(intent: String, payload: Dictionary) -> Dictionary:
 	match intent:
+		"town_hud.ensure_resident_directory_portraits":
+			_ensure_resident_portraits_loaded()
+			_hud_resident_directory_signature.clear()
+			_hud_resident_directory_cache.clear()
+			_refresh_scope("town_hud", true)
+			return _success_result()
 		"town_hud.toggle_avatar":
 			return _toggle_hud_avatar_mode()
 		"town_hud.set_time_speed":
@@ -4998,23 +5008,32 @@ func _normalize_town_hud_playback_times(view_model: Dictionary) -> void:
 # 播放时间 / confirmedRevision / 坐标残留;剔除清单与 far 层
 # _stable_overlay_section 对齐。只用于 emit 判定,payload 不受影响。
 func _town_hud_stable_projection(view_model: Dictionary) -> Dictionary:
-	var projection := view_model.duplicate(true)
+	# town_hud 的稳定投影只用于比较是否需要广播。这里不能再对整棵
+	# ViewModel 做深拷贝：居民目录、地点目录和 HUD 条目包含大量嵌套
+	# 字典，单纯为了去掉几个播放时间字段就会把这段比较推到毫秒级。
+	# 其余字段保持只读引用，只有会被清理的 scope 和 item 做浅复制。
+	var projection := view_model.duplicate(false)
 	projection.erase("revision")
-	var data := projection.get("data", {}) as Dictionary
+	var source_data := view_model.get("data", {}) as Dictionary
+	var data := source_data.duplicate(false)
+	projection["data"] = data
 	for section_key: String in [
 		"residentOverlays",
 		"farResidentActivity",
 		"offscreenActivity",
 	]:
-		var section := data.get(section_key, {}) as Dictionary
+		var source_section := source_data.get(section_key, {}) as Dictionary
+		var section := source_section.duplicate(false)
 		section.erase("revision")
 		section.erase("confirmedRevision")
 		# 累计诊断计数不驱动广播:候选被丢弃已由 items 差异触发 emit。
 		section.erase("missingResidentStateCount")
-		for value: Variant in section.get("items", []) as Array:
+		var stable_items: Array = []
+		for value: Variant in source_section.get("items", []) as Array:
 			if typeof(value) != TYPE_DICTIONARY:
+				stable_items.append(value)
 				continue
-			var item := value as Dictionary
+			var item := (value as Dictionary).duplicate(false)
 			for field: String in [
 				"screenAnchor",
 				"headScreenAnchor",
@@ -5023,6 +5042,9 @@ func _town_hud_stable_projection(view_model: Dictionary) -> Dictionary:
 				"confirmedRevision",
 			]:
 				item.erase(field)
+			stable_items.append(item)
+		section["items"] = stable_items
+		data[section_key] = section
 	return projection
 
 

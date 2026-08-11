@@ -1061,6 +1061,10 @@ func _toggle_resident_directory() -> void:
 		_place_directory.visible = false
 	if opening:
 		_resident_directory.open()
+		intent_requested.emit(
+			&"town_hud.ensure_resident_directory_portraits",
+			{},
+		)
 	else:
 		_resident_directory.close()
 	_update_visibility()
