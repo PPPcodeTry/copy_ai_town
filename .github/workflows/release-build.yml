@@ -77,7 +77,7 @@ jobs:
   build:
     name: 构建 ${{ matrix.label }}
     needs: [validate, test]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -86,9 +86,11 @@ jobs:
           - platform: windows
             label: Windows x86_64
             preset: Windows Desktop
+            runner: ubuntu-latest
           - platform: macos
             label: macOS universal
             preset: macOS
+            runner: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,24 +103,35 @@ jobs:
           path: |
             ~/godot-bin
             ~/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable
-          key: godot-${{ env.GODOT_VERSION }}-release-export-v1
+            ~/Library/Application Support/Godot/export_templates/${{ env.GODOT_VERSION }}.stable
+          key: godot-${{ runner.os }}-${{ runner.arch }}-${{ env.GODOT_VERSION }}-release-export-v1
 
       - name: Download Godot and export templates
         if: steps.godot-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/godot-bin
-          curl --fail --retry 3 -sSL -o /tmp/godot.zip \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-          unzip -q /tmp/godot.zip -d /tmp/godot-extract
-          mv "/tmp/godot-extract/Godot_v${GODOT_VERSION}-stable_linux.x86_64" ~/godot-bin/godot
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            curl --fail --retry 3 -sSL -o /tmp/godot.zip \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -q /tmp/godot.zip -d /tmp/godot-extract
+            mv "/tmp/godot-extract/Godot_v${GODOT_VERSION}-stable_linux.x86_64" ~/godot-bin/godot
+            template_dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          else
+            curl --fail --retry 3 -sSL -o /tmp/godot.zip \
+              "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+            unzip -q /tmp/godot.zip -d /tmp/godot-extract
+            mv /tmp/godot-extract/Godot.app ~/godot-bin/Godot.app
+            xattr -dr com.apple.quarantine ~/godot-bin/Godot.app || true
+            ln -s ~/godot-bin/Godot.app/Contents/MacOS/Godot ~/godot-bin/godot
+            template_dir="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          fi
           chmod +x ~/godot-bin/godot
 
           curl --fail --retry 3 -sSL -o /tmp/templates.tpz \
             "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
           unzip -q /tmp/templates.tpz -d /tmp/templates-extract
-          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
-          cp -R /tmp/templates-extract/templates/. \
-            "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+          mkdir -p "$template_dir"
+          cp -R /tmp/templates-extract/templates/. "$template_dir/"
 
       - name: Add Godot to PATH
         run: echo "$HOME/godot-bin" >> "$GITHUB_PATH"
