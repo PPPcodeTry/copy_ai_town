@@ -41,6 +41,9 @@ class AnchorProvider:
 const ACTIVITY_RUNTIME := preload(
 	"res://world/runtime/activity/TownWorldActivityRuntime.gd"
 )
+const SAVE_SCHEMA_REGISTRY := preload(
+	"res://world/presentation/session/TownSaveSchemaRegistry.gd"
+)
 const SAVE_CODEC := preload(
 	"res://world/runtime/persistence/TownWorldSaveCodec.gd"
 )
@@ -2284,6 +2287,111 @@ func _verify_save_restore(
 		0,
 		"restore does not replay activity started event",
 	)
+	var historical_snapshot := snapshot.duplicate(true)
+	var historical_activity_runtime := (
+		(historical_snapshot.get("state", {}) as Dictionary).get(
+			"activityRuntime",
+			{},
+		) as Dictionary
+	)
+	historical_activity_runtime["sourceFingerprint"] = (
+		SAVE_SCHEMA_REGISTRY.ACTIVITY_SOURCE_FINGERPRINT_BEFORE_PUBLIC_DINING_SLOT_REWORK
+	)
+	var historical_place_service_states := (
+		(historical_snapshot.get("state", {}) as Dictionary).get(
+			"placeServiceStates",
+			{},
+		) as Dictionary
+	)
+	(
+		historical_place_service_states.get("公共食堂", {}) as Dictionary
+	)["service_capacity"] = 2
+	var historical_execution := {
+		"idempotencyKey": "resident_su_tang_01|legacy-dining-prep|prepare-dough|0",
+		"payloadFingerprint": "legacy-dining-prep-payload",
+		"residentId": "resident_su_tang_01",
+		"actionId": "activity-legacy-dining-prep",
+		"sourceContract": "agent.activity",
+		"sourceActionId": "legacy-dining-prep",
+		"activityId": "activity_baker_prepare_dough",
+		"activityLabel": "准备面团",
+		"placeId": "公共食堂",
+		"role": "worker",
+		"slotId": "slot_baker_prepare_dough_01",
+		"memberAnchorId": "member_baker_prepare_dough_01",
+		"targetType": "prop",
+		"targetPropName": "公共食堂备餐柜",
+		"targetActionVerb": "准备面团",
+		"reason": "旧版食堂活动迁移测试",
+		"reservationGeneration": 1,
+		"reservationRevision": 1,
+		"remainingTicks": 0,
+		"effectCommit": true,
+		"committedEffects": {"energy": -2},
+		"status": "completed",
+	}
+	(historical_activity_runtime.get("executions", []) as Array).append(
+		historical_execution,
+	)
+	var migrated_world: RefCounted = WORLD.new()
+	var migrated_restore := migrated_world.call(
+		"restore_from_snapshot",
+		data,
+		opening,
+		historical_snapshot,
+	) as Dictionary
+	_expect_equal(
+		migrated_restore.get("ok"),
+		true,
+		"registered old activity target migration restores a historical save",
+	)
+	var migrated_save := migrated_world.call("create_save_snapshot") as Dictionary
+	var migrated_snapshot_state := (
+		(migrated_save.get("snapshot", {}) as Dictionary).get(
+			"state",
+			{},
+		) as Dictionary
+	)
+	var migrated_activity_state := migrated_snapshot_state.get(
+		"activityRuntime",
+		{},
+	) as Dictionary
+	_expect_equal(
+		migrated_activity_state.get("sourceFingerprint"),
+		String(
+			(data.get("activityIntegrationReceipt", {}) as Dictionary).get(
+				"sourceFingerprint",
+				"",
+			)
+		),
+		"migrated activity save is rewritten to the current source fingerprint",
+	)
+	var migrated_dough_target := ""
+	for execution_value: Variant in migrated_activity_state.get(
+		"executions",
+		[],
+	) as Array:
+		var execution := execution_value as Dictionary
+		if String(execution.get("slotId", "")) == "slot_baker_prepare_dough_01":
+			migrated_dough_target = String(execution.get("targetPropName", ""))
+	_expect_equal(
+		migrated_dough_target,
+		"公共食堂面团操作台",
+		"migrated activity execution uses the current dough station target",
+	)
+	var migrated_service_capacity := -1
+	for service_value: Variant in (
+		migrated_snapshot_state.get("placeServiceStates", {}) as Dictionary
+	).values():
+		var service := service_value as Dictionary
+		if String(service.get("place_id", "")) == "公共食堂":
+			migrated_service_capacity = int(service.get("service_capacity", -1))
+	_expect_equal(
+		migrated_service_capacity,
+		4,
+		"migrated dining service state uses the current service capacity",
+	)
+	migrated_world.call("stop")
 	var drifted := snapshot.duplicate(true)
 	(
 		(drifted.get("state", {}) as Dictionary).get(
