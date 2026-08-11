@@ -3375,6 +3375,20 @@ func _scenario_ui_runtime_host_navigation() -> void:
 				)
 				rebuilt_base_url_edit.text = "https://api.deepseek.com"
 				rebuilt_base_url_edit.text_changed.emit(rebuilt_base_url_edit.text)
+	await _verify_local_provider_url_autodiscovery(
+		provider_page as ProviderSettingsScreen,
+		"ollama",
+		"Ollama（本地）",
+		"http://127.0.0.1:11434/v1",
+		20,
+	)
+	await _verify_local_provider_url_autodiscovery(
+		provider_page as ProviderSettingsScreen,
+		"lm-studio",
+		"LM Studio（本地）",
+		"http://127.0.0.1:1234/v1",
+		30,
+	)
 	var dispatch_count_before_back := _adapter.dispatches.size()
 	var escape := InputEventAction.new()
 	escape.action = &"ui_cancel"
@@ -4810,6 +4824,164 @@ func _provider_input_stability_view_model(revision: int) -> Dictionary:
 			"submittedAtMsec": 1,
 			"completedAtMsec": 0,
 		},
+		"error": null,
+	}
+
+
+func _verify_local_provider_url_autodiscovery(
+	screen: ProviderSettingsScreen,
+	provider_id: String,
+	display_name: String,
+	default_url: String,
+	revision: int,
+) -> void:
+	var initial_vm := _local_provider_url_view_model(
+		provider_id,
+		display_name,
+		default_url,
+		revision,
+	)
+	_expect(
+		screen.apply_view_model(initial_vm),
+		"%s local URL settings render" % display_name,
+	)
+	await process_frame
+	await process_frame
+	var url_edit := screen.find_child("BaseUrlInput", true, false) as LineEdit
+	var key_edit := screen.find_child("ApiKeyInput", true, false) as LineEdit
+	var save_button := screen.find_child("SaveKeyButton", true, false) as Button
+	_expect(key_edit == null, "%s does not expose an API Key input" % display_name)
+	_expect(
+		url_edit != null and url_edit.editable and url_edit.text == default_url,
+		"%s exposes its editable default service URL" % display_name,
+	)
+	_expect(
+		save_button != null and not save_button.disabled,
+		"%s enables saving from its service URL" % display_name,
+	)
+	var dispatch_start := _adapter.dispatches.size()
+	if save_button != null and not save_button.disabled:
+		save_button.pressed.emit()
+	await process_frame
+	var save_dispatch := (
+		_adapter.dispatches[dispatch_start] as Dictionary
+		if _adapter.dispatches.size() > dispatch_start
+		else {}
+	)
+	_expect_equal(
+		save_dispatch.get("intent"),
+		"provider_settings.save_connection",
+		"%s saves the local connection instead of an API Key" % display_name,
+	)
+	_expect_equal(
+		(save_dispatch.get("payload", {}) as Dictionary).get("baseUrl"),
+		default_url,
+		"%s saves the visible service URL" % display_name,
+	)
+	_expect_equal(
+		(save_dispatch.get("payload", {}) as Dictionary).get("apiKey"),
+		"",
+		"%s saves without a placeholder API Key" % display_name,
+	)
+	var saved_vm := _local_provider_url_view_model(
+		provider_id,
+		display_name,
+		default_url,
+		revision + 1,
+	)
+	((saved_vm.get("data", {}) as Dictionary).get("providers", []) as Array)[0][
+		"baseUrl"
+	] = default_url
+	saved_vm["operation"] = {
+		"requestId": "%s-url-save" % provider_id,
+		"intent": "provider_settings.save_connection",
+		"status": "success",
+		"submittedAtMsec": 1,
+		"completedAtMsec": 2,
+	}
+	_expect(
+		screen.apply_view_model(saved_vm),
+		"%s accepts its saved URL result" % display_name,
+	)
+	await process_frame
+	await process_frame
+	await process_frame
+	var discovery_dispatch := (
+		_adapter.dispatches[_adapter.dispatches.size() - 1] as Dictionary
+		if not _adapter.dispatches.is_empty()
+		else {}
+	)
+	_expect_equal(
+		discovery_dispatch.get("intent"),
+		"provider_settings.discover_models",
+		"%s automatically reads models after saving its URL" % display_name,
+	)
+	_expect_equal(
+		(discovery_dispatch.get("payload", {}) as Dictionary).get("providerId"),
+		provider_id,
+		"%s model discovery targets the selected local service" % display_name,
+	)
+
+
+func _local_provider_url_view_model(
+	provider_id: String,
+	display_name: String,
+	default_url: String,
+	revision: int,
+) -> Dictionary:
+	var actions := {}
+	for action_key: String in [
+		"back",
+		"selectProvider",
+		"setProviderEnabled",
+		"saveConnection",
+		"discoverModels",
+		"saveApiModel",
+		"deleteApiModel",
+		"selectModel",
+		"checkConnection",
+	]:
+		actions[action_key] = {
+			"intent": "provider_settings.%s" % action_key,
+			"enabled": true,
+			"disabledReason": "",
+		}
+	return {
+		"scope": "provider_settings",
+		"status": "ready",
+		"revision": revision,
+		"data": {
+			"source": "runtime",
+			"capabilityMode": "formal",
+			"formalReady": true,
+			"pageTitle": "模型设置",
+			"selectedProviderId": provider_id,
+			"providers": [{
+				"providerId": provider_id,
+				"displayName": display_name,
+				"enabled": true,
+				"external": true,
+				"authRequired": false,
+				"customModels": true,
+				"customGroup": true,
+				"modelCatalogSupported": true,
+				"key": {"saved": false, "status": "optional"},
+				"baseUrl": "",
+				"defaultBaseUrl": default_url,
+				"models": [],
+				"discoveredModels": [],
+				"connection": {
+					"status": "not_configured",
+					"errorCode": "PROVIDER_MODEL_SELECTION_REQUIRED",
+				},
+			}],
+			"summary": {
+				"availableProviderCount": 0,
+				"enabledModelCount": 0,
+			},
+		},
+		"actions": actions,
+		"operation": {"status": "idle", "requestId": ""},
 		"error": null,
 	}
 
