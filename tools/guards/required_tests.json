@@ -49,7 +49,7 @@
   },
   {
     "id": "res://tests/startup_social_feedback_test.gd",
-    "min_checks": 60
+    "min_checks": 65
   }
  ]
 }
