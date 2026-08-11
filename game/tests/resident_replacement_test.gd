@@ -33,6 +33,19 @@ class ReturnToStartGateway:
 		return {"ok": true, "started": true, "pending": true}
 
 
+class NeverCompletingReturnToStartGateway:
+	extends Node
+	var calls := 0
+
+	func prepare_departure_messages(
+		_departure_id: String,
+		_max_candidates: int,
+		_on_complete: Callable,
+	) -> Dictionary:
+		calls += 1
+		return {"ok": true, "started": true, "pending": true}
+
+
 class ReturnToStartWiringHarness:
 	extends "res://world/presentation/game_flow/GameFlowHost.gd"
 	var saved_messages: Array = []
@@ -260,3 +273,50 @@ func _verify_return_to_start_messages() -> void:
 	host.free()
 	runtime.free()
 	gateway.free()
+
+	var timeout_gateway := NeverCompletingReturnToStartGateway.new()
+	var timeout_host := ReturnToStartWiringHarness.new()
+	var timeout_runtime := Node.new()
+	var timeout_save_service := RefCounted.new()
+	timeout_host.set("_gateway", timeout_gateway)
+	timeout_host.set("_town_runtime", timeout_runtime)
+	timeout_host.set("_session_ui_service", timeout_save_service)
+	var timeout_result := timeout_host.request_return_to_start()
+	_expect_equal(
+		timeout_gateway.calls,
+		1,
+		"返回主菜单的留言请求只启动一次",
+	)
+	_expect_equal(
+		timeout_result.get("pending"),
+		true,
+		"居民留言不回调时返回主菜单进入等待状态",
+	)
+	var timeout_departure_id := String(timeout_result.get("departureId", ""))
+	timeout_host.call(
+		"_on_quit_departure_messages_timeout",
+		timeout_departure_id,
+	)
+	_expect_equal(
+		timeout_host.saved_messages,
+		[],
+		"居民留言超时后仍能保存并返回主菜单",
+	)
+	_expect_equal(
+		timeout_host.routed_departures.size(),
+		1,
+		"居民留言超时后只返回一次主菜单",
+	)
+	timeout_host.call(
+		"_on_quit_departure_messages_ready",
+		{"ok": true, "messages": [{"text": "迟到留言"}]},
+		timeout_departure_id,
+	)
+	_expect_equal(
+		timeout_host.routed_departures.size(),
+		1,
+		"居民留言超时后的迟到回调不会重复返回主菜单",
+	)
+	timeout_host.free()
+	timeout_runtime.free()
+	timeout_gateway.free()

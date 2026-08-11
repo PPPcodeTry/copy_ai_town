@@ -124,6 +124,8 @@ const FORMAL_RUNTIME_AUDIT_ENV := "AI_TOWN_FORMAL_RUNTIME_AUDIT_PATH"
 const DAILY_AUTO_SAVE_REASON := "daily_auto_save"
 const DAILY_AUTO_SAVE_RETRY_INTERVAL_MSEC := 5000
 const DAILY_AUTO_SAVE_ERROR_HISTORY_LIMIT := 32
+# 居民留言是可选彩蛋，不能阻塞返回主菜单或退出游戏。
+const QUIT_DEPARTURE_MESSAGES_TIMEOUT_SECONDS := 3.0
 const REPLACEMENT_AGENT_ATTRIBUTE_FIELDS: Array[String] = [
 	"name",
 	"gender",
@@ -1431,6 +1433,7 @@ func request_quit_game(execute_process_quit := true) -> Dictionary:
 		)
 	if _quit_departure_id.is_empty():
 		_quit_departure_id = "departure-%d" % Time.get_ticks_usec()
+	var departure_id := _quit_departure_id
 	_quit_departure_pending = true
 	_quit_execute_process = execute_process_quit
 	_begin_town_entry_loading("quit_game")
@@ -1439,19 +1442,22 @@ func request_quit_game(execute_process_quit := true) -> Dictionary:
 		"prepare_departure_messages",
 		_quit_departure_id,
 		2,
-		Callable(self, "_on_quit_departure_messages_ready"),
+		Callable(self, "_on_quit_departure_messages_ready").bind(
+			departure_id,
+		),
 	) as Dictionary
 	if not bool(started.get("ok", false)):
 		return _continue_quit_after_optional_messages(
 			[],
 			execute_process_quit,
 		)
+	_schedule_quit_departure_messages_timeout(departure_id)
 	return {
 		"ok": true,
 		"errorCode": "",
 		"retryable": false,
 		"pending": _quit_departure_pending,
-		"departureId": _quit_departure_id,
+		"departureId": departure_id,
 		"quitRequested": true,
 		"processQuitExecuted": (
 			not _quit_departure_pending and execute_process_quit
@@ -1459,8 +1465,41 @@ func request_quit_game(execute_process_quit := true) -> Dictionary:
 	}
 
 
-func _on_quit_departure_messages_ready(result: Dictionary) -> void:
-	if not _quit_departure_pending:
+func _schedule_quit_departure_messages_timeout(departure_id: String) -> void:
+	if (
+		not is_inside_tree()
+		or not _quit_departure_pending
+		or departure_id != _quit_departure_id
+	):
+		return
+	get_tree().create_timer(
+		QUIT_DEPARTURE_MESSAGES_TIMEOUT_SECONDS,
+		true,
+		false,
+		true,
+	).timeout.connect(
+		_on_quit_departure_messages_timeout.bind(departure_id),
+		CONNECT_ONE_SHOT,
+	)
+
+
+func _on_quit_departure_messages_timeout(departure_id: String) -> void:
+	if (
+		not _quit_departure_pending
+		or departure_id != _quit_departure_id
+	):
+		return
+	_continue_quit_after_optional_messages([], _quit_execute_process)
+
+
+func _on_quit_departure_messages_ready(
+	result: Dictionary,
+	departure_id: String,
+) -> void:
+	if (
+		not _quit_departure_pending
+		or departure_id != _quit_departure_id
+	):
 		return
 	if not bool(result.get("ok", false)):
 		_continue_quit_after_optional_messages(
