@@ -441,7 +441,21 @@ func apply_view_model(view_model: Dictionary) -> PackedStringArray:
 		!= _render_projection(scope, render_snapshot)
 	)
 	if is_node_ready() and not _binding_batch and render_changed:
-		_rebuild()
+		if (
+			scope == "conversation"
+			and bool(
+				_render_projection(scope, render_snapshot).get(
+					"open",
+					false,
+				)
+			)
+		):
+			# The chat page covers this HUD. Hiding the existing tree is enough;
+			# rebuilding it just to retire every child delays the chat's first frame.
+			visible = false
+			mouse_filter = Control.MOUSE_FILTER_IGNORE
+		else:
+			_rebuild()
 	return issues
 
 
@@ -513,7 +527,7 @@ func _apply_time_hud_view_model(view_model: Dictionary) -> PackedStringArray:
 	render_snapshot["data"] = render_data
 	_view_models[TIME_HUD_SCOPE] = render_snapshot
 	_revision_by_scope[TIME_HUD_SCOPE] = incoming_revision
-	if is_node_ready() and not _binding_batch:
+	if is_node_ready() and not _binding_batch and not _conversation_open():
 		_rebuild()
 	return PackedStringArray()
 

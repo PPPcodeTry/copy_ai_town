@@ -209,24 +209,9 @@ func _scenario_frame_work_budget() -> void:
 	_expect_equal(second_place_signal.get("deferredPlaceChangeSignalsProcessed"), 1, "second frame publishes the next place change")
 	_expect_equal(third_place_signal.get("deferredPlaceChangeSignalCount"), 0, "place-change signal queue drains without starvation")
 	_expect_equal(
-		TOWN_RUNTIME._world_work_defers_agent_dispatch(minute_result),
-		true,
-		"minute settlement defers Agent dispatch",
-	)
-	_expect_equal(
-		TOWN_RUNTIME._world_work_defers_agent_dispatch(first_presentation_batch),
-		true,
-		"batched resident presentation refresh defers Agent dispatch",
-	)
-	_expect_equal(
-		TOWN_RUNTIME._world_work_defers_agent_dispatch(first_place_signal),
-		true,
-		"batched place-change signal defers Agent dispatch",
-	)
-	_expect_equal(
-		TOWN_RUNTIME._world_work_defers_agent_dispatch({"minutesAdvanced": 0}),
-		false,
-		"a light World frame leaves one Agent dispatch slot available",
+		TOWN_RUNTIME.AGENT_DISPATCH_BUDGET_PER_FRAME,
+		1,
+		"each runtime frame admits at most one Agent request into the staged pipeline",
 	)
 	world.call("stop")
 

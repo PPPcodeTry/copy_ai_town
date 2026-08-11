@@ -120,13 +120,21 @@ func _run() -> void:
 	)
 
 	service.unbind()
+	var exit_code := 0 if _failures.is_empty() else 1
 	if _failures.is_empty():
 		print("INNER_OBSERVATION_LIVE_REFRESH_PASS")
-		quit(0)
-		return
-	for failure in _failures:
-		push_error("INNER_OBSERVATION_LIVE_REFRESH_FAIL: %s" % failure)
-	quit(1)
+	else:
+		for failure in _failures:
+			push_error("INNER_OBSERVATION_LIVE_REFRESH_FAIL: %s" % failure)
+	# Let autoload _ready/deferred audio setup settle before releasing it. This
+	# test otherwise finishes quickly enough to race stream initialization.
+	for _frame_index: int in 5:
+		await process_frame
+	var audio_controller := root.get_node_or_null("TownAudioController")
+	if audio_controller != null and audio_controller.has_method("prepare_shutdown"):
+		audio_controller.call("prepare_shutdown")
+	await create_timer(0.3, true, false, true).timeout
+	quit(exit_code)
 
 
 func _expect(condition: bool, message: String) -> void:

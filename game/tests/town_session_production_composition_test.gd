@@ -19,9 +19,18 @@ const TOWN_RUNTIME_SCENE := preload("res://world/presentation/town_runtime/TownR
 const AVATAR_HUD_SCENE := preload("res://ui/avatar_mode/runtime/AvatarModeHud.tscn")
 const PAUSE_HOST_SCENE := preload("res://ui/pause_menu/PauseMenuNavigationHost.tscn")
 const TOWN_HUD_SCENE := preload("res://ui/town/hud/runtime/TownHudOverlay.tscn")
+const UI_RUNTIME_HOST := preload("res://world/presentation/ui/TownUiRuntimeHost.gd")
 const WORLD := preload("res://world/runtime/TownWorldRuntime.gd")
 const AGENT_CONTRACT := preload("res://agent/AgentContract.gd")
 const TEST_KEYBOARD_DEVICE_ID := 16
+const WORLD_UI_SCOPES: Array[String] = [
+	"lifecycle",
+	"environment",
+	"avatar",
+	"conversation",
+	"announcements",
+	"town_hud",
+]
 
 var _failures: Array[String] = []
 
@@ -31,6 +40,15 @@ class ResultCollector:
 
 	func collect(value: Dictionary) -> void:
 		result = value.duplicate(true)
+
+
+class AgentGatewayPumpSpy:
+	extends Node
+	var pump_limits: Array[int] = []
+
+	func pump(max_requests := -1) -> int:
+		pump_limits.append(max_requests)
+		return 0
 
 
 func _initialize() -> void:
@@ -292,6 +310,7 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	await process_frame
+	await process_frame
 	var startup := runtime.call("get_startup_result") as Dictionary
 	_expect_ok(startup, "configured production Town Runtime starts")
 	if not bool(startup.get("ok", false)):
@@ -303,6 +322,11 @@ func _run() -> void:
 	_expect_equal(runtime.call("get_connected_agent_names").size(), 15, "one gateway connects all 15 residents")
 	_expect_equal(gateway.call("get_connected_resident_ids").size(), 15, "gateway routes the stable ID set")
 	var first_id := String((bindings[0] as Dictionary).get("residentId", ""))
+	await _verify_inner_observation_first_draw(
+		gateway,
+		runtime.call("get_world_runtime") as RefCounted,
+		first_id,
+	)
 	_expect(
 		not (gateway.call("get_last_submission", first_id) as Dictionary).is_empty(),
 		"initial World wake triggers a real Fake AgentSystem decision and World submission",
@@ -815,6 +839,11 @@ func _run() -> void:
 		"fresh movement input works after text input closes",
 	)
 	text_input.queue_free()
+	await _verify_conversation_first_visible_frame(
+		runtime,
+		adapter,
+		world_runtime,
+	)
 	var avatar_player := runtime.get_node("Player") as Node2D
 	avatar_player.position = Vector2(4225.0, 1120.0)
 	avatar_player.force_update_transform()
@@ -1282,3 +1311,242 @@ func _finish() -> void:
 		audio_controller.call("prepare_shutdown")
 	await create_timer(0.5, true, false, true).timeout
 	quit(exit_code)
+
+
+func _verify_conversation_first_visible_frame(
+	runtime: Node,
+	adapter: Node,
+	world_runtime: RefCounted,
+) -> void:
+	var host := UI_RUNTIME_HOST.new() as Control
+	runtime.add_child(host)
+	var bind_result := host.call("bind_town_ui_adapter", adapter) as Dictionary
+	_expect_ok(bind_result, "production UI Host binds the real Adapter for conversation timing")
+	var avatar_state := world_runtime.call("get_player_avatar_state") as Dictionary
+	var avatar_space_id := String(avatar_state.get("spaceId", ""))
+	var target_state: Dictionary = {}
+	for state_value: Variant in world_runtime.call("get_all_resident_states") as Array:
+		var state := state_value as Dictionary
+		if (
+			String(state.get("spaceId", "")) == avatar_space_id
+			and (state.get("position", Vector2.INF) as Vector2).is_finite()
+		):
+			target_state = state
+			break
+	_expect(not target_state.is_empty(), "production conversation timing finds an outdoor resident")
+	if target_state.is_empty():
+		host.queue_free()
+		await process_frame
+		return
+	var player := runtime.get_node("Player") as Node2D
+	player.position = target_state.get("position", Vector2.ZERO) as Vector2
+	player.force_update_transform()
+	var position_result := runtime.call("_submit_player_avatar_position", true) as Dictionary
+	_expect_ok(position_result, "production conversation timing moves the avatar beside a resident")
+	var avatar_view_model := adapter.call("get_view_model", "avatar") as Dictionary
+	var nearby_targets := (
+		avatar_view_model.get("data", {}) as Dictionary
+	).get("nearbyTargets", []) as Array
+	_expect(not nearby_targets.is_empty(), "real Avatar view model exposes the nearby conversation target")
+	if nearby_targets.is_empty():
+		host.queue_free()
+		await process_frame
+		return
+	var resident_id := String((nearby_targets[0] as Dictionary).get("residentId", ""))
+	var conversation_click_started_usec := Time.get_ticks_usec()
+	var started := adapter.call(
+		"dispatch",
+		"conversation.start",
+		{
+			"residentId": resident_id,
+			"say": "你好。",
+			"narration": "旅行者走近打招呼",
+		},
+	) as Dictionary
+	var queued_after_start := adapter.get("_pending_world_refresh_scopes") as Array
+	for scope: String in WORLD_UI_SCOPES:
+		_expect(
+			queued_after_start.has(scope),
+			"conversation start defers the %s projection to a following frame" % scope,
+		)
+	var conversation_click_return_msec := (
+		Time.get_ticks_usec() - conversation_click_started_usec
+	) / 1000.0
+	if DisplayServer.get_name() != "headless":
+		print("CONVERSATION_CLICK_RETURN_MSEC=%.2f" % conversation_click_return_msec)
+	_expect_ok(started, "real Adapter starts the production conversation")
+	_expect_equal(host.call("current_route"), &"chat", "conversation click routes to the real chat page synchronously")
+	var page := host.get("_active_page") as Control
+	_expect(
+		is_instance_valid(page) and page.visible,
+		"the real conversation page is visible before Agent preparation resumes",
+	)
+	_expect_equal(
+		int(runtime.get("_agent_dispatch_hold_process_turns")),
+		1,
+		"conversation start keeps Agent preparation out of the click call stack",
+	)
+	var conversation_before_draw := adapter.call("get_view_model", "conversation") as Dictionary
+	var messages_before_draw := (
+		conversation_before_draw.get("data", {}) as Dictionary
+	).get("messages", []) as Array
+	_expect_equal(messages_before_draw.size(), 1, "only the player's opening message exists before the first draw")
+	if DisplayServer.get_name() == "headless":
+		runtime.call("_pump_agent_gateway_for_frame")
+	else:
+		await RenderingServer.frame_post_draw
+		var first_draw_msec := (
+			Time.get_ticks_usec() - conversation_click_started_usec
+		) / 1000.0
+		print("CONVERSATION_FIRST_DRAW_MSEC=%.2f" % first_draw_msec)
+		_expect(
+			first_draw_msec <= 100.0,
+			"production conversation draws its first stable frame within 100ms",
+		)
+	var conversation_after_draw := adapter.call("get_view_model", "conversation") as Dictionary
+	var messages_after_draw := (
+		conversation_after_draw.get("data", {}) as Dictionary
+	).get("messages", []) as Array
+	_expect_equal(messages_after_draw.size(), 1, "the resident reply does not overtake the first rendered frame")
+	runtime.call("_pump_agent_gateway_for_frame")
+	for _frame_index: int in 6:
+		await process_frame
+		var current := adapter.call("get_view_model", "conversation") as Dictionary
+		if ((current.get("data", {}) as Dictionary).get("messages", []) as Array).size() >= 2:
+			break
+	var conversation_after_agent := adapter.call("get_view_model", "conversation") as Dictionary
+	var messages_after_agent := (
+		conversation_after_agent.get("data", {}) as Dictionary
+	).get("messages", []) as Array
+	_expect(messages_after_agent.size() >= 2, "the prioritized resident reply still arrives after the first frame")
+	var message_count_before_reply := messages_after_agent.size()
+	var reply_click_started_usec := Time.get_ticks_usec()
+	var replied := adapter.call(
+		"dispatch",
+		"conversation.reply",
+		{
+			"say": "今天天气怎么样？",
+			"narration": "旅行者继续交谈",
+		},
+	) as Dictionary
+	var queued_after_reply := adapter.get("_pending_world_refresh_scopes") as Array
+	for scope: String in WORLD_UI_SCOPES:
+		_expect(
+			queued_after_reply.has(scope),
+			"conversation reply defers the %s projection to a following frame" % scope,
+		)
+	var reply_click_return_msec := (
+		Time.get_ticks_usec() - reply_click_started_usec
+	) / 1000.0
+	if DisplayServer.get_name() != "headless":
+		print("CONVERSATION_REPLY_CLICK_RETURN_MSEC=%.2f" % reply_click_return_msec)
+	_expect_ok(replied, "real Adapter sends the production conversation reply")
+	_expect_equal(
+		int(runtime.get("_agent_dispatch_hold_process_turns")),
+		1,
+		"conversation reply also keeps Agent preparation out of the input call stack",
+	)
+	var conversation_before_reply_frame := adapter.call("get_view_model", "conversation") as Dictionary
+	var messages_before_reply_frame := (
+		conversation_before_reply_frame.get("data", {}) as Dictionary
+	).get("messages", []) as Array
+	_expect_equal(
+		messages_before_reply_frame.size(),
+		message_count_before_reply + 1,
+		"the player's reply is visible before the resident request resumes",
+	)
+	if DisplayServer.get_name() == "headless":
+		runtime.call("_pump_agent_gateway_for_frame")
+	else:
+		await RenderingServer.frame_post_draw
+		var reply_first_draw_msec := (
+			Time.get_ticks_usec() - reply_click_started_usec
+		) / 1000.0
+		print("CONVERSATION_REPLY_FIRST_DRAW_MSEC=%.2f" % reply_first_draw_msec)
+		_expect(
+			reply_first_draw_msec <= 100.0,
+			"production reply draws the player's message within 100ms",
+		)
+	var conversation_after_reply_frame := adapter.call("get_view_model", "conversation") as Dictionary
+	var messages_after_reply_frame := (
+		conversation_after_reply_frame.get("data", {}) as Dictionary
+	).get("messages", []) as Array
+	_expect_equal(
+		messages_after_reply_frame.size(),
+		message_count_before_reply + 1,
+		"the resident reply does not overtake the player's visible reply frame",
+	)
+	runtime.call("_pump_agent_gateway_for_frame")
+	for _frame_index: int in 6:
+		await process_frame
+		var current := adapter.call("get_view_model", "conversation") as Dictionary
+		if (
+			((current.get("data", {}) as Dictionary).get("messages", []) as Array).size()
+			>= message_count_before_reply + 2
+		):
+			break
+	var conversation_after_reply_agent := adapter.call("get_view_model", "conversation") as Dictionary
+	var messages_after_reply_agent := (
+		conversation_after_reply_agent.get("data", {}) as Dictionary
+	).get("messages", []) as Array
+	_expect(
+		messages_after_reply_agent.size() >= message_count_before_reply + 2,
+		"the prioritized resident reply still arrives after the player's reply frame",
+	)
+	var conversation_id := String(
+		(conversation_after_reply_agent.get("data", {}) as Dictionary).get("conversationId", "")
+	)
+	if not conversation_id.is_empty():
+		adapter.call(
+			"dispatch",
+			"conversation.end",
+			{"narration": "旅行者结束交谈"},
+		)
+	var real_gateway := adapter.get("_gateway") as Node
+	var pump_spy := AgentGatewayPumpSpy.new()
+	adapter.set("_gateway", pump_spy)
+	adapter.call("_execute_intent", "conversation.retry", {})
+	_expect_equal(
+		pump_spy.pump_limits,
+		[],
+		"conversation retry leaves Agent dispatch to TownRuntime's next-frame budget",
+	)
+	adapter.set("_gateway", real_gateway)
+	pump_spy.free()
+	host.queue_free()
+	await process_frame
+
+
+func _verify_inner_observation_first_draw(
+	gateway: Node,
+	world_runtime: RefCounted,
+	resident_id: String,
+) -> void:
+	var collector := ResultCollector.new()
+	var accepted := gateway.call(
+		"request_resident_inner_observation",
+		resident_id,
+		"production-inner-first-draw",
+		int(world_runtime.call("get_world_revision")),
+		collector.collect,
+	) as Dictionary
+	_expect_ok(accepted, "production Gateway accepts the inner observation read")
+	_expect(
+		collector.result.is_empty(),
+		"inner observation does not read memory in the page-open call stack",
+	)
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		_expect(
+			collector.result.is_empty(),
+			"inner observation keeps its loading state through the first visible draw",
+		)
+	for _frame_index: int in 3:
+		await process_frame
+		if not collector.result.is_empty():
+			break
+	_expect_equal(
+		collector.result.get("status"),
+		"ready",
+		"inner observation publishes content after the loading frame",
+	)

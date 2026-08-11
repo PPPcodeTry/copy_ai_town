@@ -14,6 +14,18 @@ const PLAYER_BUBBLE_PATH := (
 	"res://assets/ui/conversation_unified/runtime/bubbles/"
 	+ "unified_chat_player_bubble_v1_1x.png"
 )
+const MAIN_MENU_FONT := preload(
+	"res://assets/ui/startup/fonts/noto_sans_cjk_sc_medium/"
+	+ "NotoSansCJKsc-Medium.otf"
+)
+const RESIDENT_BUBBLE_TEXTURE := preload(
+	"res://assets/ui/conversation_unified/runtime/bubbles/"
+	+ "unified_chat_resident_bubble_v1_1x.png"
+)
+const PLAYER_BUBBLE_TEXTURE := preload(
+	"res://assets/ui/conversation_unified/runtime/bubbles/"
+	+ "unified_chat_player_bubble_v1_1x.png"
+)
 
 const INK := Color("3f2818")
 const MUTED := Color("76583d")
@@ -30,7 +42,7 @@ const INPUT_CONTENT_MARGINS := Vector4(12, 7, 12, 7)
 
 static func create() -> Theme:
 	var result := Theme.new()
-	var font_file := ResourceLoader.load(MAIN_MENU_FONT_PATH, "FontFile") as FontFile
+	var font_file := MAIN_MENU_FONT as FontFile
 	if font_file == null:
 		push_error("统一聊天无法加载主菜单字体：%s" % MAIN_MENU_FONT_PATH)
 		return result
@@ -56,7 +68,7 @@ static func create() -> Theme:
 		"panel",
 		"UnifiedResidentBubble",
 		_body_texture_box(
-			RESIDENT_BUBBLE_PATH,
+			RESIDENT_BUBBLE_TEXTURE,
 			Rect2(10, 0, 396, 107),
 			[16, 18, 16, 18],
 			[22, 16, 18, 16],
@@ -67,7 +79,7 @@ static func create() -> Theme:
 		"panel",
 		"UnifiedPlayerBubble",
 		_body_texture_box(
-			PLAYER_BUBBLE_PATH,
+			PLAYER_BUBBLE_TEXTURE,
 			Rect2(0, 0, 374, 79),
 			[16, 16, 16, 16],
 			[18, 14, 20, 14],
@@ -78,8 +90,11 @@ static func create() -> Theme:
 
 
 static func bubble_tail_texture(resident_side: bool) -> AtlasTexture:
-	var source_path := RESIDENT_BUBBLE_PATH if resident_side else PLAYER_BUBBLE_PATH
-	var source := ResourceLoader.load(source_path, "Texture2D") as Texture2D
+	var source := (
+		RESIDENT_BUBBLE_TEXTURE
+		if resident_side
+		else PLAYER_BUBBLE_TEXTURE
+	) as Texture2D
 	var atlas := AtlasTexture.new()
 	atlas.atlas = source
 	atlas.region = (
@@ -104,12 +119,11 @@ static func _text_edit_content_box() -> StyleBoxEmpty:
 
 
 static func _body_texture_box(
-	path: String,
+	texture: Texture2D,
 	region: Rect2,
 	texture_margins: Array,
 	content_margins: Array
 ) -> StyleBoxTexture:
-	var texture := ResourceLoader.load(path, "Texture2D") as Texture2D
 	var atlas := AtlasTexture.new()
 	atlas.atlas = texture
 	atlas.region = region

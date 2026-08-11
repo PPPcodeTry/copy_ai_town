@@ -101,7 +101,7 @@ var _errors: Array[Dictionary] = []
 var _error_sequence := 0
 var _last_submissions: Dictionary = {}
 var _inflight: Dictionary = {}
-var _prepared_frame_dispatches: Array[Dictionary] = []
+var _agent_preparation_queue: Array[String] = []
 var _decision_attempts: Dictionary = {}
 var _inner_observation_inflight: Dictionary = {}
 var _death_story_inflight: Dictionary = {}
@@ -113,6 +113,25 @@ var _request_metrics: Dictionary = {
 	"providerDispatch": 0,
 	"providerComplete": 0,
 }
+
+
+func _ready() -> void:
+	# TownRuntime can enqueue the first request while adding this Gateway during
+	# its own startup. Do not disable processing after that queue already exists.
+	set_process(
+		not _inner_observation_inflight.is_empty()
+		or not _agent_preparation_queue.is_empty()
+	)
+
+
+func _process(_delta: float) -> void:
+	var processed_inner_observation := _advance_inner_observation_requests()
+	if not processed_inner_observation:
+		_advance_agent_preparation()
+	set_process(
+		not _inner_observation_inflight.is_empty()
+		or not _agent_preparation_queue.is_empty()
+	)
 
 
 func _reset_request_metrics() -> void:
@@ -192,7 +211,7 @@ func configure_session(
 			false,
 		)
 	_inflight.clear()
-	_prepared_frame_dispatches.clear()
+	_agent_preparation_queue.clear()
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -366,33 +385,29 @@ func bind_world(world: RefCounted) -> Dictionary:
 	}
 
 
-func pump_frame_budgeted(max_requests := 1) -> int:
-	return pump(max_requests, true)
-
-
-func pump(max_requests := -1, defer_after_refresh := false) -> int:
+func pump(max_requests := -1) -> int:
 	if not _frame_probe_checked:
 		_frame_probe_checked = true
 		if OS.get_environment("AI_TOWN_UI_FRAME_PROBE") == "1":
 			_frame_probe = load("res://world/presentation/ui/TownUiFrameProbe.gd")
 	if not _session_active or _world == null:
 		return 0
-	if max_requests == 0:
-		return 0
-	if not _prepared_frame_dispatches.is_empty():
-		var dispatch_started_usec := (
-			Time.get_ticks_usec() if _frame_probe != null else 0
+	# Keep at most one refresh-stage preparation in front of the provider. Once
+	# that entry reaches dispatch, one following request may be admitted so the
+	# two stages form a bounded pipeline instead of leaving an idle frame between
+	# every resident. Pending work otherwise stays in the World queue, where a new
+	# player conversation can still be prioritized.
+	if is_inside_tree() and not _agent_preparation_queue.is_empty():
+		var front_decision_id := String(_agent_preparation_queue.front())
+		var front_preparation := (
+			_inflight.get(front_decision_id, {}) as Dictionary
 		)
-		var prepared := _prepared_frame_dispatches.pop_front() as Dictionary
-		_dispatch_prepared_agent_decision(prepared)
-		if _frame_probe != null:
-			_probe_record_lap("agentDispatchUsec", dispatch_started_usec)
-			_frame_probe.record(
-				Engine.get_process_frames(),
-				"agentDispatchCount",
-				1,
-			)
-		return 1
+		if String(front_preparation.get("preparationStage", "")) != "dispatch":
+			return 0
+	# Production preparation is deliberately bounded even when a caller omits
+	# max_requests. At most the dispatching entry plus one refresh entry exist.
+	if is_inside_tree():
+		max_requests = 1 if max_requests < 0 else mini(max_requests, 1)
 	var probe_lap_usec := Time.get_ticks_usec() if _frame_probe != null else 0
 	var requests: Array[Dictionary]
 	if _world.has_method("take_pending_decision_envelopes_by_ids"):
@@ -441,22 +456,10 @@ func pump(max_requests := -1, defer_after_refresh := false) -> int:
 		probe_lap_usec = _probe_record_lap("agentSelectUsec", probe_lap_usec)
 	for request in requests:
 		_mark_superseded_inflight_for_request(request)
-		if defer_after_refresh:
-			var prepared := _prepare_agent_decision(request)
-			if not prepared.is_empty():
-				_prepared_frame_dispatches.append(prepared)
-		else:
-			_request_agent_decision(request)
+		_request_agent_decision(request)
 		if _frame_probe != null:
-			probe_lap_usec = _probe_record_lap(
-				"agentPrepareUsec" if defer_after_refresh else "agentDispatchUsec",
-				probe_lap_usec,
-			)
-			_frame_probe.record(
-				Engine.get_process_frames(),
-				"agentPrepareCount" if defer_after_refresh else "agentDispatchCount",
-				1,
-			)
+			probe_lap_usec = _probe_record_lap("agentDispatchUsec", probe_lap_usec)
+			_frame_probe.record(Engine.get_process_frames(), "agentDispatchCount", 1)
 	if not requests.is_empty() and not _connected_resident_ids.is_empty():
 		var last_resident_id := String(requests.back().get("residentId", ""))
 		var last_index := _connected_resident_ids.find(last_resident_id)
@@ -660,30 +663,30 @@ func request_resident_inner_observation(
 			"INNER_OBSERVATION_REQUEST_DUPLICATE",
 			false,
 		)
-	var snapshot := _public_inner_observation_snapshot(
-		normalized_resident_id,
-		confirmed_world_revision,
-	)
-	if snapshot.is_empty():
-		return _inner_observation_request_failure(
-			"INNER_OBSERVATION_PUBLIC_SNAPSHOT_UNAVAILABLE",
-			true,
-		)
 	var captured_generation := _generation
 	_inner_observation_inflight[normalized_request_id] = {
 		"residentId": normalized_resident_id,
 		"generation": captured_generation,
 		"callback": on_complete,
-		"snapshot": snapshot.duplicate(true),
+		"confirmedWorldRevision": confirmed_world_revision,
+		"readyAfterProcessFrame": Engine.get_process_frames(),
+		"firstDrawCompleted": false,
 	}
-	# This is a read-only snapshot of the resident memory already captured above;
-	# deliver it in the same call so the inner page never renders an empty
-	# generating frame before showing the resident's current thought.
-	_deliver_resident_inner_observation(
-		normalized_request_id,
-		normalized_resident_id,
-		captured_generation,
-	)
+	# The overlay has already published its stable loading state. In production,
+	# wait until that state has actually drawn once before reading memory and
+	# rebuilding the content page. Out-of-tree callers keep a synchronous fallback
+	# for contract tests and tools that do not own a SceneTree frame loop.
+	if is_inside_tree():
+		if DisplayServer.get_name() != "headless":
+			RenderingServer.frame_post_draw.connect(
+				_on_inner_observation_first_draw.bind(
+					normalized_request_id,
+				),
+				CONNECT_ONE_SHOT,
+			)
+		set_process(true)
+	else:
+		_prepare_inner_observation(normalized_request_id)
 	return _inner_observation_request_accepted(normalized_request_id)
 
 
@@ -876,7 +879,74 @@ func cancel_resident_inner_observation(request_id: String) -> bool:
 	var normalized_request_id := request_id.strip_edges()
 	if normalized_request_id.is_empty():
 		return false
-	return _inner_observation_inflight.erase(normalized_request_id)
+	var erased := _inner_observation_inflight.erase(normalized_request_id)
+	set_process(
+		not _inner_observation_inflight.is_empty()
+		or not _agent_preparation_queue.is_empty()
+	)
+	return erased
+
+
+func _advance_inner_observation_requests() -> bool:
+	if _inner_observation_inflight.is_empty():
+		return false
+	var headless := DisplayServer.get_name() == "headless"
+	for request_id_value: Variant in _inner_observation_inflight.keys():
+		var request_id := String(request_id_value)
+		var pending := _inner_observation_inflight.get(request_id, {}) as Dictionary
+		if (
+			(
+				headless
+				and Engine.get_process_frames()
+				>= int(pending.get("readyAfterProcessFrame", 0))
+			)
+			or bool(pending.get("firstDrawCompleted", false))
+		):
+			_prepare_inner_observation(request_id)
+			return true
+	return false
+
+
+func _on_inner_observation_first_draw(request_id: String) -> void:
+	var pending := _inner_observation_inflight.get(request_id, {}) as Dictionary
+	if pending.is_empty():
+		return
+	pending["firstDrawCompleted"] = true
+	_inner_observation_inflight[request_id] = pending
+
+
+func _prepare_inner_observation(request_id: String) -> void:
+	var pending := _inner_observation_inflight.get(request_id, {}) as Dictionary
+	if pending.is_empty():
+		return
+	var resident_id := String(pending.get("residentId", ""))
+	var captured_generation := int(pending.get("generation", -1))
+	if captured_generation != _generation:
+		_inner_observation_inflight.erase(request_id)
+		return
+	var snapshot := _public_inner_observation_snapshot(
+		resident_id,
+		int(pending.get("confirmedWorldRevision", -1)),
+	)
+	if snapshot.is_empty():
+		pending["snapshot"] = {
+			"residentId": resident_id,
+			"errorCode": "INNER_OBSERVATION_PUBLIC_SNAPSHOT_UNAVAILABLE",
+		}
+		_inner_observation_inflight[request_id] = pending
+		_deliver_resident_inner_observation(
+			request_id,
+			resident_id,
+			captured_generation,
+		)
+		return
+	pending["snapshot"] = snapshot.duplicate(true)
+	_inner_observation_inflight[request_id] = pending
+	_deliver_resident_inner_observation(
+		request_id,
+		resident_id,
+		captured_generation,
+	)
 
 
 func _deliver_resident_inner_observation(
@@ -1267,7 +1337,9 @@ func get_debug_inflight_count() -> int:
 
 
 func get_debug_pending_count() -> int:
-	return _inflight.size() + _prepared_frame_dispatches.size()
+	# Preparation-stage entries already live in _inflight. Keep the debug wait
+	# contract aligned with production without counting the queue a second time.
+	return _inflight.size()
 
 
 func get_agent_save_participant() -> RefCounted:
@@ -1422,7 +1494,7 @@ func hydrate_agent_restore(
 func close_session() -> Dictionary:
 	_generation += 1
 	_inflight.clear()
-	_prepared_frame_dispatches.clear()
+	_agent_preparation_queue.clear()
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -1447,7 +1519,7 @@ func discard_unpublished_new_game(
 		)
 	_generation += 1
 	_inflight.clear()
-	_prepared_frame_dispatches.clear()
+	_agent_preparation_queue.clear()
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -1522,6 +1594,16 @@ func _inner_observation_ready_result(
 	snapshot: Dictionary,
 	request_id: String,
 ) -> Dictionary:
+	var error_code := String(snapshot.get("errorCode", ""))
+	if not error_code.is_empty():
+		return {
+			"residentId": String(snapshot.get("residentId", "")),
+			"requestId": request_id,
+			"status": "error",
+			"content": {},
+			"errorCode": error_code,
+			"retryable": true,
+		}
 	var current_thought := _inner_observation_player_text(
 		snapshot.get("currentThought"),
 		INNER_OBSERVATION_MAX_CURRENT_FOCUS_CHARS,
@@ -1729,7 +1811,7 @@ func _inner_observation_request_failure(
 	}
 
 
-func _prepare_agent_decision(request: Dictionary) -> Dictionary:
+func _request_agent_decision(request: Dictionary) -> void:
 	var resident_id := String(request.get("residentId", ""))
 	var resident_name := String(request.get("residentName", ""))
 	var wake := request.get("wakePacket", {}) as Dictionary
@@ -1747,7 +1829,95 @@ func _prepare_agent_decision(request: Dictionary) -> Dictionary:
 			false,
 		)
 		_redispatch(resident_id, decision_id)
-		return {}
+		return
+	if is_inside_tree():
+		_queue_agent_preparation(request)
+		return
+	var refreshed_request := _refresh_agent_decision_request(request)
+	if refreshed_request.is_empty():
+		_redispatch(resident_id, decision_id)
+		return
+	_dispatch_prepared_agent_decision(refreshed_request)
+
+
+func _queue_agent_preparation(request: Dictionary) -> void:
+	var resident_id := String(request.get("residentId", ""))
+	var resident_name := String(request.get("residentName", ""))
+	var wake := request.get("wakePacket", {}) as Dictionary
+	var decision_id := String(wake.get("decision_id", ""))
+	_inflight[decision_id] = {
+		"residentId": resident_id,
+		"residentName": resident_name,
+		"generation": _generation,
+		"attempt": int(_decision_attempts.get(decision_id, 0)),
+		"wakePacket": wake.duplicate(true),
+		"preparationStage": "refresh",
+		"readyAfterProcessFrame": Engine.get_process_frames() + 1,
+		"startedAtMsec": Time.get_ticks_msec(),
+	}
+	if not _agent_preparation_queue.has(decision_id):
+		_agent_preparation_queue.append(decision_id)
+	set_process(true)
+
+
+func _advance_agent_preparation() -> bool:
+	if _agent_preparation_queue.is_empty():
+		return false
+	var decision_id: String = _agent_preparation_queue.front()
+	var pending := _inflight.get(decision_id, {}) as Dictionary
+	if pending.is_empty():
+		_agent_preparation_queue.pop_front()
+		return false
+	if (
+		Engine.get_process_frames()
+		< int(pending.get("readyAfterProcessFrame", 0))
+	):
+		return false
+	_agent_preparation_queue.pop_front()
+	if (
+		int(pending.get("generation", -1)) != _generation
+		or bool(pending.get("superseded", false))
+	):
+		_inflight.erase(decision_id)
+		_decision_attempts.erase(decision_id)
+		return true
+	var stage := String(pending.get("preparationStage", ""))
+	var probe_started_usec := Time.get_ticks_usec() if _frame_probe != null else 0
+	if stage == "refresh":
+		var refreshed := _refresh_agent_decision_request(pending)
+		if _frame_probe != null:
+			_frame_probe.record(
+				Engine.get_process_frames(),
+				"agentPrepareRefreshUsec",
+				Time.get_ticks_usec() - probe_started_usec,
+			)
+		if refreshed.is_empty():
+			_inflight.erase(decision_id)
+			_redispatch(String(pending.get("residentId", "")), decision_id)
+			return true
+		refreshed["preparationStage"] = "dispatch"
+		refreshed["readyAfterProcessFrame"] = Engine.get_process_frames() + 1
+		_inflight[decision_id] = refreshed
+		_agent_preparation_queue.append(decision_id)
+		return true
+	if stage == "dispatch":
+		_dispatch_prepared_agent_decision(pending)
+		if _frame_probe != null:
+			_frame_probe.record(
+				Engine.get_process_frames(),
+				"agentPrepareDispatchUsec",
+				Time.get_ticks_usec() - probe_started_usec,
+			)
+		return true
+	_inflight.erase(decision_id)
+	_redispatch(String(pending.get("residentId", "")), decision_id)
+	return true
+
+
+func _refresh_agent_decision_request(request: Dictionary) -> Dictionary:
+	var resident_id := String(request.get("residentId", ""))
+	var wake := request.get("wakePacket", {}) as Dictionary
+	var decision_id := String(wake.get("decision_id", ""))
 	if _world != null and _world.has_method("refresh_pending_decision_request_by_id"):
 		var latest_request := _world.refresh_pending_decision_request_by_id(
 			resident_id,
@@ -1755,39 +1925,23 @@ func _prepare_agent_decision(request: Dictionary) -> Dictionary:
 		) as Dictionary
 		if not bool(latest_request.get("ok", false)):
 			# 优先级事件可能已经替换了这份 pending 请求；旧快照不能交给 Provider。
-			_redispatch(resident_id, decision_id)
 			return {}
 		wake = (latest_request.get("wakePacket", {}) as Dictionary).duplicate(true)
-	return {
-		"residentId": resident_id,
-		"residentName": resident_name,
-		"decisionId": decision_id,
-		"wakePacket": wake,
-		"generation": _generation,
-	}
+	var refreshed := request.duplicate(true)
+	refreshed["wakePacket"] = wake
+	return refreshed
 
 
-func _request_agent_decision(request: Dictionary) -> void:
-	var prepared := _prepare_agent_decision(request)
-	if prepared.is_empty():
-		return
-	_dispatch_prepared_agent_decision(prepared)
-
-
-func _dispatch_prepared_agent_decision(prepared: Dictionary) -> void:
-	var resident_id := String(prepared.get("residentId", ""))
-	var resident_name := String(prepared.get("residentName", ""))
-	var decision_id := String(prepared.get("decisionId", ""))
-	var wake := prepared.get("wakePacket", {}) as Dictionary
-	var prepared_generation := int(prepared.get("generation", -1))
-	if (
-		prepared_generation != _generation
-		or not _session_active
-		or _world == null
-	):
+func _dispatch_prepared_agent_decision(request: Dictionary) -> void:
+	var resident_id := String(request.get("residentId", ""))
+	var resident_name := String(request.get("residentName", ""))
+	var wake := request.get("wakePacket", {}) as Dictionary
+	var decision_id := String(wake.get("decision_id", ""))
+	var generation := int(request.get("generation", _generation))
+	if generation != _generation:
+		_inflight.erase(decision_id)
 		return
 	var fallback_applied := false
-	var generation := _generation
 	var attempt := int(_decision_attempts.get(decision_id, 0)) + 1
 	_decision_attempts[decision_id] = attempt
 	_count_request_metric("providerDispatch")

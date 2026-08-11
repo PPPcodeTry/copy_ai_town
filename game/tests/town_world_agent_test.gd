@@ -464,7 +464,7 @@ func _scenario_agent_gateway_continuity() -> void:
 	_test_death_story_uses_resident_agent_json()
 	_test_inner_observation_accepts_newer_read_only_world_revision()
 	_test_memory_intervention_uses_world_time_and_agent_contract()
-	_test_frame_budgeted_pump_splits_prepare_and_dispatch()
+	_test_gateway_process_pipeline_splits_refresh_and_dispatch()
 	_test_replacement_request_retires_old_gateway_slot()
 	_test_full_queue_only_dispatches_request_that_frees_slot()
 	_test_unconsumed_submission_rolls_back_without_social_side_effect()
@@ -544,7 +544,7 @@ func _test_null_conversation_snapshot_is_not_an_avatar_turn() -> void:
 
 
 
-func _test_frame_budgeted_pump_splits_prepare_and_dispatch() -> void:
+func _test_gateway_process_pipeline_splits_refresh_and_dispatch() -> void:
 	var agent := DelayedFailingAgent.new()
 	var world := PendingWorld.new()
 	var gateway: Node = GATEWAY.new()
@@ -559,21 +559,22 @@ func _test_frame_budgeted_pump_splits_prepare_and_dispatch() -> void:
 		"residentName": "居民甲",
 		"wakePacket": {"decision_id": "decision-frame-budgeted"},
 	})
+	get_root().add_child(gateway)
 
 	_expect_equal(
-		gateway.call("pump_frame_budgeted", 1),
+		gateway.call("pump", 1),
 		1,
-		"frame-budgeted pump prepares one selected request",
+		"the production pump admits one selected request",
 	)
 	_expect_equal(
 		agent.requested_resident_ids.size(),
 		0,
-		"request preparation does not run the Agent in the same frame",
+		"admission does not run the Agent in the same frame",
 	)
 	_expect_equal(
-		(gateway.get("_prepared_frame_dispatches") as Array).size(),
+		(gateway.get("_agent_preparation_queue") as Array).size(),
 		1,
-		"prepared request remains bounded in the gateway",
+		"one refresh-stage request remains bounded in the gateway",
 	)
 	_expect_equal(
 		gateway.call("get_debug_pending_count"),
@@ -581,14 +582,38 @@ func _test_frame_budgeted_pump_splits_prepare_and_dispatch() -> void:
 		"debug pending count includes work prepared for the next frame",
 	)
 	_expect_equal(
-		gateway.call("pump_frame_budgeted", 0),
+		gateway.call("pump", 0),
 		0,
-		"a zero frame budget preserves prepared work",
+		"the pump does not admit more work before refresh completes",
+	)
+	_make_agent_preparation_ready(gateway, "decision-frame-budgeted")
+	_expect_equal(
+		gateway.call("_advance_agent_preparation"),
+		true,
+		"the next process step refreshes the selected request",
 	)
 	_expect_equal(
-		gateway.call("pump_frame_budgeted", 1),
-		1,
-		"the next budgeted frame dispatches the prepared request",
+		agent.requested_resident_ids.size(),
+		0,
+		"refresh remains separate from the Agent dispatch",
+	)
+	_expect_equal(
+		String(
+			(
+				gateway.get("_inflight") as Dictionary
+			).get("decision-frame-budgeted", {}).get(
+				"preparationStage",
+				"",
+			)
+		),
+		"dispatch",
+		"the refreshed request waits in the dispatch stage",
+	)
+	_make_agent_preparation_ready(gateway, "decision-frame-budgeted")
+	_expect_equal(
+		gateway.call("_advance_agent_preparation"),
+		true,
+		"the following process step dispatches the refreshed request",
 	)
 	_expect_equal(
 		agent.requested_resident_ids,
@@ -596,7 +621,7 @@ func _test_frame_budgeted_pump_splits_prepare_and_dispatch() -> void:
 		"prepared request reaches the real Agent call exactly once",
 	)
 	_expect_equal(
-		(gateway.get("_prepared_frame_dispatches") as Array).size(),
+		(gateway.get("_agent_preparation_queue") as Array).size(),
 		0,
 		"prepared work drains without backlog",
 	)
@@ -606,6 +631,14 @@ func _test_frame_budgeted_pump_splits_prepare_and_dispatch() -> void:
 		"dispatched work remains pending while its model call is inflight",
 	)
 	gateway.free()
+
+
+func _make_agent_preparation_ready(gateway: Node, decision_id: String) -> void:
+	var inflight := gateway.get("_inflight") as Dictionary
+	var pending := inflight.get(decision_id, {}) as Dictionary
+	pending["readyAfterProcessFrame"] = Engine.get_process_frames()
+	inflight[decision_id] = pending
+	gateway.set("_inflight", inflight)
 
 
 

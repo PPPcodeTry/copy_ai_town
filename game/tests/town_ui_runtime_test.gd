@@ -1269,6 +1269,15 @@ class ResultCollector:
 	func collect(value: Dictionary) -> void:
 		result = value.duplicate(true)
 
+
+class AgentGatewayPumpSpy:
+	extends Node
+	var pump_limits: Array[int] = []
+
+	func pump(max_requests := -1) -> int:
+		pump_limits.append(max_requests)
+		return 1
+
 const HOST_SCRIPT := preload(
 	"res://world/presentation/ui/TownUiRuntimeHost.gd"
 )
@@ -1505,6 +1514,36 @@ func _run_all() -> void:
 	_scenario_session_production_composition()
 	_scenario_hud_pause_clock()
 	_finish_suite("TOWN_UI_RUNTIME_PASS")
+
+
+func _verify_conversation_agent_dispatch_first_frame(runtime: Node) -> void:
+	var real_gateway := runtime.get("_agent_gateway") as Node
+	var gateway := AgentGatewayPumpSpy.new()
+	runtime.set("_agent_gateway", gateway)
+	runtime.call("_hold_agent_dispatch_for_conversation_first_frame")
+	runtime.call("_pump_agent_gateway_for_frame")
+	_expect_equal(
+		gateway.pump_limits,
+		[],
+		"conversation input leaves one process turn free for the first UI frame",
+	)
+	runtime.call("_pump_agent_gateway_for_frame")
+	_expect_equal(
+		gateway.pump_limits,
+		[1],
+		"conversation request resumes with the one-request frame budget",
+	)
+	runtime.call("_hold_agent_dispatch_for_conversation_first_frame")
+	runtime.call("_hold_agent_dispatch_for_conversation_first_frame")
+	runtime.call("_pump_agent_gateway_for_frame")
+	runtime.call("_pump_agent_gateway_for_frame")
+	_expect_equal(
+		gateway.pump_limits,
+		[1, 1],
+		"repeated same-frame holds coalesce without delaying extra frames",
+	)
+	runtime.set("_agent_gateway", real_gateway)
+	gateway.free()
 
 
 func _setup_ui_runtime_host_navigation() -> void:
@@ -6910,6 +6949,7 @@ func _scenario_session_production_composition() -> void:
 		await process_frame
 		request_host.queue_free()
 		return
+	_verify_conversation_agent_dispatch_first_frame(runtime)
 	_expect_equal(runtime.call("get_connected_agent_names").size(), 15, "one gateway connects all 15 residents")
 	_expect_equal(gateway.call("get_connected_resident_ids").size(), 15, "gateway routes the stable ID set")
 	var first_id := String((bindings[0] as Dictionary).get("residentId", ""))
@@ -7563,6 +7603,55 @@ func _scenario_session_production_composition() -> void:
 		true,
 		"PauseMenuNavigationHost binds the same Adapter",
 	)
+	pause_host.call(
+		"_on_pause_intent_requested",
+		&"pause_menu.open_audio_video",
+		{},
+	)
+	pause_host.call(
+		"_on_pause_intent_requested",
+		&"pause_menu.open_audio_video",
+		{},
+	)
+	var pause_open_queued := pause_host.call("debug_snapshot") as Dictionary
+	_expect_equal(
+		pause_open_queued.get("route"),
+		"pause_menu",
+		"audio/display settings preserves the rendered pause route for the click frame",
+	)
+	_expect_equal(
+		pause_open_queued.get("pauseVisible"),
+		true,
+		"audio/display settings keeps the pause page visible while its route is pending",
+	)
+	_expect_equal(
+		pause_open_queued.get("settingsOpenPending"),
+		true,
+		"the first audio/display click owns the pending route transition",
+	)
+	await process_frame
+	var pause_settings_opened := pause_host.call("debug_snapshot") as Dictionary
+	_expect_equal(
+		pause_settings_opened.get("route"),
+		"audio_display_settings",
+		"audio/display settings opens after the stable pause frame",
+	)
+	_expect_equal(
+		pause_settings_opened.get("settingsInstanceCount"),
+		1,
+		"repeated audio/display clicks create only one settings page",
+	)
+	_expect_equal(
+		pause_settings_opened.get("pauseVisible"),
+		false,
+		"the pause page hides only after settings is mounted",
+	)
+	_expect_equal(
+		pause_host.call("close_audio_display_settings"),
+		true,
+		"audio/display settings returns to pause after the deferred transition",
+	)
+	await process_frame
 
 	var agent_participant: RefCounted = gateway.call("get_agent_save_participant")
 	var context := gateway.call("get_agent_save_context") as Dictionary
