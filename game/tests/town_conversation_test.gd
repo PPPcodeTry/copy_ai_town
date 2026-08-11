@@ -1634,7 +1634,7 @@ func _test_accept_multi_turn_overhear_and_end() -> void:
 	)
 	var lin_during_conversation := (
 		world.get("_residents") as Dictionary
-	).get("林岚", {}) as Dictionary
+	).get(POSTAL_ID, {}) as Dictionary
 	_expect_equal(
 		lin_during_conversation.get("decisionPending"),
 		false,
