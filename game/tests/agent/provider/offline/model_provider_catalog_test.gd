@@ -30,6 +30,7 @@ func _initialize() -> void:
 		provider_ids,
 		[
 			"deepseek",
+			"minimax",
 			"volcengine-ark",
 			"aliyun-bailian",
 			"kimi",
@@ -46,6 +47,19 @@ func _initialize() -> void:
 	)
 
 	_expect_equal(_model_ids(catalog, "deepseek"), ["deepseek-v4-flash", "deepseek-v4-pro"], "DeepSeek exposes V4 models")
+	_expect_equal(
+		_model_ids(catalog, "minimax"),
+		[
+			"MiniMax-M2.7",
+			"MiniMax-M2.7-highspeed",
+			"MiniMax-M2.5",
+			"MiniMax-M2.5-highspeed",
+			"MiniMax-M2.1",
+			"MiniMax-M2.1-highspeed",
+			"MiniMax-M2",
+		],
+		"MiniMax exposes the current OpenAI-compatible text models",
+	)
 	_expect_equal(
 		_model_ids(catalog, "volcengine-ark"),
 		[],
@@ -119,6 +133,12 @@ func _initialize() -> void:
 		"LM Studio does not require a placeholder API key",
 	)
 	_expect_equal(catalog.call("default_model_id"), "deepseek-v4-flash", "DeepSeek remains the global default")
+	_expect_equal(catalog.call("default_model_id", "minimax"), "MiniMax-M2.7", "MiniMax defaults to M2.7")
+	_expect_equal(
+		catalog.call("descriptor", "minimax").get("default_endpoint"),
+		"https://api.minimaxi.com/v1/chat/completions",
+		"MiniMax uses the official mainland chat endpoint",
+	)
 	_expect_equal(
 		catalog.call("default_model_id", "volcengine-ark"),
 		"",
@@ -179,6 +199,20 @@ func _initialize() -> void:
 		{"api_key": "test-key"},
 	) as Dictionary
 	_expect_equal(k3_creation.get("ok"), true, "catalog creates K3 through the model seam")
+	var minimax_creation := catalog.call(
+		"create_model",
+		"minimax",
+		"MiniMax-M2.7",
+		null,
+		{"api_key": "test-key"},
+	) as Dictionary
+	_expect_equal(minimax_creation.get("ok"), true, "catalog creates MiniMax through the model seam")
+	if minimax_creation.get("ok") == true:
+		_expect_equal(
+			minimax_creation.get("provider").call("get_provider_descriptor").get("model_id"),
+			"MiniMax-M2.7",
+			"MiniMax model id reaches the shared adapter",
+		)
 	if k3_creation.get("ok") == true:
 		_expect_equal(k3_creation.get("model_descriptor", {}).get("provider_id"), "kimi", "created K3 retains its route")
 		_expect_equal(k3_creation.get("provider").call("get_provider_descriptor").get("model_id"), "kimi-k3", "K3 model id reaches the shared adapter")

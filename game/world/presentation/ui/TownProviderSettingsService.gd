@@ -29,6 +29,7 @@ const COMPATIBLE_PROFILE_PREFIX := "openai-compatible-"
 const PROVIDER_DISPLAY_NAMES := {
 	"302-ai": "302.AI",
 	"deepseek": "DeepSeek",
+	"minimax": "MiniMax",
 	"kimi": "Kimi",
 	"lm-studio": "LM Studio（本地）",
 	"ollama": "Ollama（本地）",
