@@ -3,6 +3,7 @@ extends RefCounted
 
 
 const DeepSeekModelProviderScript := preload("res://agent/model/DeepSeekModelProvider.gd")
+const MiniMaxModelProviderScript := preload("res://agent/model/MiniMaxModelProvider.gd")
 const VolcengineArkModelProviderScript := preload("res://agent/model/VolcengineArkModelProvider.gd")
 const AlibabaBailianModelProviderScript := preload("res://agent/model/AlibabaBailianModelProvider.gd")
 const KimiModelProviderScript := preload("res://agent/model/KimiModelProvider.gd")
@@ -33,6 +34,7 @@ func _init(include_defaults := true) -> void:
 	if not include_defaults:
 		return
 	_register_provider_with_models(DeepSeekModelProviderScript, _create_deepseek, true)
+	_register_provider_with_models(MiniMaxModelProviderScript, _create_minimax)
 	_register_provider_with_models(VolcengineArkModelProviderScript, _create_volcengine_ark)
 	_register_provider_with_models(AlibabaBailianModelProviderScript, _create_alibaba_bailian)
 	_register_provider_with_models(KimiModelProviderScript, _create_kimi)
@@ -384,6 +386,10 @@ func create_model(
 
 func _create_deepseek(request_host: Node, config: Dictionary) -> RefCounted:
 	return DeepSeekModelProviderScript.new(request_host, null, config)
+
+
+func _create_minimax(request_host: Node, config: Dictionary) -> RefCounted:
+	return MiniMaxModelProviderScript.new(request_host, null, config)
 
 
 func _create_volcengine_ark(request_host: Node, config: Dictionary) -> RefCounted:
