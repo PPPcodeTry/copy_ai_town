@@ -1632,10 +1632,9 @@ func _test_accept_multi_turn_overhear_and_end() -> void:
 		true,
 		"player announcement can be published during a resident conversation",
 	)
-	var lin_during_conversation := world.call(
-		"get_resident_state",
-		"林岚",
-	) as Dictionary
+	var lin_during_conversation := (
+		world.get("_residents") as Dictionary
+	).get("林岚", {}) as Dictionary
 	_expect_equal(
 		lin_during_conversation.get("decisionPending"),
 		false,
