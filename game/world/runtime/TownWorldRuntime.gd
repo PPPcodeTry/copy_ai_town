@@ -10331,7 +10331,7 @@ func _submit_agent_activity(
 		resident,
 		true,
 		activity_id,
-		0,
+		1,
 	):
 		if String(
 			(option_value as Dictionary).get("activity_id", "")
@@ -17220,7 +17220,10 @@ func _agent_available_activities(
 	var attributes := resident.get("attributes", {}) as Dictionary
 	for option_value: Variant in query.get("options", []) as Array:
 		var option := option_value as Dictionary
-		if not bool(option.get("available", false)):
+		var route_check_deferred := bool(
+			option.get("routeCheckDeferred", false)
+		)
+		if not bool(option.get("available", false)) and not route_check_deferred:
 			continue
 		var activity_id := String(option.get("activityId", ""))
 		if (
@@ -17270,6 +17273,7 @@ func _agent_available_activities(
 			"activity_id": activity_id,
 			"label": String(option.get("label", "")),
 			"role": role,
+			"route_check_deferred": route_check_deferred,
 			"advances_current_work_task": not matching_task_ids.is_empty(),
 			"work_task_ids": matching_task_ids,
 			"work_task_capabilities": matching_task_capabilities,

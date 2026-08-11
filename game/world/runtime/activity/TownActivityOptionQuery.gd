@@ -191,18 +191,24 @@ static func query(
 				):
 					has_reachable = true
 					break
-			option["available"] = has_reachable
-			option["disabledReason"] = (
-				""
-				if has_reachable
-				else (
-					"ACTIVITY_REACHABILITY_DEFERRED"
-					if reachability_deferred
-					else "ACTIVITY_TARGET_UNREACHABLE"
-					if has_unreserved
-					else "ACTIVITY_RESERVATION_CONFLICT"
+			if reachability_deferred:
+				# The frame budget only limits new route work; it must not hide a
+				# reservation that has already passed the non-route checks. Keep it in
+				# the wake packet and let submission prioritize the chosen activity for
+				# one definitive route check.
+				option["routeCheckDeferred"] = true
+				option["disabledReason"] = "ACTIVITY_REACHABILITY_DEFERRED"
+			else:
+				option["available"] = has_reachable
+				option["disabledReason"] = (
+					""
+					if has_reachable
+					else (
+						"ACTIVITY_TARGET_UNREACHABLE"
+						if has_unreserved
+						else "ACTIVITY_RESERVATION_CONFLICT"
+					)
 				)
-			)
 	return world._decorate_command_result(result)
 
 
