@@ -79,6 +79,9 @@ const SOCIAL_REQUEST_FIELDS := [
 ]
 const SOCIAL_REQUEST_TEXT_MAX_LENGTH := 80
 const CONVERSATION_FOLLOW_UP_FIELDS := ["option_id"]
+const OPTIONAL_ACTION_FIELDS := {
+	"答话": ["traveler_affinity_delta"],
+}
 const REACTION_RESULT_STATUSES := [
 	"completed", "interrupted", "rejected", "failed",
 ]
@@ -442,6 +445,10 @@ static func canonicalize_decision(value: Dictionary) -> Dictionary:
 	var action_type := String(action["type"])
 	var canonical_action := {}
 	for field: String in ACTION_FIELDS[action_type]:
+		if action.has(field):
+			canonical_action[field] = action[field]
+	for field_value: Variant in OPTIONAL_ACTION_FIELDS.get(action_type, []) as Array:
+		var field := String(field_value)
 		if action.has(field):
 			canonical_action[field] = action[field]
 	if canonical_action.has("photos"):

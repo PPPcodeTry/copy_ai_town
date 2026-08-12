@@ -1060,7 +1060,7 @@ func _build_flow_surface() -> void:
 	composer_body.add_theme_constant_override("separation", 12)
 	_flow_composer_panel.add_child(composer_body)
 	_flow["composer_title"] = _make_label(
-		"写一张公告",
+		"写一张公告（发布者：旅行者）",
 		48,
 		PageTheme.INK,
 		"flow_composer_title",
@@ -1257,7 +1257,7 @@ func _render_surface(
 	var title := surface.get("title") as Label
 	title.text = str(panel.get("title", "公告栏"))
 	var composer_title := surface.get("composer_title") as Label
-	composer_title.text = "写一张公告"
+	composer_title.text = "写一张公告（发布者：旅行者）"
 	var recent_title := surface.get("recent_title") as Label
 	if recent_title != null:
 		recent_title.text = "最近公告"
@@ -1291,7 +1291,7 @@ func _render_surface(
 			body_label.visible = has_item
 			if has_item:
 				var item := page_items[index] as Dictionary
-				time_label.text = str(item.get("timeLabel", ""))
+				time_label.text = _announcement_time_copy(item)
 				body_label.text = str(item.get("text", ""))
 		var empty_label := surface.get("empty") as Label
 		empty_label.visible = _items.is_empty()
@@ -1537,7 +1537,7 @@ func _rebuild_flow_cards(page_items: Array) -> void:
 		content.add_theme_constant_override("separation", 8)
 		card.add_child(content)
 		var time_label := _make_label(
-			str(item.get("timeLabel", "")),
+			_announcement_time_copy(item),
 			24,
 			PageTheme.INK_MUTED,
 			"flow_card_%d_time" % (index + 1),
@@ -1554,6 +1554,12 @@ func _rebuild_flow_cards(page_items: Array) -> void:
 		)
 		body_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 		content.add_child(body_label)
+
+
+func _announcement_time_copy(item: Dictionary) -> String:
+	var publisher := String(item.get("publisherLabel", "")).strip_edges()
+	var time := String(item.get("timeLabel", ""))
+	return "%s · %s" % [publisher, time] if not publisher.is_empty() else time
 
 
 func _prepare_history_page() -> void:

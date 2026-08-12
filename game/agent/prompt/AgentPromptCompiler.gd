@@ -757,6 +757,11 @@ func _render_snapshot(wake_packet: Dictionary) -> String:
 			_safe(data.get("conversation_id", "")),
 			_person(data.get("with_resident_id", ""), data.get("with", "")),
 		])
+		if data.has("traveler_relationship"):
+			_render_traveler_relationship(
+				data.get("traveler_relationship"),
+				lines,
+			)
 		lines.append_array(_render_turns(data.get("turns", []) as Array))
 		var medical_context: Dictionary = {}
 		var medical_context_value: Variant = data.get(
@@ -800,6 +805,42 @@ func _render_snapshot(wake_packet: Dictionary) -> String:
 	else:
 		lines.append("当前对话：无")
 	return "\n".join(lines)
+
+
+func _render_traveler_relationship(value: Variant, lines: Array[String]) -> void:
+	if value is not Dictionary:
+		return
+	var relationship := value as Dictionary
+	var affinity := int(relationship.get("affinity", 50))
+	var affinity_label := _safe(relationship.get("affinity_label", "普通"))
+	var familiarity_label := _safe(
+		relationship.get("familiarity_label", "初次见面")
+	)
+	var last_change := _safe(relationship.get("last_change", ""))
+	var tone_hint := (
+		"明显疏远：保持警惕、冷淡和简短，不要主动表现亲近"
+		if affinity < 35
+		else "有些冷淡：可以正常回答，但保持距离，不要轻易袒露私事"
+		if affinity < 50
+		else "关系普通：按本人性格自然交流"
+		if affinity < 60
+		else "略有好感：可以更友善一些，但不要脱离本人性格"
+		if affinity < 75
+		else "关系不错：可以表现亲近和信任，仍要符合本人性格"
+	)
+	lines.append(
+		"与旅行者的关系：好感%d（%s）；熟悉程度%s；已完成%d次对话；被化身命中%d次。"
+		% [
+			affinity,
+			affinity_label,
+			familiarity_label,
+			int(relationship.get("conversation_count", 0)),
+			int(relationship.get("attack_count", 0)),
+		]
+	)
+	if not last_change.is_empty():
+		lines.append("最近一次关系变化：%s。" % last_change)
+	lines.append("回应语气参考：%s。关系只影响态度和措辞，不自动决定是否接受对话，也不能替本人编造已经发生的事实。" % tone_hint)
 
 
 func _render_events(events: Array) -> String:
@@ -1208,6 +1249,12 @@ func _render_constraints(constraints: Dictionary) -> String:
 				_safe(data["conversation_id"]),
 				_person(data.get("with_resident_id", ""), data.get("with", "")),
 			]
+		if data.has("traveler_affinity_delta"):
+			text += (
+				"；traveler_affinity_delta：只能填 -5 到 5 的整数，"
+				+ "根据本人性格和这次对话对旅行者的真实感受决定，"
+				+ "正数表示增加，负数表示减少，拿不准填 0"
+			)
 		if data.has("options"):
 			var options: Array[String] = []
 			for option_value: Variant in data["options"] as Array:
@@ -1298,6 +1345,14 @@ func _build_derived_constraints(wake_packet: Dictionary) -> Dictionary:
 			"with_resident_id": String((conversation as Dictionary).get("with_resident_id", "")),
 			"with": String((conversation as Dictionary).get("with", "")),
 		})
+		if _conversation_is_traveler(conversation as Dictionary):
+			(required_reply_action.get("fields", []) as Array).append(
+				"traveler_affinity_delta"
+			)
+			required_reply_action["traveler_affinity_delta"] = {
+				"min": -5,
+				"max": 5,
+			}
 		if medical_reply.is_empty():
 			(required_reply_action.get("fields", []) as Array).erase(
 				"medical_response",
@@ -1684,6 +1739,11 @@ func _action_constraints(action_type: String, parameters := {}) -> Dictionary:
 	var constraints := (parameters as Dictionary).duplicate(true)
 	constraints["fields"] = (AgentContractScript.ACTION_FIELDS[action_type] as Array).duplicate()
 	return constraints
+
+
+func _conversation_is_traveler(conversation: Dictionary) -> bool:
+	var with_id := String(conversation.get("with_resident_id", "")).strip_edges()
+	return not with_id.is_empty() and not _resident_names.has(with_id)
 
 
 func _known_place_names() -> Array[String]:

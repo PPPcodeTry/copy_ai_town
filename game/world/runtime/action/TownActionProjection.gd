@@ -93,6 +93,11 @@ static func submitted_action_for_preview(action: Dictionary) -> Dictionary:
 			if value is Array or value is Dictionary
 			else value
 		)
+	for field_value: Variant in VALIDATION.OPTIONAL_ACTION_FIELDS.get(action_type, []) as Array:
+		var field := String(field_value)
+		if not action.has(field):
+			continue
+		submitted[field] = action[field]
 	return submitted
 
 static func public_current_action(action: Dictionary) -> Variant:

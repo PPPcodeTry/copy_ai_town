@@ -49,6 +49,7 @@ const OPTIONAL_STATE_KEYS := [
 	"residentSleep",
 	"conflictState",
 	"residentLifecycle",
+	"travelerRelations",
 ]
 
 

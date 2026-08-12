@@ -1800,15 +1800,26 @@ func _render_relationships(content: Dictionary) -> void:
 			2,
 		)
 		var familiarity := item.get("familiarity", {}) as Dictionary
+		var affinity := item.get("affinity", {}) as Dictionary
 		var tension := item.get("tension", {}) as Dictionary
-		_add_local_row_label(
-			row_root,
-			"RelationMeters",
-			"关系称呼：%s\n亲近：%s\n相处：%s" % [
+		var relation_copy := (
+			"关系称呼：%s\n好感度：%s/100（%s）\n熟悉程度：%s" % [
+				str(item.get("relationshipLabel", "关系")),
+				str(affinity.get("value", 50)),
+				str(affinity.get("label", "普通")),
+				str(familiarity.get("label", "尚不了解")),
+			]
+			if bool(item.get("travelerRelation", false))
+			else "关系称呼：%s\n亲近：%s\n相处：%s" % [
 				str(item.get("relationshipLabel", "关系")),
 				str(familiarity.get("label", "尚不了解")),
 				str(tension.get("label", "没有明显矛盾")),
-			],
+			]
+		)
+		_add_local_row_label(
+			row_root,
+			"RelationMeters",
+			relation_copy,
 			Rect2(340, 5, 225, 98),
 			17,
 			Color("3f2818"),

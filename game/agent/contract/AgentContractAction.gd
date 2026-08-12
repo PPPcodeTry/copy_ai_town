@@ -20,6 +20,9 @@ static func _validate_action(
 		AgentContract.CONFLICT_CONTRACT.validate_action(action, wake_packet, errors)
 	if AgentContract.ACTION_FIELDS.has(action_type):
 		var allowed_fields: Array = (AgentContract.ACTION_FIELDS[action_type] as Array).duplicate()
+		allowed_fields.append_array(
+			AgentContract.OPTIONAL_ACTION_FIELDS.get(action_type, []) as Array
+		)
 		# 模型有时会把对话的 end 带到普通动作里；它不会参与执行，规范化时会丢弃。
 		if action_type != "答话":
 			allowed_fields.append("end")
@@ -176,6 +179,12 @@ static func _validate_action(
 			errors.append("拒绝搭话时 action.say 必须说明理由")
 		if not conversation_id.is_empty() and conversation_id != AgentContractWake._current_conversation_id(wake_packet):
 			errors.append("action.conversation_id 必须是当前对话编号")
+		if action.has("traveler_affinity_delta"):
+			var affinity_delta: Variant = action.get("traveler_affinity_delta")
+			if typeof(affinity_delta) != TYPE_INT:
+				errors.append("action.traveler_affinity_delta 必须是整数")
+			elif int(affinity_delta) < -5 or int(affinity_delta) > 5:
+				errors.append("action.traveler_affinity_delta 必须在 -5 到 5 之间")
 		AgentContractMedical._validate_medical_response(action, wake_packet, errors)
 	elif not action_type.is_empty() and not AgentContract.ACTION_TYPES.has(action_type):
 		errors.append("action.type 不是合法动作类型")

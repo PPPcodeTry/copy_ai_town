@@ -9,6 +9,7 @@ func _initialize() -> void:
 	if compiler_script != null:
 		_test_medical_response_contract(compiler_script)
 		_test_service_request_and_world_destination_constraints(compiler_script)
+		_test_traveler_relationship_context(compiler_script)
 	_finish_prompt_test("AGENT_SERVICE_PROMPT_PASS")
 
 
@@ -289,4 +290,58 @@ func _test_service_request_and_world_destination_constraints(
 		),
 		["中心广场", "图书馆"],
 		"travel constraints use the World allowlist exactly",
+	)
+
+
+func _test_traveler_relationship_context(compiler_script: Script) -> void:
+	var wake := _wake_packet("traveler-relationship-prompt-1", "晴天")
+	wake["snapshot"]["conversation"] = {
+		"conversation_id": "conversation-traveler-1",
+		"with_resident_id": "player-avatar",
+		"with": "旅行者",
+		"turns": [{
+			"turn_id": 1,
+			"speaker_resident_id": "player-avatar",
+			"speaker": "旅行者",
+			"say": "你好。",
+			"narration": "",
+			"photos": [],
+		}],
+		"traveler_relationship": {
+			"affinity": 28,
+			"affinity_label": "明显疏远",
+			"familiarity_level": 2,
+			"familiarity_label": "有些熟悉",
+			"conversation_count": 2,
+			"attack_count": 1,
+			"last_change": "化身攻击-10",
+		},
+	}
+	wake["events"] = [{
+		"event_id": "traveler-relationship-event-1",
+		"time": {"day": 1, "clock": "08:11", "period": "上午"},
+		"type": "搭话",
+		"conversation_id": "conversation-traveler-1",
+		"turn": (wake["snapshot"]["conversation"]["turns"][0] as Dictionary).duplicate(true),
+	}]
+	_expect_equal(
+		AGENT_CONTRACT.validate_wake_packet(wake),
+		[],
+		"traveler relationship context is accepted by the wake contract",
+	)
+	var compiler: RefCounted = compiler_script.new(_initialization())
+	var request := compiler.call("compile", wake, "") as Dictionary
+	var actions := (request.get("derived_constraints", {}) as Dictionary).get("actions", {}) as Dictionary
+	var reply_fields := (actions.get("答话", {}) as Dictionary).get("fields", []) as Array
+	_expect(
+		reply_fields.has("traveler_affinity_delta"),
+		"traveler conversation still requires the Agent-selected affinity delta",
+	)
+	var messages := request.get("messages", []) as Array
+	var user_text := String((messages[1] as Dictionary).get("content", "")) if messages.size() == 2 else ""
+	_expect(
+		user_text.contains("与旅行者的关系：好感28（明显疏远）")
+		and user_text.contains("最近一次关系变化：化身攻击-10")
+		and user_text.contains("保持警惕、冷淡和简短"),
+		"traveler relationship changes the Agent's conversation tone guidance",
 	)
