@@ -232,7 +232,7 @@ CI 最后会检查 `git status --porcelain`。常见来源：
 
 处理方法：在成功、失败、超时和取消的共同结算路径中清空请求状态保存的回调；transport 返回后如果请求已经同步完成，不再创建 watchdog。不要放宽 runner 对行首 `ERROR:` 或资源泄漏的检查。
 
-最终验证：provider robustness 测试必须覆盖有效宿主节点下的同步 transport，确认请求只结算一次、宿主没有残留 watchdog，并重新运行 Agent 离线套件和完整正式入口套件。
+最终验证：provider robustness 测试必须覆盖有效宿主节点下的同步 transport，确认请求只结算一次、宿主没有残留 watchdog，并重新运行 Agent 离线套件和完整正式入口套件。若改用 `SceneTreeTimer` 后测试要求检查宿主子节点数量，应改回宿主下的一次性 `Timer` 节点，并在结算时立即释放，不能只为通过断言而放宽资源泄漏检查。
 
 ### 发行工作流拒绝运行
 
@@ -303,6 +303,8 @@ gh run view <运行编号> --log-failed \
 直接原因：新请求状态保存了捕获自身的失败结算闭包，provider 测试中的同步 transport 使循环引用一直存活；同步完成后还会继续创建 watchdog。
 
 修复：结算时断开请求状态与闭包的引用，并在 transport 已同步完成时跳过 watchdog；补充同步 transport 的资源释放回归测试。
+
+后续验证：将 watchdog 改为 `SceneTreeTimer` 后，资源释放虽然交给场景树，但有效宿主下的在途请求不再有可检查的计时器节点，导致 watchdog 生命周期断言失败；最终改为宿主下的一次性 `Timer`，结算时同步停止并释放，保留同步完成跳过 watchdog 的处理。
 
 最终验证：基准提交同一套正式验证为 `48/48`；修复后必须重新确认 Agent 离线套件 `48/48`，并继续完成正式故事和源码目录清洁检查。
 
