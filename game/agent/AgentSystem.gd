@@ -286,6 +286,8 @@ func prepare_departure_messages(
 		if bool(eligible.get("eligible", false)):
 			candidates.append(resident_id)
 	candidates.sort()
+	if candidates.size() > max_candidates:
+		candidates.resize(max_candidates)
 	_departure_operations[normalized_id] = {
 		"status": "pending",
 		"departure_id": normalized_id,
@@ -327,6 +329,27 @@ func prepare_departure_messages(
 		"departure_id": normalized_id,
 		"candidate_ids": candidates.duplicate(),
 	}
+
+
+func cancel_departure_messages(departure_id: String) -> Dictionary:
+	var normalized_id := departure_id.strip_edges()
+	if normalized_id.is_empty():
+		return {"ok": false, "errors": ["退出留言取消标识无效"]}
+	if not _departure_operations.has(normalized_id):
+		return {"ok": true, "changed": false, "departure_id": normalized_id}
+	var operation := _departure_operations[normalized_id] as Dictionary
+	if String(operation.get("status", "")) != "pending":
+		return {"ok": true, "changed": false, "departure_id": normalized_id}
+	for resident_id_value: Variant in operation.get("candidates", []) as Array:
+		var resident := _residents.get(
+			String(resident_id_value),
+		) as AgentResidentRuntime
+		if resident != null:
+			resident.cancel_departure_message(normalized_id)
+	operation["status"] = "cancelled"
+	operation["callbacks"] = []
+	_departure_operations[normalized_id] = operation
+	return {"ok": true, "changed": true, "departure_id": normalized_id}
 
 
 func get_departure_debug_snapshot(departure_id: String) -> Dictionary:
@@ -661,6 +684,28 @@ func request_json_for_resident(
 	) as Dictionary
 
 
+func cancel_resident_model_request(
+	resident_id: String,
+	request_id: String,
+) -> Dictionary:
+	if not _session_open:
+		return {"ok": false, "errors": ["Agent 会话已关闭"]}
+	if not _residents.has(resident_id):
+		return {"ok": false, "errors": ["居民 %s 尚未初始化" % resident_id]}
+	var resident := _residents[resident_id] as AgentResidentRuntime
+	return resident.cancel_model_request(request_id)
+
+
+func cancel_all_resident_model_requests() -> int:
+	var cancelled_count := 0
+	for resident_value: Variant in _residents.values():
+		var resident := resident_value as AgentResidentRuntime
+		if resident == null:
+			continue
+		cancelled_count += resident.cancel_all_model_requests()
+	return cancelled_count
+
+
 func _wake_with_memory_claim_roots(wake_packet: Variant) -> Variant:
 	if typeof(wake_packet) != TYPE_DICTIONARY:
 		return wake_packet
@@ -941,6 +986,7 @@ func _finish_departure_operation(departure_id: String) -> void:
 func _invalidate_session() -> void:
 	if _session_epoch != null:
 		_session_epoch.call("invalidate")
+	cancel_all_resident_model_requests()
 	for resident: RefCounted in _residents.values():
 		_retired_residents.append(resident)
 		resident.call("retire", _release_retired_resident.bind(resident))

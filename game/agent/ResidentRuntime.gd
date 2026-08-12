@@ -28,6 +28,7 @@ var _on_retired_drained := Callable()
 var _persistent_state_applied := false
 var _model_provider: Object
 var _departure_message_proposals: Dictionary = {}
+var _cancelled_departure_ids: Dictionary = {}
 
 
 func _init(
@@ -342,6 +343,10 @@ func request_departure_message(
 ) -> Dictionary:
 	if not on_complete.is_valid():
 		return {"ok": false, "errors": ["退出留言回调无效"]}
+	var normalized_departure_id := departure_id.strip_edges()
+	if normalized_departure_id.is_empty():
+		return {"ok": false, "errors": ["退出留言标识无效"]}
+	_cancelled_departure_ids.erase(normalized_departure_id)
 	var organization := _avatar_memory_module.prepare_departure_organization(
 	) as Dictionary
 	if not bool(organization.get("ok", false)):
@@ -504,7 +509,46 @@ func request_json(model_request: Dictionary, on_complete: Callable) -> Dictionar
 	return {"ok": true, "started": true}
 
 
+func cancel_model_request(request_id: String) -> Dictionary:
+	var normalized_request_id := request_id.strip_edges()
+	if normalized_request_id.is_empty():
+		return {"ok": false, "errors": ["模型请求编号不能为空"]}
+	if _model_provider == null or not _model_provider.has_method("cancel_request"):
+		return {
+			"ok": false,
+			"supported": false,
+			"requestId": normalized_request_id,
+		}
+	if normalized_request_id == _current_decision_id:
+		# 让迟到的旧回调走 stale 分支，不能再提交旧决定或改写当前居民状态。
+		_current_request_has_result = true
+	var cancelled := bool(_model_provider.call(
+		"cancel_request",
+		normalized_request_id,
+	))
+	return {
+		"ok": cancelled,
+		"supported": true,
+		"requestId": normalized_request_id,
+	}
+
+
+func cancel_all_model_requests() -> int:
+	if _model_provider == null or not _model_provider.has_method("cancel_all_requests"):
+		return 0
+	# 会话关闭/切换时先让当前决定失效，取消产生的同步回调只能走 stale。
+	_current_request_has_result = true
+	var cancelled_count := int(_model_provider.call("cancel_all_requests"))
+	_model_provider = null
+	return cancelled_count
+
+
 func _request_json(model_request: Dictionary, on_complete: Callable) -> void:
+	var request_id := String(
+		model_request.get("_agent_request_id", _current_decision_id)
+	).strip_edges()
+	if not request_id.is_empty():
+		model_request["_agent_request_id"] = request_id
 	if _model_provider.has_method("request_json"):
 		_model_provider.call("request_json", model_request, on_complete)
 		return
@@ -814,6 +858,9 @@ func _on_departure_organization_result(
 ) -> void:
 	if bool(completion_state.get("completed", false)):
 		return
+	if _cancelled_departure_ids.has(departure_id):
+		_finish_request(completion_state)
+		return
 	var attempt_key := "departure_organization_attempt_%d_completed" % (
 		retry_attempt
 	)
@@ -876,6 +923,10 @@ func _on_departure_message_result(
 ) -> void:
 	if bool(completion_state.get("completed", false)):
 		return
+	var departure_id := String(token.get("departure_id", ""))
+	if _cancelled_departure_ids.has(departure_id):
+		_finish_request(completion_state)
+		return
 	if _session_epoch != null and not bool(
 		_session_epoch.is_current(captured_epoch),
 	):
@@ -910,12 +961,23 @@ func _on_departure_message_result(
 		and bool(accepted.get("wrote", false))
 		and accepted.get("proposal") is Dictionary
 	):
-		var departure_id := String(token.get("departure_id", ""))
 		_departure_message_proposals[departure_id] = (
 			accepted.get("proposal", {}) as Dictionary
 		).duplicate(true)
 		accepted.erase("proposal")
 	on_complete.call(accepted.duplicate(true))
+
+
+func cancel_departure_message(departure_id: String) -> Dictionary:
+	var normalized_id := departure_id.strip_edges()
+	if normalized_id.is_empty():
+		return {"ok": false, "errors": ["退出留言取消标识无效"]}
+	_cancelled_departure_ids[normalized_id] = true
+	var discarded := discard_departure_message_proposal(normalized_id)
+	if not bool(discarded.get("ok", false)):
+		return discarded
+	discarded["changed"] = true
+	return discarded
 
 
 func _combined_memory_prompt(

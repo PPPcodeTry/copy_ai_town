@@ -156,6 +156,11 @@ class ScriptedProvider:
 
 
 func _initialize() -> void:
+	_prepare_project_shutdown()
+	call_deferred("_run")
+
+
+func _run() -> void:
 	_test_runtime_prompt_persistence_and_legacy_migration()
 	_test_runtime_departure_forces_pending_avatar_organization()
 	_test_agent_system_departure_limit_and_idempotency()
@@ -165,11 +170,24 @@ func _initialize() -> void:
 	cleanup_store.call("cleanup_test_root")
 	if _failures.is_empty():
 		print("AVATAR_MEMORY_RUNTIME_INTEGRATION_PASS")
-		quit(0)
-		return
-	for failure in _failures:
-		printerr("AVATAR_MEMORY_RUNTIME_INTEGRATION_FAIL: %s" % failure)
-	quit(1)
+	else:
+		for failure in _failures:
+			printerr("AVATAR_MEMORY_RUNTIME_INTEGRATION_FAIL: %s" % failure)
+	_prepare_project_shutdown()
+	call_deferred("_quit_after_shutdown", 0 if _failures.is_empty() else 1)
+
+
+func _prepare_project_shutdown() -> void:
+	var audio_controller := root.get_node_or_null("TownAudioController")
+	if audio_controller != null and audio_controller.has_method("prepare_shutdown"):
+		audio_controller.call("prepare_shutdown")
+
+
+func _quit_after_shutdown(exit_code: int) -> void:
+	await process_frame
+	_prepare_project_shutdown()
+	await create_timer(0.3, true, false, true).timeout
+	quit(exit_code)
 
 
 func _test_runtime_prompt_persistence_and_legacy_migration() -> void:
@@ -435,8 +453,8 @@ func _test_agent_system_departure_limit_and_idempotency() -> void:
 	)
 	_expect_equal(
 		(departure_result.get("candidate_ids", []) as Array).size(),
-		4,
-		"all eligible residents receive the departure judgment",
+		2,
+		"departure judgment is limited to two idle residents",
 	)
 	_expect_equal(
 		(departure_result.get("messages", []) as Array).size(),
@@ -446,7 +464,7 @@ func _test_agent_system_departure_limit_and_idempotency() -> void:
 	var calls_after_first := 0
 	for provider in providers:
 		calls_after_first += provider.departure_calls
-	_expect_equal(calls_after_first, 4, "all eligible residents call the model")
+	_expect_equal(calls_after_first, 2, "only two idle residents call the model")
 	for provider in providers:
 		provider.fail_departure = false
 		provider.write_message = false
@@ -480,8 +498,8 @@ func _test_agent_system_departure_limit_and_idempotency() -> void:
 	)
 	_expect_equal(
 		(screened_result.get("candidate_ids", []) as Array).size(),
-		0,
-		"residents with no new avatar memory are no longer candidates",
+		2,
+		"the bounded first pass leaves the other residents for a later pass",
 	)
 	_add_new_avatar_evidence(system, "before-one")
 	providers[0].write_message = true
@@ -550,13 +568,13 @@ func _test_agent_system_departure_limit_and_idempotency() -> void:
 		(
 			written_result.get("message_candidate_ids", []) as Array
 		).size(),
-		4,
-		"four write decisions become four message candidates",
+		2,
+		"two bounded write decisions become two message candidates",
 	)
 	_expect_equal(
 		(written_result.get("messages", []) as Array).size(),
 		2,
-		"more than two message candidates are sampled down to two",
+		"the bounded pass keeps its two prepared messages",
 	)
 	_expect_equal(
 		(
@@ -574,14 +592,14 @@ func _test_agent_system_departure_limit_and_idempotency() -> void:
 			func(result: Dictionary) -> void:
 				post_written_screened.merge(result, true),
 		),
-		"selected and unselected proposals both finish screening",
+		"a later bounded pass can continue with the remaining residents",
 	)
 	_expect_equal(
 		(
 			post_written_screened.get("candidate_ids", []) as Array
 		).size(),
-		0,
-		"unselected third and fourth proposals do not repeat next departure",
+		2,
+		"the next bounded pass processes the remaining residents",
 	)
 	var repeated := {}
 	_expect_ok(
@@ -599,7 +617,7 @@ func _test_agent_system_departure_limit_and_idempotency() -> void:
 		calls_after_repeat += provider.departure_calls
 	_expect_equal(
 		calls_after_repeat,
-		20,
+		14,
 		"same departure id does not call residents again",
 	)
 	_expect_equal(repeated, departure_result, "idempotent result is stable")
@@ -620,8 +638,8 @@ func _test_agent_system_departure_limit_and_idempotency() -> void:
 		).size()
 	_expect_equal(
 		sent_message_count,
-		5,
-		"only one plus two plus two selected proposals are persisted",
+		7,
+		"bounded passes persist only the proposals selected in each pass",
 	)
 	system.call("close_game")
 
