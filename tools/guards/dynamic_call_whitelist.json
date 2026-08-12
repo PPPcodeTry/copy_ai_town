@@ -302,6 +302,18 @@
       "func": "_continue_quit_after_save",
       "call": "string:.call(\"resume_background_departure_messages\")",
       "reason": "正式保存失败后恢复后台留言探针；宿主仍需兼容旧版或测试网关，故保留经过 has_method 检查的动态调用。"
+    },
+    {
+      "path": "game/world/presentation/game_flow/GameFlowHost.gd",
+      "func": "_prepare_session_departure",
+      "call": "string:.call(\"clear_background_departure_messages\")",
+      "reason": "正式保存成功后确认后台留言已经写入存档；宿主仍需兼容测试网关，故保留经过 has_method 检查的动态调用。"
+    },
+    {
+      "path": "game/world/presentation/game_flow/GameFlowHost.gd",
+      "func": "_prepare_session_departure",
+      "call": "string:.call(\"get_background_departure_messages\")",
+      "reason": "退出保存需要读取正式网关已完成的后台留言；宿主仍需兼容测试网关，故保留经过 has_method 检查的动态调用。"
     }
   ]
 }

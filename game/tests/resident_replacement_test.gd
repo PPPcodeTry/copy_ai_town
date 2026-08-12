@@ -15,6 +15,7 @@ class ReturnToStartGateway:
 	extends Node
 	var calls := 0
 	var cancel_calls := 0
+	var clear_calls := 0
 	var messages: Array[Dictionary] = [{
 		"message_id": "resident-message-return-test",
 		"resident_id": "resident-lin-lan",
@@ -25,6 +26,53 @@ class ReturnToStartGateway:
 	func cancel_background_departure_messages() -> Dictionary:
 		cancel_calls += 1
 		return {"ok": true, "changed": true}
+
+	func get_background_departure_messages() -> Array[Dictionary]:
+		return messages.duplicate(true)
+
+	func clear_background_departure_messages() -> Dictionary:
+		clear_calls += 1
+		return {"ok": true, "changed": true}
+
+
+class EmptyBackgroundDepartureGateway:
+	extends Node
+
+	func cancel_background_departure_messages() -> Dictionary:
+		return {"ok": true, "changed": false}
+
+	func get_background_departure_messages() -> Array[Dictionary]:
+		return []
+
+
+class DepartureSaveService:
+	extends RefCounted
+	var request: Dictionary = {}
+
+	func get_save_snapshot() -> Dictionary:
+		return {"canSave": true}
+
+	func create_save(value: Dictionary) -> Dictionary:
+		request = value.duplicate(true)
+		return {"ok": true, "errorCode": "", "retryable": false}
+
+
+class BaseDepartureHarness:
+	extends "res://world/presentation/game_flow/GameFlowHost.gd"
+
+	func _begin_town_entry_loading(
+		_route_kind: String,
+		_generation := -1,
+		_owner := "",
+		_context: Dictionary = {},
+	) -> void:
+		pass
+
+	func _advance_town_entry_loading(
+		_progress: float,
+		_status_text: String,
+	) -> void:
+		pass
 
 
 class ReturnToStartWiringHarness:
@@ -284,13 +332,45 @@ func _verify_return_to_start_does_not_wait_for_messages() -> void:
 	var result := host.request_return_to_start()
 	_expect_equal(gateway.calls, 0, "返回主菜单不会临时请求居民留言")
 	_expect_equal(gateway.cancel_calls, 1, "返回主菜单会取消后台留言任务")
-	_expect_equal(host.saved_messages, [], "返回主菜单只保存权威存档数据")
+	_expect_equal(host.saved_messages, gateway.messages, "返回主菜单会保存后台已准备的居民留言")
 	_expect_equal(host.routed_departures.size(), 1, "留言保存后只返回一次主菜单")
 	_expect_equal(host.process_quit_count, 0, "返回主菜单不会退出游戏进程")
 	_expect(bool(result.get("ok", false)), "返回主菜单保存链路成功结束")
 	host.free()
 	runtime.free()
 	gateway.free()
+
+	var base_gateway := ReturnToStartGateway.new()
+	var base_host := BaseDepartureHarness.new()
+	var base_runtime := Node.new()
+	var base_save_service := DepartureSaveService.new()
+	base_host.set("_gateway", base_gateway)
+	base_host.set("_town_runtime", base_runtime)
+	base_host.set("_session_ui_service", base_save_service)
+	var base_result := base_host.call("_prepare_session_departure") as Dictionary
+	_expect(bool(base_result.get("ok", false)), "正式退出保存会成功结束")
+	_expect_equal(
+		base_save_service.request.get("residentMessages", []),
+		base_gateway.messages,
+		"正式退出保存会带上后台已准备的居民留言",
+	)
+	_expect_equal(base_gateway.clear_calls, 1, "保存成功后清理后台留言缓存")
+	base_host.free()
+	base_runtime.free()
+	base_gateway.free()
+
+	var empty_gateway := EmptyBackgroundDepartureGateway.new()
+	var empty_host := ReturnToStartWiringHarness.new()
+	var empty_runtime := Node.new()
+	var empty_save_service := RefCounted.new()
+	empty_host.set("_gateway", empty_gateway)
+	empty_host.set("_town_runtime", empty_runtime)
+	empty_host.set("_session_ui_service", empty_save_service)
+	empty_host.request_return_to_start()
+	_expect_equal(empty_host.saved_messages, [], "没有后台留言时保存空留言列表")
+	empty_host.free()
+	empty_runtime.free()
+	empty_gateway.free()
 
 func _verify_async_recovery(
 	opening: Dictionary,

@@ -6250,12 +6250,45 @@ func _prepare_session_departure(resident_messages: Array = []) -> Dictionary:
 			String(snapshot.get("disabledReason", "SESSION_SAVE_NOT_AVAILABLE")),
 			false,
 		)
+	resident_messages = resident_messages.duplicate(true)
+	if (
+		_gateway != null
+		and is_instance_valid(_gateway)
+		and _gateway.has_method("get_background_departure_messages")
+	):
+		var background_messages := (
+			_gateway.call("get_background_departure_messages") as Array
+		)
+		for message_value: Variant in background_messages:
+			if not message_value is Dictionary:
+				continue
+			var message := message_value as Dictionary
+			var resident_id := String(message.get("resident_id", ""))
+			var already_present := false
+			for existing_value: Variant in resident_messages:
+				if (
+					existing_value is Dictionary
+					and String((existing_value as Dictionary).get("resident_id", ""))
+						== resident_id
+				):
+					already_present = true
+					break
+			if not already_present:
+				resident_messages.append(message.duplicate(true))
+		while resident_messages.size() > 2:
+			resident_messages.pop_front()
 	var saved := _session_ui_service.call("create_save", {
 		"reason": "session_departure",
 		"residentMessages": resident_messages.duplicate(true),
 	}) as Dictionary
 	if not bool(saved.get("ok", false)):
 		return saved
+	if (
+		_gateway != null
+		and is_instance_valid(_gateway)
+		and _gateway.has_method("clear_background_departure_messages")
+	):
+		_gateway.call("clear_background_departure_messages")
 	if _gateway != null and _gateway.has_method("close_session"):
 		var closed := _gateway.call("close_session") as Dictionary
 		if not bool(closed.get("ok", false)):

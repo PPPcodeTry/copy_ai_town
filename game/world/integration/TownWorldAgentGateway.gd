@@ -120,6 +120,7 @@ var _request_metrics: Dictionary = {
 var _background_departure_probe_id := 0
 var _background_departure_operation_id := ""
 var _background_departure_pending := false
+var _background_departure_messages: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -219,14 +220,50 @@ func _background_departure_can_run() -> bool:
 	return true
 
 
-func _on_background_departure_messages_ready(_result: Dictionary) -> void:
+func _on_background_departure_messages_ready(result: Dictionary) -> void:
 	if not _background_departure_pending:
 		return
+	_remember_background_departure_messages(result)
 	_background_departure_pending = false
 	_background_departure_operation_id = ""
 	_schedule_background_departure_probe(
 		BACKGROUND_DEPARTURE_INTERVAL_SECONDS,
 	)
+
+
+func _remember_background_departure_messages(result: Dictionary) -> void:
+	var messages_value: Variant = result.get("messages", [])
+	if not messages_value is Array:
+		return
+	for message_value: Variant in messages_value as Array:
+		if not message_value is Dictionary:
+			continue
+		var message := (message_value as Dictionary).duplicate(true)
+		var resident_id := String(message.get("resident_id", "")).strip_edges()
+		var message_id := String(message.get("message_id", "")).strip_edges()
+		if resident_id.is_empty() or message_id.is_empty():
+			continue
+		for index in _background_departure_messages.size():
+			var existing := _background_departure_messages[index]
+			if (
+				String(existing.get("resident_id", "")) == resident_id
+				or String(existing.get("message_id", "")) == message_id
+			):
+				_background_departure_messages.remove_at(index)
+				break
+		_background_departure_messages.append(message)
+	while _background_departure_messages.size() > 2:
+		_background_departure_messages.pop_front()
+
+
+func get_background_departure_messages() -> Array[Dictionary]:
+	return _background_departure_messages.duplicate(true)
+
+
+func clear_background_departure_messages() -> Dictionary:
+	var changed := not _background_departure_messages.is_empty()
+	_background_departure_messages.clear()
+	return {"ok": true, "changed": changed}
 
 
 func _cancel_background_departure_messages() -> void:
@@ -351,6 +388,7 @@ func configure_session(
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
 	_reset_request_metrics()
+	_background_departure_messages.clear()
 	_pump_cursor = 0
 	_errors.clear()
 	_last_submissions.clear()
@@ -1638,6 +1676,7 @@ func hydrate_agent_restore(
 
 func close_session() -> Dictionary:
 	_cancel_background_departure_messages()
+	_background_departure_messages.clear()
 	_generation += 1
 	_inflight.clear()
 	_agent_preparation_queue.clear()
@@ -1657,6 +1696,7 @@ func discard_unpublished_new_game(
 ) -> Dictionary:
 	var context := _save_context.duplicate(true)
 	var had_active_session := _session_active
+	_background_departure_messages.clear()
 	var photo_discard := _photo_store.discard_unpublished_session(restore_photo_blocker,) as Dictionary
 	if not bool(photo_discard.get("ok", false)):
 		return _normalized_failure(
