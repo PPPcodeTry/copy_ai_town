@@ -493,9 +493,14 @@ func validate_intent_shape(value: Variant) -> bool:
 		required_fields.erase("option_id")
 	if action_type == "答话" and not action.has("medical_response"):
 		required_fields.erase("medical_response")
+	var exact_fields := required_fields.duplicate()
+	for field_value: Variant in AgentContractScript.OPTIONAL_ACTION_FIELDS.get(action_type, []) as Array:
+		var field := String(field_value)
+		if action.has(field):
+			exact_fields.append(field)
 	if not _has_exact_fields(
 		action,
-		required_fields,
+		exact_fields,
 	):
 		return false
 	for field_name: String in required_fields:
@@ -514,6 +519,14 @@ func validate_intent_shape(value: Variant) -> bool:
 		elif (
 			typeof(action.get(field_name)) != TYPE_STRING
 			or String(action.get(field_name)).strip_edges().is_empty()
+		):
+			return false
+	if action_type == "答话" and action.has("traveler_affinity_delta"):
+		var affinity_delta: Variant = action.get("traveler_affinity_delta")
+		if (
+			typeof(affinity_delta) != TYPE_INT
+			or int(affinity_delta) < -5
+			or int(affinity_delta) > 5
 		):
 			return false
 	if action_type in ["搭话", "答话"]:

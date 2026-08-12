@@ -773,6 +773,11 @@ func _render_snapshot(wake_packet: Dictionary) -> String:
 			_safe(data.get("conversation_id", "")),
 			_person(data.get("with_resident_id", ""), data.get("with", "")),
 		])
+		if data.has("traveler_relationship"):
+			_render_traveler_relationship(
+				data.get("traveler_relationship"),
+				lines,
+			)
 		lines.append_array(_render_turns(data.get("turns", []) as Array))
 		var medical_context: Dictionary = {}
 		var medical_context_value: Variant = data.get(
@@ -816,6 +821,85 @@ func _render_snapshot(wake_packet: Dictionary) -> String:
 	else:
 		lines.append("当前对话：无")
 	return "\n".join(lines)
+
+
+func _render_traveler_relationship(value: Variant, lines: Array[String]) -> void:
+	if value is not Dictionary:
+		return
+	var relationship := value as Dictionary
+	var affinity := int(relationship.get("affinity", 50))
+	var affinity_label := _safe(relationship.get("affinity_label", "普通"))
+	var familiarity_level := clampi(
+		int(relationship.get("familiarity_level", 0)),
+		0,
+		5,
+	)
+	var familiarity_label := _safe(
+		relationship.get("familiarity_label", "尚未交谈")
+	)
+	var last_change := _safe(relationship.get("last_change", ""))
+	var tone_hint := (
+		"明显疏远：保持警惕，能少说就少说；必要时明确拒绝或结束对话"
+		if affinity < 35
+		else "有些冷淡：回答必要内容但保持距离，不主动延长话题或袒露私事"
+		if affinity < 45
+		else "关系普通：按本人性格回应眼前话题，不额外装熟或示好"
+		if affinity < 53
+		else "开始在意：不能只换一个更客气的语气；话题允许时，答完后多说一句只会对在意的人说的话，例如个人看法、近况反问或一点真实感受"
+		if affinity < 63
+		else "关系不错：合适时主动接续旧话题、关心近况，给出一项真诚而可行的建议"
+		if affinity < 80
+		else "信任：可以主动问起未完的事，分享一项自己的感受或顾虑，不必只回答问题"
+		if affinity < 90
+		else "很亲近：要让旅行者从内容中听出自己不是普通熟人，但不要直说关系标签。旅行者表达烦恼、疲惫、害怕或难过时，必须先接住这份情绪，并至少落实一项个人关系信号：明确说对方的状态让自己担心或不踏实；明确说对方可以留在“我这里”且本人愿意听；或接上只有双方知道的共同记忆。单纯叫对方休息不算，不能只给泛泛建议。差异示例：普通熟人会说“别急，歇会儿”，很亲近的人可能说“你先在我这儿坐着。你这样乱着，我没法当没看见”。只参考亲疏差异，禁止照抄例句"
+	)
+	var familiarity_hint := (
+		"你们还没有完成过双向对话；不要假装以前聊过，也不要说又见面"
+		if familiarity_level == 0
+		else "你们刚刚认识；认得对方即可，不要表现得像熟人"
+		if familiarity_level == 1
+		else "你们已有一些来往；避免重复初次自我介绍，可接续相关旧话题"
+		if familiarity_level == 2
+		else "你们已经熟悉；当前话题相关时，可自然提起一项已确认的旧事"
+		if familiarity_level == 3
+		else "你们很熟悉；可主动追问一项未完的话题，但不要罗列记忆"
+		if familiarity_level == 4
+		else "你们是老相识；表达应有连续性，但熟悉不等于喜欢或信任"
+	)
+	var combined_hint := (
+		"你熟悉旅行者但对其反感：可以记得旧事，同时保持疏远，不能因熟悉而显得亲近"
+		if familiarity_level >= 2 and affinity < 50
+		else "你对旅行者印象很好但来往还少：可以友善，但不要假装已有深厚共同经历"
+		if familiarity_level <= 1 and affinity >= 75
+		else "熟悉程度决定你是否能自然接续过去，好感度决定你愿意以什么态度接续"
+	)
+	lines.append(
+		"与旅行者的关系：好感%d（%s）；熟悉程度%s；已完成%d次对话；被化身命中%d次。"
+		% [
+			affinity,
+			affinity_label,
+			familiarity_label,
+			int(relationship.get("conversation_count", 0)),
+			int(relationship.get("attack_count", 0)),
+		]
+	)
+	if not last_change.is_empty():
+		lines.append("最近一次关系变化：%s。" % last_change)
+	lines.append("熟悉程度参考：%s。" % familiarity_hint)
+	lines.append("关系组合参考：%s。" % combined_hint)
+	lines.append(
+		"好感表现参考：%s。每轮只在合适时表现一两项，不要固定追加反问、关心或帮助。关系不自动决定是否接受对话。"
+		% tone_hint,
+	)
+	lines.append(
+		"化身记忆是过去互动线索的唯一来源：若[关于化身的个人记忆]中有与当前话题直接相关且来源明确的内容，可自然接续其中一项；有争议的内容只能按争议状态表达，没有就不要编造。不要复述关系数值、标签或整段记忆。",
+	)
+	lines.append(
+		"回应旅行者真正表达的意思，不要只提取事实或问题。旅行者在关心、体谅或道歉时，先用符合本人性格的方式接住这份态度；不要习惯性用“你有事？”、“知道了”或“先这样”收尾。",
+	)
+	lines.append(
+		"说话必须像当面聊天，不写成任务回执、客服答复或关系总结。即使本人话少，也要使用完整自然的短句；话少表示少说一两句，不表示省掉正常称呼、语气和衔接。",
+	)
 
 
 func _render_events(events: Array) -> String:
@@ -1224,6 +1308,29 @@ func _render_constraints(constraints: Dictionary) -> String:
 				_safe(data["conversation_id"]),
 				_person(data.get("with_resident_id", ""), data.get("with", "")),
 			]
+		if data.has("traveler_affinity_delta"):
+			text += (
+				"；traveler_affinity_delta：只能填 -5 到 5 的整数，"
+				+ "只根据旅行者这次已确认的言行、本人性格与相关化身记忆判断；"
+				+ "普通寒暄、重复旧话和仅仅完成对话填 0，不能因为变熟自动增加；"
+				+ "一次令人舒服但很轻微的交流填 +1；已确认记得本人的事、尊重边界或真诚关心时应填 +2，不能因为本人话少或没有明显表露情绪而降成 +1；"
+				+ "兑现对本人的承诺、切实帮助本人或建立明显信任可填 +3 到 +5；"
+				+ "冒犯、欺骗或施压按程度填 -1 到 -5；"
+				+ "正数表示增加，负数表示减少，证据不足填 0"
+			)
+		if data.has("traveler_relationship_beat"):
+			var beat := data.get("traveler_relationship_beat", {}) as Dictionary
+			var beat_guidance := (
+				"；traveler_relationship_beat：必须填对象"
+				+ " {\"kind\":\"关系表现类型\",\"text\":\"关系表现句\"}；"
+				+ "kind 只能从 %s 选择；text 最多 %d 字，必须原样出现在 action.say 中；"
+				+ "先单独想出符合当前亲疏和本人性格的一小句，再围绕它完成整句答话；"
+				+ "普通建议、事实回答和单纯叫对方休息不能充当关系表现句"
+			)
+			text += beat_guidance % [
+				_join(beat.get("kinds", [])),
+				int(beat.get("max_characters", 80)),
+			]
 		if data.has("options"):
 			var options: Array[String] = []
 			for option_value: Variant in data["options"] as Array:
@@ -1314,6 +1421,26 @@ func _build_derived_constraints(wake_packet: Dictionary) -> Dictionary:
 			"with_resident_id": String((conversation as Dictionary).get("with_resident_id", "")),
 			"with": String((conversation as Dictionary).get("with", "")),
 		})
+		if _conversation_is_traveler(conversation as Dictionary):
+			(required_reply_action.get("fields", []) as Array).append(
+				"traveler_affinity_delta"
+			)
+			required_reply_action["traveler_affinity_delta"] = {
+				"min": -5,
+				"max": 5,
+			}
+			var beat_kinds := _traveler_relationship_beat_kinds(
+				conversation as Dictionary,
+			)
+			if not beat_kinds.is_empty():
+				(required_reply_action.get("fields", []) as Array).append(
+					"traveler_relationship_beat",
+				)
+				required_reply_action["traveler_relationship_beat"] = {
+					"fields": ["kind", "text"],
+					"kinds": beat_kinds,
+					"max_characters": 80,
+				}
 		if medical_reply.is_empty():
 			(required_reply_action.get("fields", []) as Array).erase(
 				"medical_response",
@@ -1700,6 +1827,27 @@ func _action_constraints(action_type: String, parameters := {}) -> Dictionary:
 	var constraints := (parameters as Dictionary).duplicate(true)
 	constraints["fields"] = (AgentContractScript.ACTION_FIELDS[action_type] as Array).duplicate()
 	return constraints
+
+
+func _conversation_is_traveler(conversation: Dictionary) -> bool:
+	var with_id := String(conversation.get("with_resident_id", "")).strip_edges()
+	return not with_id.is_empty() and not _resident_names.has(with_id)
+
+
+func _traveler_relationship_beat_kinds(
+	conversation: Dictionary,
+) -> Array[String]:
+	var relationship := conversation.get("traveler_relationship", {}) as Dictionary
+	var affinity := int(relationship.get("affinity", 50))
+	if relationship.is_empty() or affinity < 53:
+		return []
+	if affinity < 63:
+		return ["personal_view", "reciprocal_question"]
+	if affinity < 80:
+		return ["old_topic", "practical_care", "personal_view"]
+	if affinity < 90:
+		return ["personal_feeling", "unfinished_concern", "private_worry"]
+	return ["personal_stake", "safe_place", "shared_rapport"]
 
 
 func _known_place_names() -> Array[String]:

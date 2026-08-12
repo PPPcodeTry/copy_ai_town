@@ -195,6 +195,9 @@ static func prepare(
 	var resident_lifecycle_value: Variant = state.get("residentLifecycle")
 	if state.has("residentLifecycle") and resident_lifecycle_value is not Dictionary:
 		errors.append("世界存档 residentLifecycle 必须是对象")
+	var traveler_relations_value: Variant = state.get("travelerRelations")
+	if state.has("travelerRelations") and not traveler_relations_value is Dictionary:
+		errors.append("世界存档 travelerRelations 必须是对象")
 	if not errors.is_empty():
 		return {"ok": false, "errors": errors}
 	return {
@@ -295,6 +298,11 @@ static func prepare(
 		"residentLifecycle": (
 			(resident_lifecycle_value as Dictionary).duplicate(true)
 			if state.has("residentLifecycle")
+			else null
+		),
+		"travelerRelations": (
+			(traveler_relations_value as Dictionary).duplicate(true)
+			if state.has("travelerRelations")
 			else null
 		),
 	}

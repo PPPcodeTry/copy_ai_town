@@ -35,6 +35,54 @@ static func _validate_conversation(conversation: Dictionary, errors: Array[Strin
 				"",
 				errors,
 			)
+	if conversation.has("traveler_relationship"):
+		_validate_traveler_relationship(
+			conversation.get("traveler_relationship"),
+			"snapshot.conversation.traveler_relationship",
+			errors,
+		)
+
+
+static func _validate_traveler_relationship(
+	value: Variant,
+	path: String,
+	errors: Array[String],
+) -> void:
+	if value is not Dictionary:
+		errors.append("%s 必须是对象" % path)
+		return
+	var relationship := value as Dictionary
+	AgentContractIdentity._validate_allowed_fields(
+		relationship,
+		[
+			"affinity",
+			"affinity_label",
+			"familiarity_level",
+			"familiarity_label",
+			"conversation_count",
+			"attack_count",
+			"last_change",
+		],
+		path,
+		errors,
+	)
+	var affinity: Variant = relationship.get("affinity")
+	if typeof(affinity) != TYPE_INT or int(affinity) < 0 or int(affinity) > 100:
+		errors.append("%s.affinity 必须是 0 到 100 的整数" % path)
+	for field_name in ["affinity_label", "familiarity_label", "last_change"]:
+		if typeof(relationship.get(field_name)) != TYPE_STRING:
+			errors.append("%s.%s 必须是文本" % [path, field_name])
+	var familiarity_level: Variant = relationship.get("familiarity_level")
+	if (
+		typeof(familiarity_level) != TYPE_INT
+		or int(familiarity_level) < 0
+		or int(familiarity_level) > 5
+	):
+		errors.append("%s.familiarity_level 必须是 0 到 5 的整数" % path)
+	for field_name in ["conversation_count", "attack_count"]:
+		var count: Variant = relationship.get(field_name)
+		if typeof(count) != TYPE_INT or int(count) < 0:
+			errors.append("%s.%s 必须是非负整数" % [path, field_name])
 
 
 static func _validate_turn(value: Variant, path: String, errors: Array[String]) -> void:

@@ -598,6 +598,8 @@ static func _validate_person_conversation_link(
 		]
 		if snapshot.has("medical_context"):
 			snapshot_fields.append("medical_context")
+		if snapshot.has("traveler_relationship"):
+			snapshot_fields.append("traveler_relationship")
 		_validate_exact_keys(snapshot, snapshot_fields, "人物 %s 的对话快照" % person_name, errors)
 		if _string_or_empty(snapshot.get("conversation_id")) != conversation_id:
 			errors.append("人物对话快照编号与活动对话不一致：%s" % person_name)
@@ -632,6 +634,49 @@ static func _validate_person_conversation_link(
 				(medical_value as Dictionary).get("request_id"),
 			) != _string_or_empty(conversation.get("medicalRequestId")):
 				errors.append("人物医患对话快照请求编号不一致：%s" % person_name)
+		if snapshot.has("traveler_relationship"):
+			_validate_traveler_relationship_snapshot(
+				snapshot.get("traveler_relationship"),
+				"人物 %s 的旅行者关系快照" % person_name,
+				errors,
+			)
+
+
+static func _validate_traveler_relationship_snapshot(
+	value: Variant,
+	label: String,
+	errors: Array[String],
+) -> void:
+	if not value is Dictionary:
+		errors.append("%s 必须是对象" % label)
+		return
+	var relationship := value as Dictionary
+	_validate_exact_keys(
+		relationship,
+		[
+			"affinity", "affinity_label", "familiarity_level",
+			"familiarity_label", "conversation_count", "attack_count", "last_change",
+		],
+		label,
+		errors,
+	)
+	var affinity: Variant = relationship.get("affinity")
+	if typeof(affinity) != TYPE_INT or int(affinity) < 0 or int(affinity) > 100:
+		errors.append("%s.affinity 必须是 0 到 100 的整数" % label)
+	for field_name in ["affinity_label", "familiarity_label", "last_change"]:
+		if typeof(relationship.get(field_name)) != TYPE_STRING:
+			errors.append("%s.%s 必须是文本" % [label, field_name])
+	var familiarity_level: Variant = relationship.get("familiarity_level")
+	if (
+		typeof(familiarity_level) != TYPE_INT
+		or int(familiarity_level) < 0
+		or int(familiarity_level) > 5
+	):
+		errors.append("%s.familiarity_level 必须是 0 到 5 的整数" % label)
+	for field_name in ["conversation_count", "attack_count"]:
+		var count: Variant = relationship.get(field_name)
+		if typeof(count) != TYPE_INT or int(count) < 0:
+			errors.append("%s.%s 必须是非负整数" % [label, field_name])
 
 
 static func _validate_turns(

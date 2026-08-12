@@ -11,6 +11,7 @@ const ACTION_PRESENTATION := preload(
 const CONVERSATION_CONFLICT_BRIDGE := preload(
 	"res://world/runtime/conversation/TownConversationConflictBridge.gd"
 )
+const TRAVELER_RELATIONSHIP_BRIDGE := preload("res://world/runtime/relationship/TownTravelerRelationshipWorldBridge.gd")
 
 # 对话状态机与参与者管理(自 TownWorldRuntime 下沉)。world 为世界运行时实例;
 # 对话回合、承诺激活、快照投影、超时收束均在此,conversation_changed 由
@@ -124,6 +125,7 @@ static func _apply_conversation_reply(world, speaker_name: String, action: Dicti
 		int(turn.get("turn_id", turns.size() + 1)),
 	)
 	turns.append(turn)
+	TRAVELER_RELATIONSHIP_BRIDGE.record_reply(world, conversation, speaker_name, action, turn)
 	var other_name := _other_conversation_participant(world, conversation, speaker_name)
 	conversation["waitingFor"] = other_name
 	conversation["updatedAt"] = world.get_time()
@@ -193,6 +195,7 @@ static func _end_conversation(
 	conversation["updatedAt"] = world.get_time()
 	conversation["endReason"] = reason
 	conversation["endedAt"] = world.get_time()
+	TRAVELER_RELATIONSHIP_BRIDGE.record_conversation(world, conversation)
 	_finish_clinic_interview_conversation(world, conversation, reason)
 	world._autonomous_conversation_idle_seconds.erase(conversation_id)
 	var participants := (conversation.get("participants", []) as Array).duplicate()
@@ -601,6 +604,13 @@ static func _update_conversation_snapshots(world, conversation: Dictionary) -> v
 				participant_name,
 			),
 		}
+		var traveler_relationship := TRAVELER_RELATIONSHIP_BRIDGE.agent_projection_for_conversation(
+			world,
+			participant_name,
+			other_name,
+		)
+		if not traveler_relationship.is_empty():
+			snapshot["traveler_relationship"] = traveler_relationship
 		if world._residents.has(participant_name):
 			var resident := world._residents[participant_name] as Dictionary
 			resident["conversationId"] = String(conversation.get("conversationId", ""))

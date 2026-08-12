@@ -1811,6 +1811,7 @@ func _publish_announcements(operation: Dictionary, error_value: Variant) -> void
 		},
 		"composer": {
 			"open": _announcement_composer_open,
+			"publisherLabel": "发布者：旅行者",
 			"draftText": _announcement_draft,
 			"characterCount": draft_count,
 			"characterLimit": ANNOUNCEMENT_LIMIT,
@@ -3752,6 +3753,15 @@ func _announcement_items() -> Array[Dictionary]:
 		var time := item.get("time", {}) as Dictionary
 		item["time"] = time.duplicate(true)
 		item["timeLabel"] = _time_label(time)
+		var publisher_name := String(item.get("publisher_name", "")).strip_edges()
+		var publisher_role := String(item.get("publisher_role", "")).strip_edges()
+		item["publisherLabel"] = (
+			"发布者：%s（%s）" % [publisher_name, publisher_role]
+			if not publisher_name.is_empty() and not publisher_role.is_empty()
+			else "发布者：%s" % publisher_name
+			if not publisher_name.is_empty()
+			else ""
+		)
 		var scheduled_label := String(
 			item.get("scheduled_time_label", ""),
 		).strip_edges()

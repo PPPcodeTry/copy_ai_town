@@ -143,6 +143,9 @@ class FakeWorld:
 			"announcement_id": "announcement-%d" % (announcements.size() + 1),
 			"text": text,
 			"time": {"day": 1, "clock": "09:05", "period": "上午"},
+			"publisher_name": "旅行者",
+			"publisher_role": "旅行者",
+			"publisher_type": "traveler",
 		}
 		if text == "今晚广场见。":
 			item["scheduled_absolute_minute"] = 20 * 60
@@ -665,6 +668,22 @@ func _run() -> void:
 		((announcements.get("data", {}) as Dictionary).get("items", []) as Array).size(),
 		1,
 		"confirmed announcement appears from World",
+	)
+	var confirmed_announcement := (
+		((announcements.get("data", {}) as Dictionary).get("items", []) as Array)[0]
+		as Dictionary
+	)
+	_expect_equal(
+		confirmed_announcement.get("publisherLabel"),
+		"发布者：旅行者（旅行者）",
+		"announcement projection exposes the publisher identity",
+	)
+	_expect_equal(
+		((announcements.get("data", {}) as Dictionary).get("composer", {}) as Dictionary).get(
+			"publisherLabel"
+		),
+		"发布者：旅行者",
+		"announcement composer states the current publisher identity",
 	)
 	var scheduled_feedback := (
 		(announcements.get("data", {}) as Dictionary).get("feedback", {})

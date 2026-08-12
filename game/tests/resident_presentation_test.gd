@@ -209,6 +209,9 @@ const AGENT_CONTRACT := preload("res://agent/AgentContract.gd")
 const CONVERSATION_RUNTIME := preload(
 	"res://world/runtime/conversation/TownConversationRuntime.gd"
 )
+const TRAVELER_RELATIONSHIP_RUNTIME := preload(
+	"res://world/runtime/relationship/TownTravelerRelationshipRuntime.gd"
+)
 const CLINIC_AVATAR_SAFE_RETURN := Vector2(4225.0, 1260.0)
 const ANIMAL_PRESENTATION := preload(
 	"res://world/presentation/animals/TownAnimalPresentation.gd"
@@ -2986,6 +2989,8 @@ func _scenario_player_avatar() -> void:
 	_test_observer_avatar_is_absent_until_descent()
 	_test_position_place_and_perception()
 	_test_descent_relocates_avatar_to_a_valid_outdoor_point()
+	_test_traveler_familiarity_requires_a_two_way_conversation()
+	_test_avatar_attack_reduces_traveler_affinity()
 	_test_player_invitation_requires_reply()
 	_test_player_conversation_idle_timeout_only_on_resident_turn()
 	_test_player_starts_and_ends_conversation()
@@ -3197,6 +3202,179 @@ func _test_descent_relocates_avatar_to_a_valid_outdoor_point() -> void:
 
 
 
+func _test_traveler_familiarity_requires_a_two_way_conversation() -> void:
+	var snapshot := TRAVELER_RELATIONSHIP_RUNTIME.empty_snapshot()
+	var one_sided := {
+		"conversationId": "traveler-one-sided",
+		"status": "ended",
+		"participants": ["player-avatar", RESIDENT_ID],
+		"turns": [{
+			"turn_id": 1,
+			"speaker_resident_id": "player-avatar",
+			"say": "你好。",
+		}],
+		"endedAt": {"day": 1, "clock": "08:00", "period": "上午"},
+	}
+	_expect(
+		not TRAVELER_RELATIONSHIP_RUNTIME.record_ended_conversation(
+			snapshot,
+			"player-avatar",
+			RESIDENT_ID,
+			one_sided,
+		),
+		"a greeting without a resident reply does not increase familiarity",
+	)
+	var untouched := TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+		snapshot,
+		"player-avatar",
+		"旅行者",
+		RESIDENT_ID,
+		true,
+	)
+	_expect_equal(
+		untouched.get("conversationCount"),
+		0,
+		"an unanswered opening leaves the familiarity count unchanged",
+	)
+	_expect_equal(
+		(untouched.get("familiarity", {}) as Dictionary).get("label"),
+		"尚未交谈",
+		"an unanswered opening does not claim a first meeting was completed",
+	)
+
+	for index in 6:
+		var two_way := one_sided.duplicate(true)
+		two_way["conversationId"] = "traveler-two-way-%d" % index
+		two_way["turns"] = [
+			(one_sided.get("turns", []) as Array)[0],
+			{
+				"turn_id": 2,
+				"speaker_resident_id": RESIDENT_ID,
+				"say": "你好。",
+			},
+		]
+		_expect(
+			TRAVELER_RELATIONSHIP_RUNTIME.record_ended_conversation(
+				snapshot,
+				"player-avatar",
+				RESIDENT_ID,
+				two_way,
+			),
+			"a completed two-way conversation increases familiarity once",
+		)
+	var familiar := TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+		snapshot,
+		"player-avatar",
+		"旅行者",
+		RESIDENT_ID,
+		true,
+	)
+	_expect_equal(
+		familiar.get("conversationCount"),
+		6,
+		"six completed conversations are retained",
+	)
+	_expect_equal(
+		(familiar.get("familiarity", {}) as Dictionary).get("label"),
+		"熟悉",
+		"six conversations reach familiar instead of close or intimate",
+	)
+
+	var restored := TRAVELER_RELATIONSHIP_RUNTIME.normalize_snapshot(
+		{
+			"schema": "traveler-relationship",
+			"schemaVersion": 1,
+			"items": {RESIDENT_ID: {
+				"conversationCount": 5,
+				"confirmedTurnCount": 10,
+				"affinity": 58,
+				"familiarityLevel": 5,
+				"familiarityLabel": "亲近",
+			}},
+		},
+		"player-avatar",
+		[RESIDENT_ID],
+	)
+	var restored_projection := (
+		TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+			restored,
+			"player-avatar",
+			"旅行者",
+			RESIDENT_ID,
+			true,
+		)
+	)
+	_expect_equal(
+		(restored_projection.get("familiarity", {}) as Dictionary).get("label"),
+		"有些熟悉",
+		"existing saves recompute the slower familiarity label without migration",
+	)
+	_expect_equal(
+		(restored_projection.get("affinity", {}) as Dictionary).get("value"),
+		58,
+		"recomputing familiarity preserves existing saved affinity",
+	)
+	_expect_equal(
+		(restored_projection.get("affinity", {}) as Dictionary).get("label"),
+		"开始在意",
+		"a modest positive change reaches the first visible affinity stage",
+	)
+	var malformed_snapshot := TRAVELER_RELATIONSHIP_RUNTIME.normalize_snapshot(
+		{
+			"items": {RESIDENT_ID: {
+				"lastInteractionAt": null,
+				"lastAffinityChange": "not-an-object",
+				"processedReplyIds": null,
+				"processedAttackIds": "not-an-array",
+				"affinityChangeHistory": null,
+				"processedConversationIds": false,
+			}},
+		},
+		"player-avatar",
+		[RESIDENT_ID],
+	)
+	var malformed_projection := TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+		malformed_snapshot,
+		"player-avatar",
+		"旅行者",
+		RESIDENT_ID,
+		true,
+	)
+	_expect_equal(
+		malformed_projection.get("conversationCount"),
+		0,
+		"malformed relationship collections fall back to an empty relation",
+	)
+	_expect_equal(
+		malformed_projection.get("lastAffinityChangeLabel"),
+		"",
+		"malformed relationship timestamps and change records do not crash projection",
+	)
+	for affinity_case: Dictionary in [
+		{"value": 52, "label": "普通"},
+		{"value": 53, "label": "开始在意"},
+	]:
+		var threshold_snapshot := TRAVELER_RELATIONSHIP_RUNTIME.normalize_snapshot(
+			{"items": {RESIDENT_ID: {"affinity": affinity_case["value"]}}},
+			"player-avatar",
+			[RESIDENT_ID],
+		)
+		var threshold_projection := (
+			TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+				threshold_snapshot,
+				"player-avatar",
+				"旅行者",
+				RESIDENT_ID,
+				true,
+			)
+		)
+		_expect_equal(
+			(threshold_projection.get("affinity", {}) as Dictionary).get("label"),
+			affinity_case["label"],
+			"the first visible affinity threshold stays at 53",
+		)
+
+
 func _test_player_starts_and_ends_conversation() -> void:
 	var opening := _opening_in_garden()
 	var world := _new_world(opening)
@@ -3235,7 +3413,21 @@ func _test_player_starts_and_ends_conversation() -> void:
 	_expect_equal(AGENT_CONTRACT.validate_wake_packet(lin_invitation), [], "player talk produces a valid unchanged-Agent wake packet")
 	_expect(not JSON.stringify(lin_invitation.get("events", [])).contains("residentId"), "Agent events do not leak internal recipient fields")
 	_expect(_has_event_player_avatar(lin_invitation, "搭话"), "resident receives the player's talk event")
-	var reply := _reply(lin_invitation, conversation_id, "没见过，我可以帮你留意。", "林岚仔细看了看照片", false)
+	var initial_traveler_relationship := (
+		(lin_invitation.get("snapshot", {}) as Dictionary)
+		.get("conversation", {}) as Dictionary
+	).get("traveler_relationship", {}) as Dictionary
+	_expect_equal(
+		initial_traveler_relationship.get("affinity"),
+		50,
+		"resident wake exposes the default traveler affinity before the first reply",
+	)
+	_expect_equal(
+		initial_traveler_relationship.get("familiarity_label"),
+		"尚未交谈",
+		"resident wake exposes the default traveler familiarity",
+	)
+	var reply := _reply(lin_invitation, conversation_id, "没见过，我可以帮你留意。", "林岚仔细看了看照片", false, 4)
 	_expect_equal(AGENT_CONTRACT.validate_decision(reply, world.call("get_agent_initialization", "林岚"), lin_invitation, {}), [], "resident reply to player uses the existing Agent contract")
 	_expect_equal(world.call("submit_agent_decision", "林岚", reply).get("status"), "accepted", "world accepts the resident reply to player")
 	_expire_confirmed_preview(world)
@@ -3281,6 +3473,47 @@ func _test_player_starts_and_ends_conversation() -> void:
 	var ended_state := world.call("get_conversation", conversation_id) as Dictionary
 	_expect_equal(ended_state.get("status"), "ended", "player end command closes the world conversation")
 	_expect_equal(ended_state.get("endReason"), "主动结束", "player end command records the formal end reason")
+	var traveler_relation := _traveler_relationship(world, "林岚")
+	_expect_equal(
+		(traveler_relation.get("affinity", {}) as Dictionary).get("value"),
+		54,
+		"resident reply applies the Agent-selected traveler affinity delta",
+	)
+	_expect_equal(
+		traveler_relation.get("lastAffinityChangeLabel"),
+		"居民回应+4",
+		"traveler relationship explains the latest Agent-selected change",
+	)
+	_expect_equal(
+		traveler_relation.get("relationshipLabel"),
+		"对旅行者的好感",
+		"traveler relationship uses a distinct affinity label",
+	)
+	_expect_equal(
+		traveler_relation.get("conversationCount"),
+		1,
+		"one completed two-way exchange records one familiarity conversation",
+	)
+	_expect_equal(
+		(traveler_relation.get("familiarity", {}) as Dictionary).get("label"),
+		"刚刚认识",
+		"one completed exchange no longer presents the traveler as close",
+	)
+	var public_relationships := world.call(
+		"get_resident_public_relationship_progress",
+		"林岚",
+	) as Dictionary
+	var public_traveler_relation := {}
+	for relationship_value: Variant in public_relationships.get("items", []) as Array:
+		var relationship := relationship_value as Dictionary
+		if bool(relationship.get("travelerRelation", false)):
+			public_traveler_relation = relationship
+			break
+	_expect_equal(
+		(public_traveler_relation.get("affinity", {}) as Dictionary).get("value"),
+		54,
+		"public relationship progress includes the traveler affinity projection",
+	)
 	_expect_equal((world.call("get_player_avatar_state") as Dictionary).get("conversation"), null, "avatar conversation clears after the confirmed end")
 	_expect_equal(
 		(
@@ -3328,6 +3561,52 @@ func _test_player_starts_and_ends_conversation() -> void:
 		),
 		"ended",
 		"restore preserves the ended conversation history",
+	)
+	var restored_relation := _traveler_relationship(restored_world, "林岚")
+	_expect_equal(
+		(restored_relation.get("affinity", {}) as Dictionary).get("value"),
+		54,
+		"restore preserves traveler affinity",
+	)
+
+
+func _test_avatar_attack_reduces_traveler_affinity() -> void:
+	var world := _new_world(_opening_in_garden())
+	var avatar := world.call("get_player_avatar_state") as Dictionary
+	var attack := world.call(
+		"submit_avatar_area_attack",
+		{
+			"requestId": "traveler-attack-1",
+			"attackerId": String(avatar.get("residentId", "")),
+			"attackKind": "unarmed",
+			"sourceKind": "avatar_intent",
+			"sourceRef": "traveler-attack-1",
+		},
+	) as Dictionary
+	_expect_equal(attack.get("ok"), true, "avatar attack reaches the authoritative World conflict path")
+	var relation := _traveler_relationship(world, "林岚")
+	_expect_equal(
+		(relation.get("affinity", {}) as Dictionary).get("value"),
+		40,
+		"a confirmed avatar hit applies the fixed -10 affinity penalty",
+	)
+	_expect_equal(relation.get("attackCount"), 1, "traveler relation records the confirmed avatar attack")
+	var duplicate := world.call(
+		"submit_avatar_area_attack",
+		{
+			"requestId": "traveler-attack-1",
+			"attackerId": String(avatar.get("residentId", "")),
+			"attackKind": "unarmed",
+			"sourceKind": "avatar_intent",
+			"sourceRef": "traveler-attack-1",
+		},
+	) as Dictionary
+	_expect_equal(duplicate.get("ok"), true, "duplicate attack requests remain idempotent")
+	relation = _traveler_relationship(world, "林岚")
+	_expect_equal(
+		(relation.get("affinity", {}) as Dictionary).get("value"),
+		40,
+		"duplicate attack requests do not apply the penalty twice",
 	)
 
 
@@ -3386,7 +3665,7 @@ func _test_player_invitation_requires_reply() -> void:
 		"submit_agent_decision",
 		"林岚",
 		_reply(invitation, conversation_id,
-			"这会儿不方便，抱歉。", "林岚抱歉地摆了摆手", true),
+			"这会儿不方便，抱歉。", "林岚抱歉地摆了摆手", true, -3),
 	) as Dictionary
 	_expect_equal(refused.get("status"), "accepted", "resident can refuse with a reason")
 	var ended := world.call(
@@ -3395,6 +3674,11 @@ func _test_player_invitation_requires_reply() -> void:
 	) as Dictionary
 	_expect_equal(ended.get("status"), "ended", "refusal ends the invitation")
 	_expect_equal(ended.get("endReason"), "主动结束", "refusal reply records the formal end reason")
+	_expect_equal(
+		((_traveler_relationship(world, "林岚").get("affinity", {}) as Dictionary).get("value")),
+		47,
+		"a resident's negative Agent affinity delta is applied to a refusal",
+	)
 	_expire_confirmed_preview(world)
 	_expect_equal(
 		(
@@ -3544,6 +3828,18 @@ func _new_world(opening: Dictionary) -> RefCounted:
 	return world
 
 
+func _traveler_relationship(world: RefCounted, resident_ref: String) -> Dictionary:
+	var progress := world.call(
+		"get_resident_public_relationship_progress",
+		resident_ref,
+	) as Dictionary
+	for item_value: Variant in progress.get("items", []) as Array:
+		var item := item_value as Dictionary
+		if bool(item.get("travelerRelation", false)):
+			return item
+	return {}
+
+
 
 func _new_observer_world(opening: Dictionary) -> RefCounted:
 	var data := BUILDER.build_from_source(SOURCE_DIR)
@@ -3655,12 +3951,30 @@ func _talk_player_avatar(wake: Dictionary, target: String, say: String, narratio
 
 
 
-func _reply(wake: Dictionary, conversation_id: String, say: String, narration: String, end: bool) -> Dictionary:
+func _reply(
+	wake: Dictionary,
+	conversation_id: String,
+	say: String,
+	narration: String,
+	end: bool,
+	traveler_affinity_delta: int = 0,
+) -> Dictionary:
 	var decision_id := String(wake.get("decision_id", ""))
+	var action := {
+		"action_id": "%s-reply" % decision_id,
+		"type": "答话",
+		"conversation_id": conversation_id,
+		"say": say,
+		"narration": narration,
+		"photos": [],
+		"end": end,
+	}
+	if traveler_affinity_delta != 0:
+		action["traveler_affinity_delta"] = traveler_affinity_delta
 	return {
 		"decision_id": decision_id,
 		"handling": "replace_current",
-		"action": {"action_id": "%s-reply" % decision_id, "type": "答话", "conversation_id": conversation_id, "say": say, "narration": narration, "photos": [], "end": end},
+		"action": action,
 	}
 
 

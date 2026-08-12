@@ -1632,6 +1632,18 @@ func _test_accept_multi_turn_overhear_and_end() -> void:
 		true,
 		"player announcement can be published during a resident conversation",
 	)
+	var player_announcements := world.call("get_announcements") as Array
+	var player_announcement := player_announcements[0] as Dictionary if not player_announcements.is_empty() else {}
+	_expect_equal(
+		player_announcement.get("publisher_role"),
+		"旅行者",
+		"player announcement exposes the traveler publisher role",
+	)
+	_expect_equal(
+		player_announcement.get("publisher_type"),
+		"traveler",
+		"player announcement exposes the traveler publisher type",
+	)
 	var lin_during_conversation := (
 		world.get("_residents") as Dictionary
 	).get(POSTAL_ID, {}) as Dictionary

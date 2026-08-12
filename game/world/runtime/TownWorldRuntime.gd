@@ -70,6 +70,8 @@ const RESTORE_STATE := preload("res://world/runtime/persistence/TownWorldRestore
 const RESTORE_LAYOUT := preload("res://world/runtime/persistence/TownWorldRestoreLayout.gd")
 const RESTORE_PEOPLE := preload("res://world/runtime/persistence/TownWorldRestorePeople.gd")
 const RESTORE_WORK := preload("res://world/runtime/persistence/TownWorldRestoreWork.gd")
+const TRAVELER_RELATIONSHIP_BRIDGE := preload("res://world/runtime/relationship/TownTravelerRelationshipWorldBridge.gd")
+const ANNOUNCEMENT_PUBLISHER_PROJECTION := preload("res://world/presentation/announcement/TownAnnouncementPublisherProjection.gd")
 const WORK_SETTLEMENT := preload(
 	"res://world/runtime/work/TownWorkSettlement.gd"
 )
@@ -318,6 +320,7 @@ var _resident_name_by_id: Dictionary = {}
 var _resident_identity_status := "unavailable"
 var _player_avatar: Dictionary = {}
 var _player_avatar_present := true
+var _traveler_relations: Dictionary = {}
 var _announcements: Array[Dictionary] = []
 var _conversations: Dictionary = {}
 var _autonomous_conversation_idle_seconds: Dictionary = {}
@@ -807,6 +810,7 @@ func _start_with_validation(
 	_initialize_place_service_states()
 	_player_avatar = _avatar_runtime(opening_config.get("playerAvatar", {}) as Dictionary)
 	_player_avatar_present = initial_player_avatar_present
+	_traveler_relations = TRAVELER_RELATIONSHIP_BRIDGE.empty_snapshot()
 	_environment = prepared_environment
 	_conflict_controller = prepared_conflict_controller
 	# 待抵达居民的入口落点和回家可达性属于加载期静态准备，不能等到
@@ -1180,6 +1184,7 @@ func create_save_snapshot() -> Dictionary:
 			else {}
 		),
 		"residentLifecycle": _resident_lifecycle.create_save_snapshot() as Dictionary,
+		"travelerRelations": _traveler_relations.duplicate(true),
 		"indoorLayoutOverrides": _indoor_layout_override_snapshots(),
 		"sequences": {
 			"event": _event_sequence,
@@ -2435,6 +2440,7 @@ func _apply_prepared_restore_candidate(
 	_apply_resident_identities(prepared_identities)
 	_player_avatar = (prepared.get("playerAvatar", {}) as Dictionary).duplicate(true)
 	_player_avatar_present = player_avatar_present
+	_traveler_relations = TRAVELER_RELATIONSHIP_BRIDGE.restore_snapshot(self, prepared)
 	_reset_social_runtimes()
 	_social_matters.restore_save_snapshot(
 		prepared.get("socialMattersPrepared", {}) as Dictionary,
@@ -5294,7 +5300,6 @@ func get_resident_action_phase(resident_ref: String) -> Dictionary:
 		return {}
 	return ACTION_PRESENTATION._resident_action_phase_projection(self, _residents[resident_id] as Dictionary)
 
-
 func get_resident_public_relationship_progress(
 	resident_ref: String,
 ) -> Dictionary:
@@ -5319,13 +5324,13 @@ func get_resident_public_relationship_progress(
 		_social_matters.list_matters(true) as Array,
 		get_public_conflict_projection().get("events", []) as Array,
 	)
+	TRAVELER_RELATIONSHIP_BRIDGE.append_public_projection(self, items, resident_id)
 	return {
 		"ok": true,
 		"residentId": resident_id,
 		"items": items,
 		"worldRevision": _world_revision,
 	}
-
 
 func query_activity_options(
 	resident_id: String,
@@ -8034,8 +8039,8 @@ func submit_avatar_area_attack(intent: Dictionary) -> Dictionary:
 		)
 	var before_revision := _conflict_runtime_revision()
 	var result := _conflict_controller.begin_avatar_area_attack(intent,) as Dictionary
+	TRAVELER_RELATIONSHIP_BRIDGE.record_attack_result(self, result, intent)
 	return _complete_conflict_command(result, before_revision)
-
 
 func submit_conflict_response(
 	conflict_id: String,
@@ -8404,12 +8409,8 @@ func get_place_name_for_connection(connection_id: String) -> String:
 		return ""
 	return ""
 
-
 func get_announcements() -> Array[Dictionary]:
-	return _community_bulletin.get_announcements(
-		true,
-	) as Array[Dictionary]
-
+	return ANNOUNCEMENT_PUBLISHER_PROJECTION.project(self, _community_bulletin.get_announcements(true) as Array[Dictionary])
 
 func get_public_event_log() -> Array[Dictionary]:
 	var public_event_log: Array[Dictionary] = []
@@ -8420,7 +8421,6 @@ func get_public_event_log() -> Array[Dictionary]:
 			copy["payload"] = _sanitize_public_event_payload(payload)
 		public_event_log.append(copy)
 	return public_event_log
-
 
 func publish_announcement(text: String) -> Dictionary:
 	return _publish_community_announcement(

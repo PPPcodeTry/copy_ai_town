@@ -63,6 +63,9 @@ const ACTION_FIELDS := {
 		"line",
 	],
 }
+const OPTIONAL_ACTION_FIELDS := {
+	"答话": ["traveler_affinity_delta"],
+}
 
 static func require_action_texts(action: Dictionary, fields: Array[String], action_type: String) -> String:
 	for field_name in fields:
@@ -78,7 +81,10 @@ static func validate_action_shape(action: Dictionary) -> String:
 	var action_type := String(action.get("type"))
 	if not ACTION_FIELDS.has(action_type):
 		return "当前运行层尚未接入动作类型：%s" % action_type
-	var allowed_fields := ACTION_FIELDS[action_type] as Array
+	var allowed_fields := (ACTION_FIELDS[action_type] as Array).duplicate()
+	allowed_fields.append_array(
+		OPTIONAL_ACTION_FIELDS.get(action_type, []) as Array
+	)
 	for key_value: Variant in action:
 		if not key_value is String or not allowed_fields.has(key_value):
 			return "%s 动作包含未知字段：%s" % [action_type, str(key_value)]
@@ -132,6 +138,12 @@ static func validate_action_shape(action: Dictionary) -> String:
 			var field_error := require_action_texts(action, ["conversation_id"], action_type)
 			if not field_error.is_empty():
 				return field_error
+			if action.has("traveler_affinity_delta"):
+				var affinity_delta: Variant = action.get("traveler_affinity_delta")
+				if typeof(affinity_delta) != TYPE_INT:
+					return "答话动作 traveler_affinity_delta 必须是整数"
+				if int(affinity_delta) < -5 or int(affinity_delta) > 5:
+					return "答话动作 traveler_affinity_delta 必须在 -5 到 5 之间"
 	return ""
 
 static func validate_conversation_follow_up_shape(value: Variant) -> String:

@@ -9,6 +9,7 @@ func _initialize() -> void:
 	if compiler_script != null:
 		_test_medical_response_contract(compiler_script)
 		_test_service_request_and_world_destination_constraints(compiler_script)
+		_test_traveler_relationship_context(compiler_script)
 	_finish_prompt_test("AGENT_SERVICE_PROMPT_PASS")
 
 
@@ -289,4 +290,135 @@ func _test_service_request_and_world_destination_constraints(
 		),
 		["中心广场", "图书馆"],
 		"travel constraints use the World allowlist exactly",
+	)
+
+
+func _test_traveler_relationship_context(compiler_script: Script) -> void:
+	var wake := _wake_packet("traveler-relationship-prompt-1", "晴天")
+	wake["snapshot"]["conversation"] = {
+		"conversation_id": "conversation-traveler-1",
+		"with_resident_id": "player-avatar",
+		"with": "旅行者",
+		"turns": [{
+			"turn_id": 1,
+			"speaker_resident_id": "player-avatar",
+			"speaker": "旅行者",
+			"say": "你好。",
+			"narration": "",
+			"photos": [],
+		}],
+		"traveler_relationship": {
+			"affinity": 28,
+			"affinity_label": "明显疏远",
+			"familiarity_level": 3,
+			"familiarity_label": "熟悉",
+			"conversation_count": 8,
+			"attack_count": 1,
+			"last_change": "化身攻击-10",
+		},
+	}
+	wake["events"] = [{
+		"event_id": "traveler-relationship-event-1",
+		"time": {"day": 1, "clock": "08:11", "period": "上午"},
+		"type": "搭话",
+		"conversation_id": "conversation-traveler-1",
+		"turn": (wake["snapshot"]["conversation"]["turns"][0] as Dictionary).duplicate(true),
+	}]
+	_expect_equal(
+		AGENT_CONTRACT.validate_wake_packet(wake),
+		[],
+		"traveler relationship context is accepted by the wake contract",
+	)
+	var compiler: RefCounted = compiler_script.new(_initialization())
+	var avatar_memory := (
+		"[关于化身的个人记忆]\n[具体记忆]\n"
+		+ "- 旅行者上次说会帮忙寻找走失的猫（来源：本人亲历；状态：active）"
+	)
+	var request := compiler.call("compile", wake, avatar_memory) as Dictionary
+	var actions := (request.get("derived_constraints", {}) as Dictionary).get("actions", {}) as Dictionary
+	var reply_fields := (actions.get("答话", {}) as Dictionary).get("fields", []) as Array
+	_expect(
+		reply_fields.has("traveler_affinity_delta"),
+		"traveler conversation still requires the Agent-selected affinity delta",
+	)
+	var messages := request.get("messages", []) as Array
+	var user_text := String((messages[1] as Dictionary).get("content", "")) if messages.size() == 2 else ""
+	_expect(
+		user_text.contains("与旅行者的关系：好感28（明显疏远）")
+		and user_text.contains("最近一次关系变化：化身攻击-10")
+		and user_text.contains("熟悉旅行者但对其反感")
+		and user_text.contains("可以记得旧事，同时保持疏远")
+		and user_text.contains("寻找走失的猫"),
+		"familiarity and affinity combine without hiding confirmed avatar memory",
+	)
+	_expect(
+		user_text.contains("普通寒暄、重复旧话和仅仅完成对话填 0")
+		and user_text.contains("不能因为变熟自动增加")
+		and user_text.contains("真诚关心时应填 +2")
+		and user_text.contains("不能因为本人话少")
+		and user_text.contains("兑现对本人的承诺")
+		and user_text.contains("证据不足填 0"),
+		"traveler affinity changes require evidence instead of rewarding every chat",
+	)
+	_expect(
+		user_text.contains("不写成任务回执、客服答复或关系总结")
+		and user_text.contains("话少表示少说一两句")
+		and user_text.contains("回应旅行者真正表达的意思")
+		and user_text.contains("不要习惯性用“你有事？”")
+		and user_text.contains("好感表现参考"),
+		"traveler relationship guidance requires natural visible behavior",
+	)
+	var caring_wake := wake.duplicate(true)
+	var caring_conversation := (
+		caring_wake["snapshot"]["conversation"] as Dictionary
+	)
+	caring_conversation["traveler_relationship"] = {
+		"affinity": 53,
+		"affinity_label": "开始在意",
+		"familiarity_level": 2,
+		"familiarity_label": "有些熟悉",
+		"conversation_count": 3,
+		"attack_count": 0,
+		"last_change": "居民回应+1",
+	}
+	var caring_request := compiler.call("compile", caring_wake, avatar_memory) as Dictionary
+	var caring_actions := (
+		caring_request.get("derived_constraints", {}) as Dictionary
+	).get("actions", {}) as Dictionary
+	var caring_reply_fields := (
+		(caring_actions.get("答话", {}) as Dictionary).get("fields", [])
+		as Array
+	)
+	var caring_messages := caring_request.get("messages", []) as Array
+	var caring_text := String(
+		(caring_messages[1] as Dictionary).get("content", "")
+	) if caring_messages.size() == 2 else ""
+	_expect(
+		caring_text.contains("好感53（开始在意）")
+		and caring_text.contains("答完后多说一句只会对在意的人说的话")
+		and caring_reply_fields.has("traveler_relationship_beat")
+		and caring_text.contains("必须原样出现在 action.say 中")
+		and caring_text.contains("personal_view、reciprocal_question"),
+		"the first visible affinity stage changes concrete conversation behavior",
+	)
+	var close_wake := caring_wake.duplicate(true)
+	var close_conversation := close_wake["snapshot"]["conversation"] as Dictionary
+	var close_relationship := (
+		close_conversation["traveler_relationship"] as Dictionary
+	)
+	close_relationship["affinity"] = 94
+	close_relationship["affinity_label"] = "很亲近"
+	var close_request := compiler.call("compile", close_wake, avatar_memory) as Dictionary
+	var close_messages := close_request.get("messages", []) as Array
+	var close_text := String(
+		(close_messages[1] as Dictionary).get("content", "")
+	) if close_messages.size() == 2 else ""
+	_expect(
+		close_text.contains("听出自己不是普通熟人")
+		and close_text.contains("必须先接住这份情绪")
+		and close_text.contains("至少落实一项个人关系信号")
+		and close_text.contains("单纯叫对方休息不算")
+		and close_text.contains("personal_stake、safe_place、shared_rapport")
+		and close_text.contains("禁止照抄例句"),
+		"the closest stage requires relationship-specific content",
 	)
