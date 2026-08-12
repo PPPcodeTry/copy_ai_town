@@ -26,6 +26,23 @@ class SilentTransport:
 		cancelled_request_ids.append(request_id)
 
 
+class ImmediateTransport:
+	extends RefCounted
+
+	var response: Dictionary = {}
+	var requests := 0
+
+	func request_json(
+		_url: String,
+		_headers: PackedStringArray,
+		_body: Dictionary,
+		on_complete: Callable,
+	) -> int:
+		requests += 1
+		on_complete.call(response.duplicate(true))
+		return OK
+
+
 func _initialize() -> void:
 	_run()
 
@@ -37,6 +54,7 @@ func _run() -> void:
 	if provider_script != null:
 		await _test_transport_watchdog_completes_hung_request(provider_script)
 		await _test_transport_watchdog_releases_after_completion(provider_script)
+		_test_synchronous_transport_releases_request_state(provider_script)
 		await _test_transport_cancellation_releases_active_request(provider_script)
 		await _test_transport_cancel_all_releases_active_requests(provider_script)
 		_test_env_file_cache(provider_script)
@@ -145,6 +163,36 @@ func _test_transport_watchdog_releases_after_completion(provider_script: Script)
 	_expect_equal(collector.values.size(), 1, "及时返回只结算一次")
 	_expect_equal(host.get_child_count(), 0, "请求完成后立即释放看门狗计时器")
 	host.free()
+
+
+func _test_synchronous_transport_releases_request_state(provider_script: Script) -> void:
+	var host := Node.new()
+	root.add_child(host)
+	var transport := ImmediateTransport.new()
+	transport.response = _success_response("sync-decision")
+	var provider: RefCounted = provider_script.new(host, transport, {
+		"api_key": "sync-transport-key",
+		"endpoint": "https://compatible.example/v1/chat/completions",
+		"api_model": "vendor-model",
+		"timeout_seconds": 10.0,
+	})
+	var provider_weak: WeakRef = weakref(provider)
+	var collector := ResultCollector.new()
+	provider.call(
+		"request_decision",
+		{"messages": [{"role": "user", "content": "同步决定"}]},
+		collector.collect,
+	)
+	_expect_equal(transport.requests, 1, "同步 transport 收到一次请求")
+	_expect_equal(collector.values.size(), 1, "同步 transport 只结算一次")
+	_expect_equal(host.get_child_count(), 0, "同步完成后不会创建残留 watchdog")
+	_expect_equal(provider.call("cancel_all_requests"), 0, "同步完成的请求不会留在取消队列")
+	host.free()
+	provider = null
+	transport = null
+	collector = null
+	await process_frame
+	_expect(provider_weak.get_ref() == null, "同步完成后 Provider 引用可以释放")
 
 
 func _test_transport_cancellation_releases_active_request(provider_script: Script) -> void:

@@ -224,6 +224,16 @@ CI 最后会检查 `git status --porcelain`。常见来源：
 
 应修复测试或功能本身，不要删除通过标记检查。
 
+### provider 测试通过但退出报告资源泄漏
+
+表现：provider 测试输出了约定的 `*_PASS` 标记，功能断言也通过，但退出时出现 `ERROR: N resources still in use at exit`；Agent runner 因此把子测试记为失败。
+
+直接原因：请求完成回调通过闭包捕获请求状态，而请求状态又保存失败回调，形成引用循环；同步注入 transport 最容易触发，因为请求在创建超时看门狗之前就已经完成。
+
+处理方法：在成功、失败、超时和取消的共同结算路径中清空请求状态保存的回调；transport 返回后如果请求已经同步完成，不再创建 watchdog。不要放宽 runner 对行首 `ERROR:` 或资源泄漏的检查。
+
+最终验证：provider robustness 测试必须覆盖有效宿主节点下的同步 transport，确认请求只结算一次、宿主没有残留 watchdog，并重新运行 Agent 离线套件和完整正式入口套件。
+
 ### 发行工作流拒绝运行
 
 常见提示包括“只能从 main 分支手动运行”“当前提交不是远端 main 的最新提交”或“标签已存在”。这些是防止从旧代码发行、覆盖已有版本的检查项，不应删除。
@@ -286,6 +296,16 @@ gh run view <运行编号> --log-failed \
 
 ## 已发生案例
 
+### 2026-08-12：模型请求生命周期修复引入 provider 资源泄漏
+
+表现：快速重开对话修复的 guards 通过，但正式验证中 Agent 离线套件为 `passed=39 failed=9`；9 个 provider 用例都打印了通过标记，随后因 Godot 退出资源泄漏被 runner 判定失败。
+
+直接原因：新请求状态保存了捕获自身的失败结算闭包，provider 测试中的同步 transport 使循环引用一直存活；同步完成后还会继续创建 watchdog。
+
+修复：结算时断开请求状态与闭包的引用，并在 transport 已同步完成时跳过 watchdog；补充同步 transport 的资源释放回归测试。
+
+最终验证：基准提交同一套正式验证为 `48/48`；修复后必须重新确认 Agent 离线套件 `48/48`，并继续完成正式故事和源码目录清洁检查。
+
 ### 2026-08-08：发行修复 PR 首次运行失败
 
 表现：
@@ -339,6 +359,7 @@ gh run view <运行编号> --log-failed \
 - [ ] `tools/guards/run_guards.sh` 通过。
 - [ ] Godot 无头导入没有脚本或引擎错误。
 - [ ] 相关测试通过；发行改动完成正式测试套件。
+- [ ] provider 测试退出时没有资源泄漏；同步 transport 已确认不会残留请求状态或 watchdog。
 - [ ] 发行工作流改动确认 Windows 使用 Linux 构建机、macOS 使用 macOS 构建机。
 - [ ] 测试后 `git status --porcelain` 没有意外变化。
 - [ ] 玩家可见改动已经写入根目录 `更新日志.md`，并已同步 README 的最新更新摘要。

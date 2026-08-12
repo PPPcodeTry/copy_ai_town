@@ -133,6 +133,9 @@ func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
 		if settled["done"]:
 			return
 		settled["done"] = true
+		# settle_failure 会捕获 request_state；结算后必须断开 state -> closure
+		# 的引用，否则同步 transport 会留下 RefCounted 循环引用。
+		request_state["settleFailure"] = Callable()
 		_clear_watchdog(request_state)
 		_end_active_request(request_id, request_state)
 		_handle_transport_result(
@@ -145,6 +148,7 @@ func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
 		if settled["done"]:
 			return
 		settled["done"] = true
+		request_state["settleFailure"] = Callable()
 		_clear_watchdog(request_state)
 		_end_active_request(request_id, request_state)
 		_complete_failure(on_complete, errors, diagnostics)
@@ -162,6 +166,9 @@ func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
 				["模型请求未能启动：%s" % error_string(error)],
 				{"error_type": "request_start", "retryable": false, "request": recorded_request},
 			)
+			return
+		# 某些注入 transport 会同步回调；请求已经结算时不能再创建 watchdog。
+		if bool(settled.get("done", false)):
 			return
 		_start_transport_watchdog(settle_failure, recorded_request, request_state)
 		return
