@@ -321,15 +321,15 @@ func _run() -> void:
 		failures,
 	)
 	build_info_overlay.apply_release_info({
-		"version": "0.1.0-beta.2",
-		"tag": "v0.1.0-beta.2",
+		"version": "0.1.0-beta.3",
+		"tag": "v0.1.0-beta.3",
 		"channel": "beta",
 	})
 	checks += _expect(
 		build_info_overlay.visible
 		and build_info_label != null
 		and build_info_label.text
-		== "当前为测试版本，不代表最终品质 · v0.1.0-beta.2",
+		== "当前为测试版本，不代表最终品质 · v0.1.0-beta.3",
 		"测试发行包必须在全局右下角显示完整版本号和测试提示。",
 		failures,
 	)

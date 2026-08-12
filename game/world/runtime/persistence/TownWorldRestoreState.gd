@@ -17,6 +17,7 @@ const SAVE_SCHEMA_REGISTRY := preload(
 const ACTIVITY_RUNTIME := preload(
 	"res://world/runtime/activity/TownWorldActivityRuntime.gd"
 )
+const PROP_QUERY := preload("res://world/data/town/TownWorldPropQuery.gd")
 const WORK_TASK_RUNTIME := preload(
 	"res://world/runtime/work/TownWorkTaskRuntime.gd"
 )
@@ -344,6 +345,11 @@ static func prepare_full(
 				) as Array
 			).duplicate(true),
 		}
+	if bool(migration.get("refreshResidentActionRoutes", false)):
+		_refresh_migrated_activity_action_routes(
+			prepared.get("worldData", world_data) as Dictionary,
+			prepared.get("residents", {}) as Dictionary,
+		)
 	var resident_condition_restore := RESTORE_PEOPLE.prepare_resident_conditions(
 		prepared,
 	) as Dictionary
@@ -760,6 +766,69 @@ static func prepare_full(
 		"ok": true,
 		"preparedState": prepared,
 	}
+
+
+static func _refresh_migrated_activity_action_routes(
+	world_data: Dictionary,
+	residents: Dictionary,
+) -> void:
+	for resident_value: Variant in residents.values():
+		if not resident_value is Dictionary:
+			continue
+		var resident := resident_value as Dictionary
+		var action_value: Variant = resident.get("currentAction", {})
+		if not action_value is Dictionary:
+			continue
+		var action := action_value as Dictionary
+		if (
+			String(action.get("type", "")) != "用道具"
+			or String(action.get("sourceContract", "")) not in [
+				"agent.activity",
+				"legacy.agent.use_prop",
+			]
+		):
+			continue
+		var place_name := String(resident.get("currentPlace", ""))
+		var prop_name := String(action.get("prop", ""))
+		var action_verb := String(action.get("verb", ""))
+		if place_name.is_empty() or prop_name.is_empty() or action_verb.is_empty():
+			continue
+		var path: Array[Vector2] = [
+			resident.get("position", Vector2.ZERO) as Vector2,
+		]
+		for point_value: Variant in resident.get("routeConnector", []) as Array:
+			if not point_value is Vector2:
+				continue
+			var connector_point := point_value as Vector2
+			if not path[-1].is_equal_approx(connector_point):
+				path.append(connector_point)
+		var plan := PROP_QUERY.interaction_plan(
+			world_data,
+			place_name,
+			prop_name,
+			action_verb,
+			path[-1],
+		) as Dictionary
+		if plan.is_empty():
+			continue
+		var approach := plan.get("approachPolyline", []) as Array
+		for point_value: Variant in approach:
+			if not point_value is Vector2:
+				continue
+			var point := point_value as Vector2
+			if not path[-1].is_equal_approx(point):
+				path.append(point)
+		var return_connector := approach.duplicate()
+		return_connector.reverse()
+		action["pathPoints"] = path
+		action["targetPosition"] = (
+			plan.get("position", resident.get("position", Vector2.ZERO))
+			as Vector2
+		)
+		action["dynamicPropId"] = String(plan.get("propId", ""))
+		action["returnRouteConnector"] = return_connector
+		action["pathClearanceVerified"] = true
+		resident["currentAction"] = action
 
 
 static func _validate_saved_history_times(

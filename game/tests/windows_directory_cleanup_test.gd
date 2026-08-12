@@ -36,6 +36,7 @@ func _run() -> void:
 	var suffix := "%d_%d" % [OS.get_process_id(), Time.get_ticks_usec()]
 	_test_session_store_cleanup(suffix)
 	_test_long_restore_transaction_cleanup(suffix)
+	_test_legacy_slot_ephemeral_migration(suffix)
 	_test_photo_store_cleanup(suffix)
 	_test_archive_cleanup(suffix)
 	_test_agent_store_long_staging(suffix)
@@ -220,6 +221,92 @@ func _test_long_restore_transaction_cleanup(suffix: String) -> void:
 			ProjectSettings.globalize_path(test_root),
 		),
 		"超长恢复测试根目录已删除",
+	)
+
+
+func _test_legacy_slot_ephemeral_migration(suffix: String) -> void:
+	var test_root := (
+		"user://tests/town_session_saves/windows_legacy_migration_%s" % suffix
+	)
+	var store: RefCounted = SESSION_STORE.new()
+	_expect_ok(
+		store.call("configure_test_root", test_root) as Dictionary,
+		"旧版锁迁移测试目录可配置",
+	)
+	var slot_id := "legacy-slot-%s" % "l".repeat(120)
+	var slot_root := String(store.call("_slot_root", slot_id))
+	var published_file := "%s/published/world_snapshot.json" % slot_root
+	_expect(
+		DirAccess.make_dir_recursive_absolute(
+			ProjectSettings.globalize_path(published_file.get_base_dir()),
+		) in [OK, ERR_ALREADY_EXISTS],
+		"旧版锁迁移测试正式存档目录可创建",
+	)
+	var published := FileAccess.open(published_file, FileAccess.WRITE)
+	if published != null:
+		published.store_string("published-save")
+		published = null
+	_expect(FileAccess.file_exists(published_file), "旧版锁迁移测试正式存档存在")
+
+	var legacy_root := String(store.call("_legacy_slot_lease_root", slot_id))
+	var legacy_claim := "%s/archive.claim" % legacy_root
+	var active_claim := store.call(
+		"_acquire_recoverable_directory_claim",
+		legacy_claim,
+	) as Dictionary
+	_expect_ok(active_claim, "旧版活动锁夹具可创建")
+	var blocked := store.call(
+		"check_legacy_slot_ephemeral_state",
+		slot_id,
+	) as Dictionary
+	_expect_equal(
+		blocked.get("errorCode"),
+		"SESSION_SAVE_SLOT_BUSY",
+		"旧版仍被活动进程持有的锁不会被新版本删除",
+	)
+	_expect_ok(
+		store.call(
+			"_release_owned_directory_claim",
+			legacy_claim,
+			active_claim.get("claimOwner", {}) as Dictionary,
+		) as Dictionary,
+		"旧版活动锁夹具可释放",
+	)
+	_expect(
+		DirAccess.make_dir_recursive_absolute(
+			ProjectSettings.globalize_path(
+				"%s/archive.pending" % legacy_root,
+			)
+		) in [OK, ERR_ALREADY_EXISTS],
+		"旧版中断归档标记可创建",
+	)
+	_expect(
+		DirAccess.make_dir_recursive_absolute(
+			ProjectSettings.globalize_path(
+				"%s/transactions" % legacy_root,
+			)
+		) in [OK, ERR_ALREADY_EXISTS],
+		"旧版中断事务目录可创建",
+	)
+	var checked := store.call(
+		"check_legacy_slot_ephemeral_state",
+		slot_id,
+	) as Dictionary
+	_expect_ok(checked, "旧版中断锁状态不会阻挡新版本继续运行")
+	_expect_equal(checked.get("legacyState"), "observed", "旧版锁状态只检查不删除")
+	_expect(
+		FileAccess.file_exists(published_file),
+		"检查旧版锁状态不会删除已经发布的正式存档",
+	)
+	_expect(
+		DirAccess.dir_exists_absolute(
+			ProjectSettings.globalize_path(legacy_root),
+		),
+		"旧版锁目录会保留，不作为迁移垃圾删除",
+	)
+	_expect_ok(
+		store.call("cleanup_test_root") as Dictionary,
+		"旧版锁迁移测试目录可清理",
 	)
 
 
