@@ -435,6 +435,58 @@
       "targetType": "prop"
     },
     {
+      "activityId": "activity_dining_eat_meal",
+      "facing": "left",
+      "fallback": "same_activity_other_slot",
+      "memberAnchors": [
+        {
+          "anchorId": "inspect_north_02",
+          "memberAnchorId": "member_dining_eat_east_02",
+          "position": [
+            488,
+            792
+          ]
+        }
+      ],
+      "placeName": "公共食堂",
+      "poseFamily": "eat_drink",
+      "role": "visitor",
+      "sceneId": "dining_hall",
+      "slotId": "slot_dining_eat_east_02",
+      "target": {
+        "actionVerb": "吃饭",
+        "anchorId": "inspect_north_02",
+        "propName": "公共食堂餐桌东端"
+      },
+      "targetType": "prop"
+    },
+    {
+      "activityId": "activity_dining_eat_meal",
+      "facing": "right",
+      "fallback": "same_activity_other_slot",
+      "memberAnchors": [
+        {
+          "anchorId": "inspect_south_02",
+          "memberAnchorId": "member_dining_eat_west_02",
+          "position": [
+            168,
+            792
+          ]
+        }
+      ],
+      "placeName": "公共食堂",
+      "poseFamily": "eat_drink",
+      "role": "visitor",
+      "sceneId": "dining_hall",
+      "slotId": "slot_dining_eat_west_02",
+      "target": {
+        "actionVerb": "吃饭",
+        "anchorId": "inspect_south_02",
+        "propName": "公共食堂西侧餐桌"
+      },
+      "targetType": "prop"
+    },
+    {
       "activityId": "activity_dining_prepare_meal",
       "facing": "up",
       "fallback": "reject",

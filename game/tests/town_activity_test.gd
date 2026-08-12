@@ -226,6 +226,10 @@ const ADAPTER := preload(
 const POLICY := preload(
 	"res://world/runtime/activity/TownWorldWeatherActivityPolicy.gd"
 )
+const AGENT_CONTRACT := preload("res://agent/AgentContract.gd")
+const DINING_SERVICE := preload(
+	"res://world/runtime/work/TownDiningServiceRuntime.gd"
+)
 
 var _started_events: Array[Dictionary] = []
 var _completed_events: Array[Dictionary] = []
@@ -240,6 +244,7 @@ var _places_document: Dictionary
 var _props_document: Dictionary
 var _indoor_authoring_document: Dictionary
 var _schedule_document: Dictionary
+var _resident_reactions: Array[Dictionary] = []
 
 
 func _initialize() -> void:
@@ -276,6 +281,7 @@ func _scenario_activity_runtime() -> void:
 	_verify_sleep_energy_and_leave_policy(data, opening)
 	_verify_world_query_and_execution(data, opening)
 	_verify_passive_needs_tick_is_presentation_silent(data, opening)
+	_verify_hunger_wakes_idle_agent(data, opening)
 	_verify_stationary_activity_minutes_are_presentation_silent(data, opening)
 	_verify_legacy_prop_activity_adapter(data, opening)
 	_verify_save_restore(data, opening)
@@ -1041,6 +1047,46 @@ func _verify_passive_needs_tick_is_presentation_silent(
 		after.get("body"),
 		"town_hud pull path reflects the updated body facts",
 	)
+
+
+func _verify_hunger_wakes_idle_agent(
+	data: Dictionary,
+	opening: Dictionary,
+) -> void:
+	var world: RefCounted = WORLD.new()
+	var resident_id := "resident_su_he_01"
+	_expect_equal(
+		(world.call("start", data, opening) as Dictionary).get("ok"),
+		true,
+		"饥饿唤醒用例能启动 World",
+	)
+	var resident := (world.get("_residents") as Dictionary).get(resident_id, {}) as Dictionary
+	resident["decisionPending"] = false
+	resident["pendingWake"] = {}
+	resident["wakeDispatchQueued"] = false
+	resident["validDecisionId"] = ""
+	resident["currentAction"] = {}
+	var activity_state := (resident.get("activityState", {}) as Dictionary).duplicate(true)
+	activity_state["satiety"] = 38
+	resident["activityState"] = activity_state
+	(world.get("_residents") as Dictionary)[resident_id] = resident
+	world.call("_advance_passive_activity_needs", WORLD.PASSIVE_NEED_TICK_MINUTES)
+	var after := (world.get("_residents") as Dictionary).get(resident_id, {}) as Dictionary
+	_expect_equal(
+		(after.get("activityState", {}) as Dictionary).get("satiety"),
+		35,
+		"空闲居民跨过有点饿阈值后饱腹度正确下降",
+	)
+	_expect(
+		bool(after.get("decisionPending", false)),
+		"空闲居民饿到阈值后立即进入 Agent 判断队列",
+	)
+	var requests := world.call(
+		"take_pending_decision_requests_by_ids",
+		[resident_id],
+	) as Array
+	_expect_equal(requests.size(), 1, "饥饿唤醒能被 Agent 请求队列取到")
+	world.call("stop")
 
 
 # C1 世界级用例:原地 performing 的逐分钟心跳(含 worker doing 轮换)零发射,
@@ -3036,6 +3082,13 @@ func _on_activity_interrupted(
 	_interrupted_events.append(event.duplicate(true))
 
 
+func _on_resident_reaction(
+	_resident_name: String,
+	reaction: Dictionary,
+) -> void:
+	_resident_reactions.append(reaction.duplicate(true))
+
+
 
 func _expect_exact_keys(
 	value: Dictionary,
@@ -3061,6 +3114,7 @@ func _scenario_activity_routine() -> void:
 	).duplicate(true)
 	_verify_all_workplaces(data, opening)
 	_verify_meal_sequence(data, opening)
+	_verify_dining_capacity_agent_reaction(data, opening)
 	_verify_active_meal_routine_save(data, opening)
 	_verify_meal_presentation_progress(data, opening)
 	_verify_active_routine_save_restore(data, opening)
@@ -3188,9 +3242,65 @@ func _verify_meal_sequence(data: Dictionary, opening: Dictionary) -> void:
 		_move_to_place(world, resident_name, "公共食堂"),
 		"访客能到达公共食堂",
 	)
+	var before_meal_query := world.call(
+		"query_activity_options",
+		resident_id,
+	) as Dictionary
+	var collect_before_meal := _activity_option(
+		before_meal_query.get("options", []) as Array,
+		"activity_dining_collect_meal",
+	)
+	_expect(
+		not collect_before_meal.is_empty()
+		and collect_before_meal.get("available") == false,
+		"公共食堂未完成当餐备餐前不能直接取餐",
+	)
 	_expect(
 		_prepare_meal_for_activity_test(world),
 		"完整用餐检查会先完成当前餐次备餐",
+	)
+	var menu_announced := false
+	for announcement_value: Variant in world.call(
+		"get_announcements",
+	) as Array:
+		if String((announcement_value as Dictionary).get("text", "")).contains(
+			"菜单",
+		):
+			menu_announced = true
+		break
+	var menu_period := world.call(
+		"_meal_period_for_minute",
+		int((world.get("_environment") as RefCounted).call("get_absolute_minute")),
+	) as Dictionary
+	var menu_document := JSON.parse_string(FileAccess.get_file_as_string(
+		"res://world/data/town/source/meal_menus.json",
+	)) as Dictionary
+	var configured_menu := String(
+		(menu_document.get("menus", {}) as Dictionary).get(
+			String(menu_period.get("id", "")),
+			"",
+		)
+	)
+	var menu_text_matches_data := false
+	for announcement_value: Variant in world.call(
+		"get_announcements",
+	) as Array:
+		if String((announcement_value as Dictionary).get("text", "")).contains(
+			configured_menu,
+		):
+			menu_text_matches_data = true
+			break
+	_expect(
+		menu_announced and menu_text_matches_data,
+		"当餐备餐计划会发布来自菜单数据的公告",
+	)
+	var satiety_before_meal := int(
+		(
+			(world.call("get_resident_state", resident_id) as Dictionary).get(
+				"activityNeeds",
+				{},
+			) as Dictionary
+		).get("satiety", 0)
 	)
 	var wake := _take_wake_activity_routine(world, resident_name)
 	_expect_accepted(
@@ -3225,8 +3335,142 @@ func _verify_meal_sequence(data: Dictionary, opening: Dictionary) -> void:
 		"吃饭过程至少经过三个不同位置，实际为 %s"
 		% [positions.keys()],
 	)
+	var dining_request_found := false
+	for request_value: Variant in (
+		world.call("get_occupation_service_snapshot") as Dictionary
+	).get("requests", []) as Array:
+		if String((request_value as Dictionary).get("kind", "")) == "dining_order":
+			dining_request_found = true
+			break
+	_expect(
+		not dining_request_found,
+		"公共食堂日常用餐不再按居民逐人创建点餐请求",
+	)
+	var satiety_after_meal := int(
+		(
+			(world.call("get_resident_state", resident_id) as Dictionary).get(
+				"activityNeeds",
+				{},
+			) as Dictionary
+		).get("satiety", 0)
+	)
+	_expect(
+		satiety_after_meal > satiety_before_meal,
+		"公共食堂用餐会真正补充居民饱腹度",
+	)
 	world.call("stop")
 
+
+
+func _verify_dining_capacity_agent_reaction(
+	data: Dictionary,
+	opening: Dictionary,
+) -> void:
+	var world: RefCounted = WORLD.new()
+	world.connect("resident_reaction_created", _on_resident_reaction)
+	_expect_equal(
+		(world.call("start", data, opening) as Dictionary).get("ok"),
+		true,
+		"食堂名额检查 World 可启动",
+	)
+	var resident_name := "唐小满"
+	var resident_id := "resident_tang_xiaoman_01"
+	_expect(
+		_move_to_place(world, resident_name, "公共食堂"),
+		"食堂名额检查前居民能到达食堂",
+	)
+	_expect(
+		_prepare_meal_for_activity_test(world),
+		"食堂名额检查会先完成当前餐次备餐",
+	)
+	var now := int(
+		(world.get("_environment") as RefCounted).call(
+			"get_absolute_minute",
+		)
+	)
+	var period_ref := String(world.call("_meal_period_source_ref", now))
+	var routines := (world.get("_activity_routines") as Dictionary).duplicate(true)
+	for index in 4:
+		routines["fixture-meal-%d" % index] = {
+			"group": "meal",
+			"placeId": "公共食堂",
+			"mealPeriodRef": period_ref,
+			"endAbsoluteMinute": now + 20,
+		}
+	world.set("_activity_routines", routines)
+	var capacity := DINING_SERVICE.capacity_status(world, resident_id, now)
+	_expect_equal(capacity.get("capacity"), 4, "公共食堂同时最多接待四人")
+	_expect_equal(capacity.get("occupied"), 4, "四个用餐流程会占满食堂名额")
+	_expect_equal(capacity.get("state"), "full", "四人占用后食堂如实报告满员")
+	var wake := _take_wake_activity_routine(world, resident_name)
+	var full_decision := _activity_decision(
+		wake,
+		"activity_dining_collect_meal",
+		"我饿了，去看看今天有没有位置",
+	)
+	var rejected := world.call(
+		"submit_agent_decision",
+		resident_name,
+		full_decision,
+	) as Dictionary
+	_expect_equal(
+		rejected.get("errorCode"),
+		"DINING_HALL_FULL",
+		"满员时取餐入口返回明确的可重试结果",
+	)
+	var full_wake := _take_wake_activity_routine(world, resident_name)
+	var rejected_action_id := String(
+		(full_decision.get("action", {}) as Dictionary).get("action_id", "")
+	)
+	_expect_equal(
+		AGENT_CONTRACT.reaction_source_action_id(full_wake),
+		rejected_action_id,
+		"满员结果进入下一轮 Agent 的可回应动作结果",
+	)
+	var reaction_text := "满了，待会儿再来"
+	_resident_reactions.clear()
+	var reaction_decision := {
+		"decision_id": String(full_wake.get("decision_id", "")),
+		"handling": "replace_current",
+		"reaction": {
+			"source_action_id": rejected_action_id,
+			"text": reaction_text,
+		},
+		"action": {
+			"action_id": "%s-leave" % String(full_wake.get("decision_id", "")),
+			"type": "待着",
+			"line": "先离开取餐口，晚些时候再来",
+		},
+	}
+	var reaction_result := world.call(
+		"submit_agent_decision",
+		resident_name,
+		reaction_decision,
+	) as Dictionary
+	_expect_accepted(reaction_result, "Agent 能回应食堂满员结果")
+	var wait_action := (
+		(world.get("_residents") as Dictionary).get(resident_id, {}) as Dictionary
+	).get("currentAction", {}) as Dictionary
+	_expect(
+		int(wait_action.get("completeAbsoluteMinute", 0))
+		- int(wait_action.get("startedAbsoluteMinute", 0)) <= 10,
+		"满员时 Agent 选择等待也不会在食堂卡住太久",
+	)
+	routines.erase("fixture-meal-0")
+	world.set("_activity_routines", routines)
+	var freed_capacity := DINING_SERVICE.capacity_status(world, resident_id, now)
+	_expect_equal(freed_capacity.get("occupied"), 3, "有人离开后名额会释放")
+	_expect_equal(freed_capacity.get("available"), 1, "有人离开后新居民可以进入")
+	var reaction_was_created := false
+	for reaction: Dictionary in _resident_reactions:
+		if String(reaction.get("text", "")) == reaction_text:
+			reaction_was_created = true
+			break
+	_expect(
+		reaction_was_created,
+		"满员气泡使用 Agent 自己提交的想法",
+	)
+	world.call("stop")
 
 
 func _verify_active_meal_routine_save(
@@ -3849,6 +4093,24 @@ func _use_prop(
 
 
 
+func _activity_decision(
+	wake: Dictionary,
+	activity_id: String,
+	line: String,
+) -> Dictionary:
+	var decision_id := String(wake.get("decision_id", ""))
+	return {
+		"decision_id": decision_id,
+		"handling": "replace_current",
+		"action": {
+			"action_id": "%s-activity-%s" % [decision_id, activity_id],
+			"type": "做活动",
+			"activity_id": activity_id,
+			"line": line,
+		},
+	}
+
+
 func _unique_strings(values: Array) -> Array[String]:
 	var seen := {}
 	var result: Array[String] = []
@@ -3915,7 +4177,7 @@ func _scenario_activity_catalog_contract() -> void:
 	)
 	_expect_equal(
 		CATALOG.slot_templates(catalog).size(),
-		87,
+		89,
 		"catalog exposes the authored prop slots",
 	)
 	_expect_equal(
@@ -6141,6 +6403,9 @@ func _scenario_bulletin_activity() -> void:
 	(
 		opening_config.get("environment", {}) as Dictionary
 	)["randomSeed"] = 1
+	(
+		opening_config.get("environment", {}) as Dictionary
+	)["clock"] = "00:00"
 	var public_props := PROP_QUERY.agent_props_at_place(
 		data,
 		"中心广场",

@@ -2069,6 +2069,16 @@ static func _complete_recurring_occupation_work_task_before_release(
 				"baseSupplyUsed": true,
 			},
 		)
+		var completed_task := world._work_tasks.task(
+			String(task.get("taskId", "")),
+		) as Dictionary
+		if String(completed_task.get("state", "")) == "completed":
+			var prepared_at := int(completed_task.get("createdAtMinute", now))
+			DINING_SERVICE.publish_meal_menu_announcement(
+				world,
+				world._meal_period_for_minute(prepared_at) as Dictionary,
+				prepared_at,
+			)
 		world._activate_waiting_dining_orders()
 		world._schedule_occupation_decisions("occupation_dining_operator")
 		return
@@ -2454,7 +2464,7 @@ static func _record_facility_use_from_activity(
 				String(active_clinic_request.get("placeId", "")),
 				active_clinic_request.get("context", {}) as Dictionary,
 			)
-		elif not (
+		elif request_kind != "dining_order" and not (
 			request_kind == "library_return"
 			and bool(world._occupation_services.has_active_request(
 				request_kind,
@@ -2462,6 +2472,21 @@ static func _record_facility_use_from_activity(
 			))
 		):
 			world.create_occupation_service_request(occupation_request_spec)
+	if activity_id == "activity_dining_eat_meal":
+		var meal_period_ref: String = String(world._meal_period_source_ref(int(now)))
+		if (
+			not meal_period_ref.is_empty()
+			and not world._occupation_services.has_dining_order_completed_for_resident_meal_period(
+				resident_id,
+				meal_period_ref,
+			)
+		):
+			world._apply_consumed_service_item(resident_id, "meal")
+			world._occupation_services.mark_dining_order_completed_for_resident_meal_period(
+				resident_id,
+				meal_period_ref,
+			)
+		return
 	if activity_id == "activity_dining_return_dishes":
 		var recorded_dish := world._occupation_services.record_dirty_dish(
 			resident_id,

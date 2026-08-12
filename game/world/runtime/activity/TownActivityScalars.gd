@@ -118,6 +118,15 @@ static func sync_body_from_activity_needs(
 		else ("有点累" if energy <= 35 else "不累")
 	)
 
+static func hunger_crossed_decision_threshold(
+	previous: Dictionary,
+	next: Dictionary,
+) -> bool:
+	return (
+		int(previous.get("satiety", 50)) > 35
+		and int(next.get("satiety", 50)) <= 35
+	)
+
 static func resident_sleep_needed(resident: Dictionary) -> bool:
 	var activity_state := resident.get(
 		"activityState",
