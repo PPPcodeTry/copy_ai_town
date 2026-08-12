@@ -42,11 +42,32 @@ class DuplicateCallbackProvider:
 		on_complete.call(result)
 
 
+class SessionClosingProvider:
+	extends RefCounted
+
+	var pending_callbacks: Array[Callable] = []
+	var latest_callback := Callable()
+	var cancel_all_calls := 0
+
+	func request_decision(_model_input: Dictionary, on_complete: Callable) -> void:
+		pending_callbacks.append(on_complete)
+		latest_callback = on_complete
+
+	func cancel_all_requests() -> int:
+		cancel_all_calls += 1
+		var callbacks := pending_callbacks.duplicate()
+		pending_callbacks.clear()
+		for callback: Callable in callbacks:
+			callback.call({"ok": false, "errors": ["session closed"]})
+		return callbacks.size()
+
+
 func _initialize() -> void:
 	_test_valid_response_reaches_world_once()
 	_test_invalid_response_is_rejected()
 	_test_provider_error_is_sanitized()
 	_test_duplicate_callback_is_one_shot()
+	_test_close_session_cancels_pending_model_request()
 	_test_extra_fields_are_rejected()
 	_test_stale_response_is_discarded()
 	_finish_suite("AGENT_LLM_RESPONSE_PASS", [_test_root])
@@ -144,6 +165,35 @@ func _test_duplicate_callback_is_one_shot() -> void:
 	_expect_equal(results.values.size(), 1, "Provider 重复回调只到达世界一次")
 	system.call("close_game")
 	_expect_equal((system.get("_retired_residents") as Array).size(), 0, "重复回调不会遗留退休居民实例")
+
+
+func _test_close_session_cancels_pending_model_request() -> void:
+	var system := _new_system()
+	var model := SessionClosingProvider.new()
+	_expect_ok(
+		system.call("initialize_resident", TestData.initialization(), model),
+		"会话关闭取消测试初始化居民",
+	)
+	var results := ResultCollector.new()
+	system.call(
+		"request_decision",
+		"resident-lin-lan",
+		TestData.wake_packet("session-close"),
+		results.collect,
+	)
+	_expect_equal(model.pending_callbacks.size(), 1, "关闭前确实存在一条在途模型请求")
+	system.call("close_game")
+	_expect_equal(model.cancel_all_calls, 1, "关闭会话会调用 Provider 全量取消接口")
+	_expect_equal(
+		(system.get("_retired_residents") as Array).size(),
+		0,
+		"取消完成后退休居民立即释放，不等待模型超时",
+	)
+	_expect_equal(results.values.size(), 1, "关闭时取消请求只产生一次 stale 收束结果")
+	if model.latest_callback.is_valid():
+		model.latest_callback.call({"ok": false, "errors": ["late session callback"]})
+	model.latest_callback = Callable()
+	_expect_equal(results.values.size(), 1, "关闭后的迟到回调不会再次触发上层")
 
 
 func _test_extra_fields_are_rejected() -> void:

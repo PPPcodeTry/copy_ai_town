@@ -62,6 +62,11 @@ func request_decision(
 			"errors": model_request.get("errors", ["模型输入组装失败"]),
 		})
 		return
+	var request_id := String(wake_packet.get("decision_id", "")).strip_edges()
+	if not request_id.is_empty():
+		# 这是 Provider 内部的请求关联号，不会进入供应商请求 body；
+		# Gateway 取消旧决策时用它终止真实传输。
+		model_request["_agent_request_id"] = request_id
 	_model_provider.call(
 		"request_decision",
 		model_request,

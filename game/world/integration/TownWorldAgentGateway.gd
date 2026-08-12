@@ -65,6 +65,7 @@ const INNER_OBSERVATION_FORBIDDEN_PLAYER_TERMS: Array[String] = [
 	"json",
 ]
 const DEATH_STORY_MAX_CHARS := 96
+const DEATH_STORY_TIMEOUT_MSEC := 45_000
 const DEATH_STORY_FORBIDDEN_TERMS: Array[String] = [
 	"system prompt",
 	"systemprompt",
@@ -128,9 +129,11 @@ func _process(_delta: float) -> void:
 	var processed_inner_observation := _advance_inner_observation_requests()
 	if not processed_inner_observation:
 		_advance_agent_preparation()
+	_advance_death_story_requests()
 	set_process(
 		not _inner_observation_inflight.is_empty()
 		or not _agent_preparation_queue.is_empty()
+		or not _death_story_inflight.is_empty()
 	)
 
 
@@ -589,8 +592,14 @@ func _mark_superseded_inflight_for_request(
 			String(inflight.get("residentId", "")) == resident_id
 			and inflight_decision_id != current_decision_id
 		):
+			var already_superseded := bool(inflight.get("superseded", false))
 			inflight["superseded"] = true
 			_inflight[inflight_decision_id] = inflight
+			if not already_superseded:
+				_cancel_resident_model_request(
+					resident_id,
+					inflight_decision_id,
+				)
 
 
 func _mark_superseded_inflight_for_pending_requests(
@@ -770,7 +779,9 @@ func request_resident_death_story(
 		"residentId": normalized_resident_id,
 		"generation": captured_generation,
 		"callback": on_complete,
+		"startedAtMsec": Time.get_ticks_msec(),
 	}
+	model_request["_agent_request_id"] = normalized_request_id
 	var accepted := _agent_system.request_json_for_resident(
 		normalized_resident_id,
 		model_request,
@@ -786,6 +797,7 @@ func request_resident_death_story(
 			"DEATH_STORY_AGENT_REQUEST_REJECTED",
 			bool(accepted.get("retryable", false)),
 		)
+	set_process(true)
 	return _death_story_request_accepted(normalized_request_id)
 
 
@@ -822,6 +834,36 @@ func _deliver_resident_death_story(
 		"generatedBy": "resident_agent",
 		"requestId": request_id,
 	})
+
+
+func _advance_death_story_requests(now_msec: int = -1) -> bool:
+	if _death_story_inflight.is_empty():
+		return false
+	var effective_now_msec := (
+		Time.get_ticks_msec()
+		if now_msec < 0
+		else now_msec
+	)
+	var timed_out := false
+	for request_id_value: Variant in _death_story_inflight.keys():
+		var request_id := String(request_id_value)
+		var pending := _death_story_inflight.get(request_id, {}) as Dictionary
+		var started_at := int(pending.get("startedAtMsec", effective_now_msec))
+		if effective_now_msec - started_at < DEATH_STORY_TIMEOUT_MSEC:
+			continue
+		_death_story_inflight.erase(request_id)
+		var resident_id := String(pending.get("residentId", ""))
+		_cancel_resident_model_request(resident_id, request_id)
+		var callback := pending.get("callback", Callable()) as Callable
+		if callback.is_valid():
+			callback.call({
+				"ok": false,
+				"errorCode": "DEATH_STORY_TIMEOUT",
+				"retryable": true,
+				"errors": ["死亡故事模型请求超时，已使用安全收束故事"],
+			})
+		timed_out = true
+	return timed_out
 
 
 func _normalize_death_story_result(result: Variant) -> String:
@@ -2433,17 +2475,39 @@ func _wake_is_avatar_conversation_turn(wake: Dictionary) -> bool:
 	if not _wake_requires_conversation_turn(wake):
 		return false
 	var snapshot_value: Variant = wake.get("snapshot")
-	if not snapshot_value is Dictionary:
-		return false
-	var conversation_value: Variant = (
-		snapshot_value as Dictionary
-	).get("conversation")
-	if not conversation_value is Dictionary:
-		return false
-	var conversation := conversation_value as Dictionary
-	return String(
-		conversation.get("with_resident_id", ""),
-	) == _avatar_person_id
+	if snapshot_value is Dictionary:
+		var conversation_value: Variant = (
+			snapshot_value as Dictionary
+		).get("conversation")
+		if conversation_value is Dictionary:
+			var conversation := conversation_value as Dictionary
+			if String(
+				conversation.get("with_resident_id", ""),
+			) == _avatar_person_id:
+				return true
+	# Pending envelopes deliberately avoid rebuilding the full snapshot before
+	# capacity selection. The conversation event is still authoritative enough
+	# to identify a player turn and replace an older request for this resident.
+	# Without this fallback, a rapid conversation reopen can wait behind a full
+	# request group until the stale provider call times out.
+	for event_value: Variant in wake.get("events", []) as Array:
+		if not event_value is Dictionary:
+			continue
+		var event := event_value as Dictionary
+		var participants_value: Variant = event.get(
+			"participant_resident_ids",
+			[],
+		)
+		if participants_value is Array:
+			for participant_value: Variant in participants_value as Array:
+				if String(participant_value) == _avatar_person_id:
+					return true
+		var turn_value: Variant = event.get("turn")
+		if turn_value is Dictionary and String(
+			(turn_value as Dictionary).get("speaker_resident_id", ""),
+		) == _avatar_person_id:
+			return true
+	return false
 
 
 func _wake_requires_conversation_turn(wake: Dictionary) -> bool:
@@ -2732,6 +2796,21 @@ func _redispatch(resident_id: String, decision_id: String) -> void:
 	if _world == null or resident_id.is_empty() or decision_id.is_empty():
 		return
 	_world.redispatch_decision_request_by_id(resident_id, decision_id)
+
+
+func _cancel_resident_model_request(resident_id: String, request_id: String) -> bool:
+	if (
+		_agent_system == null
+		or not _agent_system.has_method("cancel_resident_model_request")
+		or resident_id.is_empty()
+		or request_id.is_empty()
+	):
+		return false
+	var result := _agent_system.cancel_resident_model_request(
+		resident_id,
+		request_id,
+	) as Dictionary
+	return bool(result.get("ok", false))
 
 
 func _record_error(
