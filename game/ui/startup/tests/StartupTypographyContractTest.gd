@@ -2,9 +2,6 @@ extends SceneTree
 
 
 const STARTUP_THEME := preload("res://ui/startup/StartupButtonImageTheme.gd")
-const COMMERCIAL_GATE := preload(
-	"res://ui/common/tools/CommonUiCommercialGate.gd"
-)
 const MAIN_MENU_FONT_PATH := (
 	"res://assets/ui/startup/fonts/noto_sans_cjk_sc_medium/"
 	+ "NotoSansCJKsc-Medium.otf"
@@ -20,6 +17,7 @@ const COVERAGE_SAMPLE := (
 
 
 func _initialize() -> void:
+	_stop_unrelated_project_audio()
 	call_deferred("_run")
 
 
@@ -37,6 +35,15 @@ func _run() -> void:
 	checks += _validate_button_contrast(failures)
 	checks += _validate_coverage(theme, failures)
 	_finish(failures, checks)
+
+
+func _stop_unrelated_project_audio() -> void:
+	var audio_autoload := root.get_node_or_null("TownAudioController")
+	if audio_autoload == null:
+		return
+	if audio_autoload.has_method("prepare_shutdown"):
+		audio_autoload.call("prepare_shutdown")
+	audio_autoload.free()
 
 
 func _validate_import_contract(failures: Array[String]) -> int:
@@ -279,11 +286,11 @@ func _validate_button_contrast(failures: Array[String]) -> int:
 		)
 		if load_error != OK or image.is_empty():
 			continue
-		var background := image.get_pixel(
+		var background: Color = image.get_pixel(
 			image.get_width() / 2,
 			image.get_height() / 2,
 		)
-		var ratio := COMMERCIAL_GATE.contrast_ratio(
+		var ratio: float = _contrast_ratio(
 			test_case["foreground"] as Color,
 			background,
 		)
@@ -294,6 +301,28 @@ func _validate_button_contrast(failures: Array[String]) -> int:
 			failures,
 		)
 	return checks
+
+
+func _contrast_ratio(first: Color, second: Color) -> float:
+	var first_luminance: float = _relative_luminance(first)
+	var second_luminance: float = _relative_luminance(second)
+	return (
+		(maxf(first_luminance, second_luminance) + 0.05)
+		/ (minf(first_luminance, second_luminance) + 0.05)
+	)
+
+
+func _relative_luminance(color: Color) -> float:
+	var red: float = _linear_color_component(color.r)
+	var green: float = _linear_color_component(color.g)
+	var blue: float = _linear_color_component(color.b)
+	return red * 0.2126 + green * 0.7152 + blue * 0.0722
+
+
+func _linear_color_component(component: float) -> float:
+	if component <= 0.04045:
+		return component / 12.92
+	return pow((component + 0.055) / 1.055, 2.4)
 
 
 func _expect(
