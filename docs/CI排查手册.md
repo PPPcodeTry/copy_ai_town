@@ -230,7 +230,7 @@ CI 最后会检查 `git status --porcelain`。常见来源：
 
 直接原因：请求完成回调通过闭包捕获请求状态，而请求状态又保存失败回调，形成引用循环；同步注入 transport 最容易触发，因为请求在创建超时看门狗之前就已经完成。
 
-处理方法：在成功、失败、超时和取消的共同结算路径中清空请求状态保存的回调；transport 返回后如果请求已经同步完成，不再创建 watchdog。不要放宽 runner 对行首 `ERROR:` 或资源泄漏的检查。
+处理方法：在成功、失败、超时和取消的共同结算路径中清空请求状态保存的回调；transport 返回后如果请求已经同步完成，不再创建 watchdog。watchdog 的 `timeout` 信号回调中只能使用 `queue_free()`，不能直接 `free()` 被 Godot 锁定的计时器。不要放宽 runner 对行首 `ERROR:` 或资源泄漏的检查。
 
 最终验证：provider robustness 测试必须覆盖有效宿主节点下的同步 transport，确认请求只结算一次、没有残留在途取消状态，并重新运行 Agent 离线套件和完整正式入口套件。不要把 watchdog 的具体实现（例如宿主子节点数量）写成测试契约，应断言超时、完成和取消的行为。
 
@@ -305,6 +305,8 @@ gh run view <运行编号> --log-failed \
 修复：结算时断开请求状态与闭包的引用，并在 transport 已同步完成时跳过 watchdog；补充同步 transport 的资源释放回归测试。首次回归测试误把 watchdog 假定为宿主子节点，远端使用 `SceneTreeTimer` 时产生了错误断言，随后改为检查请求行为和在途状态。
 
 后续验证：将 watchdog 改为 `SceneTreeTimer` 后，资源释放虽然交给场景树，但有效宿主下的在途请求不再有可检查的计时器节点，导致 watchdog 生命周期断言失败；最终改为宿主下的一次性 `Timer`，结算时同步停止并释放，保留同步完成跳过 watchdog 的处理。
+
+补充表现：在 timeout 信号回调中直接调用 `free()` 会出现 `Object is locked and can't be freed`，即使测试通过标记仍会被 runner 判为失败；应改用 `queue_free()`，并保留同步 transport 不创建 watchdog 的路径。
 
 最终验证：基准提交同一套正式验证为 `48/48`；修复后必须重新确认 Agent 离线套件 `48/48`，并继续完成正式故事和源码目录清洁检查。
 

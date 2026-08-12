@@ -252,9 +252,9 @@ func _clear_watchdog(request_state: Dictionary) -> void:
 	if timer_value is Timer and is_instance_valid(timer_value):
 		var timer := timer_value as Timer
 		timer.stop()
-		# 立即释放而不是 queue_free，避免同步 transport 测试在下一帧前
-		# 退出时留下尚未处理的临时节点。
-		timer.free()
+		# timeout 信号回调期间对象处于锁定状态，必须延迟释放；同步
+		# transport 已完成时不会创建 watchdog，因此不会留下未处理的节点。
+		timer.queue_free()
 	request_state["watchdogTimer"] = null
 
 
