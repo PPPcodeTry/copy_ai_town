@@ -382,12 +382,43 @@ func _test_traveler_relationship_context(compiler_script: Script) -> void:
 		"last_change": "居民回应+1",
 	}
 	var caring_request := compiler.call("compile", caring_wake, avatar_memory) as Dictionary
+	var caring_actions := (
+		caring_request.get("derived_constraints", {}) as Dictionary
+	).get("actions", {}) as Dictionary
+	var caring_reply_fields := (
+		(caring_actions.get("答话", {}) as Dictionary).get("fields", [])
+		as Array
+	)
 	var caring_messages := caring_request.get("messages", []) as Array
 	var caring_text := String(
 		(caring_messages[1] as Dictionary).get("content", "")
 	) if caring_messages.size() == 2 else ""
 	_expect(
 		caring_text.contains("好感53（开始在意）")
-		and caring_text.contains("答完后多说一句只会对在意的人说的话"),
+		and caring_text.contains("答完后多说一句只会对在意的人说的话")
+		and caring_reply_fields.has("traveler_relationship_beat")
+		and caring_text.contains("必须原样出现在 action.say 中")
+		and caring_text.contains("personal_view、reciprocal_question"),
 		"the first visible affinity stage changes concrete conversation behavior",
+	)
+	var close_wake := caring_wake.duplicate(true)
+	var close_conversation := close_wake["snapshot"]["conversation"] as Dictionary
+	var close_relationship := (
+		close_conversation["traveler_relationship"] as Dictionary
+	)
+	close_relationship["affinity"] = 94
+	close_relationship["affinity_label"] = "很亲近"
+	var close_request := compiler.call("compile", close_wake, avatar_memory) as Dictionary
+	var close_messages := close_request.get("messages", []) as Array
+	var close_text := String(
+		(close_messages[1] as Dictionary).get("content", "")
+	) if close_messages.size() == 2 else ""
+	_expect(
+		close_text.contains("听出自己不是普通熟人")
+		and close_text.contains("必须先接住这份情绪")
+		and close_text.contains("至少落实一项个人关系信号")
+		and close_text.contains("单纯叫对方休息不算")
+		and close_text.contains("personal_stake、safe_place、shared_rapport")
+		and close_text.contains("禁止照抄例句"),
+		"the closest stage requires relationship-specific content",
 	)

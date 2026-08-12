@@ -835,7 +835,7 @@ func _render_traveler_relationship(value: Variant, lines: Array[String]) -> void
 		if affinity < 80
 		else "信任：可以主动问起未完的事，分享一项自己的感受或顾虑，不必只回答问题"
 		if affinity < 90
-		else "很亲近：说话可以更放松直接，出现默契、惦记或符合本人性格的玩笑"
+		else "很亲近：要让旅行者从内容中听出自己不是普通熟人，但不要直说关系标签。旅行者表达烦恼、疲惫、害怕或难过时，必须先接住这份情绪，并至少落实一项个人关系信号：明确说对方的状态让自己担心或不踏实；明确说对方可以留在“我这里”且本人愿意听；或接上只有双方知道的共同记忆。单纯叫对方休息不算，不能只给泛泛建议。差异示例：普通熟人会说“别急，歇会儿”，很亲近的人可能说“你先在我这儿坐着。你这样乱着，我没法当没看见”。只参考亲疏差异，禁止照抄例句"
 	)
 	var familiarity_hint := (
 		"你们还没有完成过双向对话；不要假装以前聊过，也不要说又见面"
@@ -1302,6 +1302,19 @@ func _render_constraints(constraints: Dictionary) -> String:
 				+ "冒犯、欺骗或施压按程度填 -1 到 -5；"
 				+ "正数表示增加，负数表示减少，证据不足填 0"
 			)
+		if data.has("traveler_relationship_beat"):
+			var beat := data.get("traveler_relationship_beat", {}) as Dictionary
+			var beat_guidance := (
+				"；traveler_relationship_beat：必须填对象"
+				+ " {\"kind\":\"关系表现类型\",\"text\":\"关系表现句\"}；"
+				+ "kind 只能从 %s 选择；text 最多 %d 字，必须原样出现在 action.say 中；"
+				+ "先单独想出符合当前亲疏和本人性格的一小句，再围绕它完成整句答话；"
+				+ "普通建议、事实回答和单纯叫对方休息不能充当关系表现句"
+			)
+			text += beat_guidance % [
+				_join(beat.get("kinds", [])),
+				int(beat.get("max_characters", 80)),
+			]
 		if data.has("options"):
 			var options: Array[String] = []
 			for option_value: Variant in data["options"] as Array:
@@ -1400,6 +1413,18 @@ func _build_derived_constraints(wake_packet: Dictionary) -> Dictionary:
 				"min": -5,
 				"max": 5,
 			}
+			var beat_kinds := _traveler_relationship_beat_kinds(
+				conversation as Dictionary,
+			)
+			if not beat_kinds.is_empty():
+				(required_reply_action.get("fields", []) as Array).append(
+					"traveler_relationship_beat",
+				)
+				required_reply_action["traveler_relationship_beat"] = {
+					"fields": ["kind", "text"],
+					"kinds": beat_kinds,
+					"max_characters": 80,
+				}
 		if medical_reply.is_empty():
 			(required_reply_action.get("fields", []) as Array).erase(
 				"medical_response",
@@ -1791,6 +1816,22 @@ func _action_constraints(action_type: String, parameters := {}) -> Dictionary:
 func _conversation_is_traveler(conversation: Dictionary) -> bool:
 	var with_id := String(conversation.get("with_resident_id", "")).strip_edges()
 	return not with_id.is_empty() and not _resident_names.has(with_id)
+
+
+func _traveler_relationship_beat_kinds(
+	conversation: Dictionary,
+) -> Array[String]:
+	var relationship := conversation.get("traveler_relationship", {}) as Dictionary
+	var affinity := int(relationship.get("affinity", 50))
+	if relationship.is_empty() or affinity < 53:
+		return []
+	if affinity < 63:
+		return ["personal_view", "reciprocal_question"]
+	if affinity < 80:
+		return ["old_topic", "practical_care", "personal_view"]
+	if affinity < 90:
+		return ["personal_feeling", "unfinished_concern", "private_worry"]
+	return ["personal_stake", "safe_place", "shared_rapport"]
 
 
 func _known_place_names() -> Array[String]:

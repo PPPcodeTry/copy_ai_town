@@ -23,6 +23,9 @@ static func _validate_action(
 		allowed_fields.append_array(
 			AgentContract.OPTIONAL_ACTION_FIELDS.get(action_type, []) as Array
 		)
+		allowed_fields.append_array(
+			AgentContract.MODEL_ONLY_ACTION_FIELDS.get(action_type, []) as Array
+		)
 		# 模型有时会把对话的 end 带到普通动作里；它不会参与执行，规范化时会丢弃。
 		if action_type != "答话":
 			allowed_fields.append("end")
@@ -185,6 +188,7 @@ static func _validate_action(
 				errors.append("action.traveler_affinity_delta 必须是整数")
 			elif int(affinity_delta) < -5 or int(affinity_delta) > 5:
 				errors.append("action.traveler_affinity_delta 必须在 -5 到 5 之间")
+		_validate_traveler_relationship_beat(action, wake_packet, errors)
 		AgentContractMedical._validate_medical_response(action, wake_packet, errors)
 	elif not action_type.is_empty() and not AgentContract.ACTION_TYPES.has(action_type):
 		errors.append("action.type 不是合法动作类型")
@@ -195,6 +199,65 @@ static func _validate_action(
 			wake_packet,
 			errors,
 		)
+
+
+static func _validate_traveler_relationship_beat(
+	action: Dictionary,
+	wake_packet: Dictionary,
+	errors: Array[String],
+) -> void:
+	var conversation := (
+		(wake_packet.get("snapshot", {}) as Dictionary).get("conversation", {})
+		as Dictionary
+	)
+	var relationship := conversation.get("traveler_relationship", {}) as Dictionary
+	var affinity := int(relationship.get("affinity", 50))
+	if relationship.is_empty() or affinity < 53:
+		return
+	if not action.get("traveler_relationship_beat") is Dictionary:
+		errors.append(
+			"action.traveler_relationship_beat 缺失；正向关系答话必须标出关系表现句",
+		)
+		return
+	var beat := action.get("traveler_relationship_beat") as Dictionary
+	AgentContractIdentity._validate_allowed_fields(
+		beat,
+		["kind", "text"],
+		"action.traveler_relationship_beat",
+		errors,
+	)
+	var kind := AgentContract._require_non_empty_string(
+		beat,
+		"kind",
+		"action.traveler_relationship_beat.kind",
+		errors,
+	)
+	var beat_text := AgentContract._require_non_empty_string(
+		beat,
+		"text",
+		"action.traveler_relationship_beat.text",
+		errors,
+	)
+	if not kind.is_empty() and not _traveler_relationship_beat_kinds(affinity).has(kind):
+		errors.append(
+			"action.traveler_relationship_beat.kind 必须来自当前好感阶段允许值",
+		)
+	if beat_text.length() > 80:
+		errors.append("action.traveler_relationship_beat.text 最多 80 字")
+	elif not beat_text.is_empty() and not String(action.get("say", "")).contains(beat_text):
+		errors.append(
+			"action.traveler_relationship_beat.text 必须原样出现在 action.say 中",
+		)
+
+
+static func _traveler_relationship_beat_kinds(affinity: int) -> Array[String]:
+	if affinity < 63:
+		return ["personal_view", "reciprocal_question"]
+	if affinity < 80:
+		return ["old_topic", "practical_care", "personal_view"]
+	if affinity < 90:
+		return ["personal_feeling", "unfinished_concern", "private_worry"]
+	return ["personal_stake", "safe_place", "shared_rapport"]
 
 
 static func _validate_say_and_narration(

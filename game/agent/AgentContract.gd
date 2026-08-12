@@ -82,6 +82,9 @@ const CONVERSATION_FOLLOW_UP_FIELDS := ["option_id"]
 const OPTIONAL_ACTION_FIELDS := {
 	"答话": ["traveler_affinity_delta"],
 }
+const MODEL_ONLY_ACTION_FIELDS := {
+	"答话": ["traveler_relationship_beat"],
+}
 const REACTION_RESULT_STATUSES := [
 	"completed", "interrupted", "rejected", "failed",
 ]

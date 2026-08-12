@@ -46,6 +46,97 @@ func _initialize() -> void:
 		[],
 		"收到对方答话时合法答话决定通过契约",
 	)
+	var traveler_wake := _traveler_reply_wake(wake, 94)
+	var traveler_reply := _decision(traveler_wake["decision_id"], {
+		"action_id": "traveler-reply-1",
+		"type": "答话",
+		"conversation_id": "traveler-conversation-contract",
+		"say": "你先在我这里坐会儿，我愿意听你慢慢说。",
+		"narration": "把身边的位置让出来。",
+		"photos": [],
+		"end": false,
+		"traveler_affinity_delta": 2,
+		"traveler_relationship_beat": {
+			"kind": "safe_place",
+			"text": "你先在我这里坐会儿，我愿意听你慢慢说。",
+		},
+	})
+	_expect_equal(
+		AgentContractScript.validate_decision(
+			traveler_reply,
+			initialization,
+			traveler_wake,
+			{},
+		),
+		[],
+		"正向旅行者关系答话包含可核对的关系表现句",
+	)
+	var canonical_traveler_reply := AgentContractScript.canonicalize_decision(
+		traveler_reply,
+	)
+	_expect(
+		not (
+			canonical_traveler_reply.get("action", {}) as Dictionary
+		).has("traveler_relationship_beat"),
+		"关系表现生成标记不会进入世界动作或存档",
+	)
+	for invalid_beat_case: Dictionary in [
+		{
+			"id": "missing",
+			"beat": null,
+			"error": "traveler_relationship_beat 缺失",
+		},
+		{
+			"id": "not-in-say",
+			"beat": {"kind": "safe_place", "text": "我会陪着你。"},
+			"error": "必须原样出现在 action.say 中",
+		},
+		{
+			"id": "wrong-stage-kind",
+			"beat": {
+				"kind": "practical_care",
+				"text": "你先在我这里坐会儿，我愿意听你慢慢说。",
+			},
+			"error": "必须来自当前好感阶段允许值",
+		},
+	]:
+		var invalid_beat_reply := traveler_reply.duplicate(true)
+		var invalid_beat_action := invalid_beat_reply["action"] as Dictionary
+		if invalid_beat_case["beat"] == null:
+			invalid_beat_action.erase("traveler_relationship_beat")
+		else:
+			invalid_beat_action["traveler_relationship_beat"] = (
+				invalid_beat_case["beat"] as Dictionary
+			).duplicate(true)
+		_expect_error_contains(
+			{
+				"ok": false,
+				"errors": AgentContractScript.validate_decision(
+					invalid_beat_reply,
+					initialization,
+					traveler_wake,
+					{},
+				),
+			},
+			String(invalid_beat_case["error"]),
+			"缺失或伪造的关系表现句会触发模型重试",
+		)
+	var ordinary_traveler_wake := _traveler_reply_wake(wake, 50)
+	var ordinary_traveler_reply := traveler_reply.duplicate(true)
+	ordinary_traveler_reply["decision_id"] = ordinary_traveler_wake["decision_id"]
+	var ordinary_action := ordinary_traveler_reply["action"] as Dictionary
+	ordinary_action["conversation_id"] = "traveler-conversation-contract"
+	ordinary_action.erase("traveler_relationship_beat")
+	_expect_equal(
+		AgentContractScript.validate_decision(
+			ordinary_traveler_reply,
+			initialization,
+			ordinary_traveler_wake,
+			{},
+		),
+		[],
+		"普通阶段不强迫居民制造正向关系表现",
+	)
 	var conflict_reply_wake := _reply_wake(wake)
 	conflict_reply_wake["snapshot"]["conflict_tension_options"] = [{
 		"option_id": "cause-contract",
@@ -163,6 +254,30 @@ func _reply_wake(source: Dictionary) -> Dictionary:
 		},
 		"time": {"day": 1, "clock": "08:12", "period": "上午"},
 	}]
+	return wake
+
+
+func _traveler_reply_wake(source: Dictionary, affinity: int) -> Dictionary:
+	var wake := _reply_wake(source)
+	wake["decision_id"] = "traveler-reply-contract"
+	var conversation := wake["snapshot"]["conversation"] as Dictionary
+	conversation["conversation_id"] = "traveler-conversation-contract"
+	conversation["with_resident_id"] = "player-avatar"
+	conversation["with"] = "旅行者"
+	conversation["traveler_relationship"] = {
+		"affinity": affinity,
+		"affinity_label": "很亲近" if affinity >= 90 else "普通",
+		"familiarity_level": 3,
+		"familiarity_label": "熟悉",
+		"conversation_count": 8,
+		"attack_count": 0,
+	}
+	var event := (wake["events"] as Array)[0] as Dictionary
+	event["conversation_id"] = "traveler-conversation-contract"
+	var turn := event["turn"] as Dictionary
+	turn["speaker_resident_id"] = "player-avatar"
+	turn["speaker"] = "旅行者"
+	turn["say"] = "今天心里有点乱，想和你说说。"
 	return wake
 
 
