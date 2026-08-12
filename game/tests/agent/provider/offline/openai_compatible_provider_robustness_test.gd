@@ -156,12 +156,13 @@ func _test_transport_watchdog_releases_after_completion(provider_script: Script)
 		{"messages": [{"role": "user", "content": "及时返回"}]},
 		collector.collect,
 	)
-	_expect_equal(host.get_child_count(), 1, "在途 transport 有一个可控的看门狗计时器")
+	_expect_equal(collector.values.size(), 0, "在途 transport 尚未提前结算")
 	transport.saved_callback.call(_success_response("watchdog-release"))
 	transport.saved_callback = Callable()
 	await process_frame
 	_expect_equal(collector.values.size(), 1, "及时返回只结算一次")
 	_expect_equal(host.get_child_count(), 0, "请求完成后立即释放看门狗计时器")
+	_expect_equal(provider.call("cancel_all_requests"), 0, "请求完成后不会残留在途取消状态")
 	host.free()
 
 
