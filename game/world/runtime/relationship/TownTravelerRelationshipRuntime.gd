@@ -436,12 +436,14 @@ static func _update_labels(item: Dictionary) -> void:
 		"明显疏远"
 		if affinity < 35
 		else "有些冷淡"
-		if affinity < 50
+		if affinity < 45
 		else "普通"
-		if affinity < 60
-		else "略有好感"
-		if affinity < 75
+		if affinity < 53
+		else "开始在意"
+		if affinity < 63
 		else "关系不错"
+		if affinity < 80
+		else "信任"
 		if affinity < 90
 		else "很亲近"
 	)

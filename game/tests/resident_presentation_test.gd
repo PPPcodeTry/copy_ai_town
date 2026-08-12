@@ -3314,6 +3314,34 @@ func _test_traveler_familiarity_requires_a_two_way_conversation() -> void:
 		58,
 		"recomputing familiarity preserves existing saved affinity",
 	)
+	_expect_equal(
+		(restored_projection.get("affinity", {}) as Dictionary).get("label"),
+		"开始在意",
+		"a modest positive change reaches the first visible affinity stage",
+	)
+	for affinity_case: Dictionary in [
+		{"value": 52, "label": "普通"},
+		{"value": 53, "label": "开始在意"},
+	]:
+		var threshold_snapshot := TRAVELER_RELATIONSHIP_RUNTIME.normalize_snapshot(
+			{"items": {RESIDENT_ID: {"affinity": affinity_case["value"]}}},
+			"player-avatar",
+			[RESIDENT_ID],
+		)
+		var threshold_projection := (
+			TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+				threshold_snapshot,
+				"player-avatar",
+				"旅行者",
+				RESIDENT_ID,
+				true,
+			)
+		)
+		_expect_equal(
+			(threshold_projection.get("affinity", {}) as Dictionary).get("label"),
+			affinity_case["label"],
+			"the first visible affinity threshold stays at 53",
+		)
 
 
 func _test_player_starts_and_ends_conversation() -> void:

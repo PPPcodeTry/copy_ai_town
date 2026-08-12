@@ -352,8 +352,42 @@ func _test_traveler_relationship_context(compiler_script: Script) -> void:
 		"familiarity and affinity combine without hiding confirmed avatar memory",
 	)
 	_expect(
-		user_text.contains("普通寒暄和仅仅完成对话通常填 0")
+		user_text.contains("普通寒暄、重复旧话和仅仅完成对话填 0")
 		and user_text.contains("不能因为变熟自动增加")
+		and user_text.contains("真诚关心时应填 +2")
+		and user_text.contains("不能因为本人话少")
+		and user_text.contains("兑现对本人的承诺")
 		and user_text.contains("证据不足填 0"),
 		"traveler affinity changes require evidence instead of rewarding every chat",
+	)
+	_expect(
+		user_text.contains("不写成任务回执、客服答复或关系总结")
+		and user_text.contains("话少表示少说一两句")
+		and user_text.contains("回应旅行者真正表达的意思")
+		and user_text.contains("不要习惯性用“你有事？”")
+		and user_text.contains("好感表现参考"),
+		"traveler relationship guidance requires natural visible behavior",
+	)
+	var caring_wake := wake.duplicate(true)
+	var caring_conversation := (
+		caring_wake["snapshot"]["conversation"] as Dictionary
+	)
+	caring_conversation["traveler_relationship"] = {
+		"affinity": 53,
+		"affinity_label": "开始在意",
+		"familiarity_level": 2,
+		"familiarity_label": "有些熟悉",
+		"conversation_count": 3,
+		"attack_count": 0,
+		"last_change": "居民回应+1",
+	}
+	var caring_request := compiler.call("compile", caring_wake, avatar_memory) as Dictionary
+	var caring_messages := caring_request.get("messages", []) as Array
+	var caring_text := String(
+		(caring_messages[1] as Dictionary).get("content", "")
+	) if caring_messages.size() == 2 else ""
+	_expect(
+		caring_text.contains("好感53（开始在意）")
+		and caring_text.contains("答完后多说一句只会对在意的人说的话"),
+		"the first visible affinity stage changes concrete conversation behavior",
 	)
