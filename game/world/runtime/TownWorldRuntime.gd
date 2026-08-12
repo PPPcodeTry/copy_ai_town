@@ -890,6 +890,7 @@ func _prepare_new_game_arrival_schedule(
 		var held := candidate_minutes[index]
 		candidate_minutes[index] = candidate_minutes[swap_index]
 		candidate_minutes[swap_index] = held
+	DINING_SERVICE.prioritize_dining_worker_arrival(opening_config, resident_ids, candidate_minutes)
 	var schedule := {}
 	for index in resident_ids.size():
 		schedule[resident_ids[index]] = candidate_minutes[index]
@@ -2916,6 +2917,7 @@ func get_work_tasks_for_resident(
 				"place_id": String(recipient.get("currentPlace", "")),
 				"instruction": "前往收件人所在处，并当面对收件人说出原文",
 			}
+		DINING_SERVICE.decorate_projected_meal_task(task, projected_task, int(_environment.get_absolute_minute()))
 		var occupation_service_request := _occupation_services.request(
 			String(task.get("sourceRef", "")),
 		) as Dictionary
@@ -2988,8 +2990,6 @@ func get_work_tasks_for_resident(
 		)
 	)
 	return result
-
-
 func get_staffing_snapshot() -> Dictionary:
 	if not _running:
 		return {
@@ -7443,6 +7443,7 @@ func _closed_service_place_for_visitor(
 	resident: Dictionary,
 	place_id: String,
 ) -> bool:
+	if DINING_SERVICE.can_admit_without_worker(self, place_id, int(_environment.get_absolute_minute())): return false
 	var state := _place_service_states.get(place_id, {}) as Dictionary
 	if state.is_empty() or bool(state.get("open", true)):
 		return false
@@ -11698,6 +11699,7 @@ func _schedule_decision(
 		):
 			return
 	var current_action := resident.get("currentAction", {}) as Dictionary
+	if DINING_SERVICE.keep_meal_routine_running(self, resident_name, current_action): return
 	if (
 		not current_action.is_empty()
 		and not prefetch
@@ -15144,9 +15146,7 @@ func _priority_onsite_service_task_for_resident(
 			request.is_empty()
 			and String(task.get("capability", "")) == "food.production"
 			and String(task.get("sourceKind", "")) == "meal_demand"
-			and _meal_period_has_waiting_orders(
-				String(task.get("sourceRef", "")),
-			)
+			and String(task.get("sourceRef", "")).begins_with("meal-period:")
 		):
 			if (
 				selected.is_empty()
@@ -15619,12 +15619,11 @@ func _agent_travel_destinations(
 				resident,
 				place_name,
 			)
+			or not DINING_SERVICE.travel_destination_available(self, resident, place_name, int(_environment.get_absolute_minute()))
 		):
 			continue
 		result.append(place_name)
 	return result
-
-
 func _agent_life_destination_options(
 	resident: Dictionary,
 ) -> Array[Dictionary]:
@@ -21582,10 +21581,12 @@ func _sync_meal_period_tasks(absolute_minute: int) -> void:
 			"periodId": String(period.get("id", "")),
 			"periodLabel": String(period.get("label", "")),
 			"menu": DINING_SERVICE.meal_menu_for_period(period),
+			"serviceStartMinute": int(period.get("serviceStart", 0)),
 			"baseSupply": true,
 			"nextActivityId": "activity_dining_prepare_meal",
 		},
 	})
+	DINING_SERVICE.reserve_meal_preparation_task(self, source_ref)
 	_activate_waiting_dining_orders()
 
 

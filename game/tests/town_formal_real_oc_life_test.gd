@@ -3,6 +3,7 @@ extends SceneTree
 
 const RUN_ENV := "AI_TOWN_RUN_FORMAL_REAL_OC_LIFE"
 const RUN_MSEC_ENV := "AI_TOWN_REAL_OC_RUN_MSEC"
+const CONTINUE_AFTER_ERROR_ENV := "AI_TOWN_REAL_OC_CONTINUE_AFTER_ERROR"
 const STARTUP_SCENE := preload("res://ui/startup/StartupScreen.tscn")
 const TRACE_EVIDENCE := preload(
 	"res://tests/support/TownAgentDecisionTraceEvidence.gd"
@@ -198,9 +199,12 @@ func _run() -> void:
 		_gateway.connect("debug_decision_completed", callback)
 	var started_at := Time.get_ticks_msec()
 	var duration := _environment_int(RUN_MSEC_ENV, 1_800_000, 60_000, 86_400_000)
+	var continue_after_error := OS.get_environment(
+		CONTINUE_AFTER_ERROR_ENV,
+	) == "1"
 	while Time.get_ticks_msec() - started_at < duration:
 		_track(world)
-		if _has_final_gateway_error():
+		if not continue_after_error and _has_final_gateway_error():
 			break
 		await process_frame
 	_track(world)

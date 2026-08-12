@@ -58,9 +58,12 @@ static func capacity_status(
 	)
 	var state := "closed"
 	var state_label := "当前不在供餐时段"
-	if period.is_empty() or not world._meal_service_is_open(absolute_minute):
+	if period.is_empty():
 		state = "closed"
 		state_label = "当前不在供餐时段"
+	elif not world._meal_service_is_open(absolute_minute):
+		state = "preparing"
+		state_label = "食堂正在统一备餐，开餐后再来"
 	elif not world._meal_period_is_prepared(absolute_minute):
 		state = "not_ready"
 		state_label = "本餐次还没有备好"
@@ -195,12 +198,145 @@ static func attach_capacity_status(
 	place_id: String,
 	absolute_minute: int,
 ) -> void:
-	if place_id == CONTENT_CATALOG.PLACE_DINING_HALL:
+	if (
+		place_id == CONTENT_CATALOG.PLACE_DINING_HALL
+		or not world._meal_period_for_minute(absolute_minute).is_empty()
+	):
 		place_snapshot["dining"] = capacity_status(
 			world,
 			resident_id,
 			absolute_minute,
 		)
+
+
+static func travel_destination_available(
+	world,
+	resident: Dictionary,
+	target_place: String,
+	absolute_minute: int,
+) -> bool:
+	if target_place != CONTENT_CATALOG.PLACE_DINING_HALL:
+		return true
+	if _resident_is_dining_worker(resident):
+		return true
+	return String(capacity_status(
+		world,
+		String(resident.get("residentId", "")),
+		absolute_minute,
+	).get("state", "")) not in ["preparing", "not_ready"]
+
+
+static func can_admit_without_worker(
+	world,
+	place_id: String,
+	absolute_minute: int,
+) -> bool:
+	return (
+		place_id == CONTENT_CATALOG.PLACE_DINING_HALL
+		and world._meal_service_is_open(absolute_minute)
+		and world._meal_period_is_prepared(absolute_minute)
+	)
+
+
+static func prioritize_dining_worker_arrival(
+	opening_config: Dictionary,
+	resident_ids: Array[String],
+	candidate_minutes: Array[int],
+) -> void:
+	var worker_index := -1
+	var worker_rank := 2147483647
+	for value: Variant in opening_config.get("residents", []) as Array:
+		if not value is Dictionary:
+			continue
+		var record := value as Dictionary
+		var occupation := record.get("occupation", {}) as Dictionary
+		var social_state := record.get("socialState", {}) as Dictionary
+		var resident_id := String(record.get("residentId", ""))
+		var job := String(social_state.get("job", ""))
+		var is_dining_worker := (
+			String(occupation.get("workplacePlace", ""))
+			== CONTENT_CATALOG.PLACE_DINING_HALL
+			or String(social_state.get("workplace", ""))
+			== CONTENT_CATALOG.PLACE_DINING_HALL
+		)
+		if not is_dining_worker and resident_id != "resident_su_tang_01":
+			continue
+		var rank := (
+			0
+			if resident_id == "resident_su_tang_01"
+			else 1 if job.contains("厨师") or job.contains("主理") else 2
+		)
+		if rank >= worker_rank:
+			continue
+		worker_index = resident_ids.find(resident_id)
+		worker_rank = rank
+	if worker_index < 0 or candidate_minutes.is_empty():
+		return
+	var earliest_index := 0
+	for index in range(1, candidate_minutes.size()):
+		if candidate_minutes[index] < candidate_minutes[earliest_index]:
+			earliest_index = index
+	var held := candidate_minutes[worker_index]
+	candidate_minutes[worker_index] = candidate_minutes[earliest_index]
+	candidate_minutes[earliest_index] = held
+
+
+static func reserve_meal_preparation_task(world, source_ref: String) -> void:
+	var resident_id := "resident_su_tang_01"
+	if not world._residents.has(resident_id):
+		return
+	var task := world._work_tasks.task(
+		"meal-preparation:%s" % source_ref,
+	) as Dictionary
+	if (
+		task.is_empty()
+		or String(task.get("state", "")) not in ["open", "waiting"]
+		or not world._resident_can_accept_work_task(resident_id, task)
+	):
+		return
+	var accepted := world._work_tasks.accept_task(
+		String(task.get("taskId", "")),
+		resident_id,
+		"occupation_dining_operator",
+		int(task.get("revision", 0)),
+	) as Dictionary
+	if accepted.get("ok") == true:
+		world._schedule_decision(resident_id, true, false, true)
+
+
+static func decorate_projected_meal_task(
+	task: Dictionary,
+	projected_task: Dictionary,
+	absolute_minute: int,
+) -> void:
+	if (
+		String(task.get("capability", "")) != "food.production"
+		or String(task.get("sourceKind", "")) != "meal_demand"
+		or not String(task.get("sourceRef", "")).begins_with("meal-period:")
+	):
+		return
+	var facts := task.get("processFacts", {}) as Dictionary
+	var service_minute := int(facts.get("serviceStartMinute", -1))
+	var deadline := (
+		int(task.get("createdAtMinute", absolute_minute))
+		- posmod(int(task.get("createdAtMinute", absolute_minute)), 1440)
+		+ service_minute
+	)
+	var period_label := String(facts.get("periodLabel", "本餐次"))
+	var menu := String(facts.get("menu", "当餐菜单"))
+	var timing := (
+		"在%02d:%02d开餐前" % [service_minute / 60, posmod(service_minute, 60)]
+		if service_minute >= 0 and absolute_minute < deadline
+		else "当前餐次已经开始，立即"
+	)
+	projected_task["next_step"] = {
+		"place_id": CONTENT_CATALOG.PLACE_DINING_HALL,
+		"instruction": "%s完成%s统一备餐，并发布“%s”菜单公告" % [
+			timing,
+			period_label,
+			menu,
+		],
+	}
 
 
 static func go_admission_failure(
@@ -275,6 +411,20 @@ static func cap_full_wait(
 			int(prepared.get("completeAbsoluteMinute", now)),
 			now + 10,
 		)
+
+
+static func keep_meal_routine_running(
+	world,
+	resident_id: String,
+	current_action: Dictionary,
+) -> bool:
+	if current_action.is_empty():
+		return false
+	var routine := world._activity_routines.get(resident_id, {}) as Dictionary
+	if String(routine.get("group", "")) != "meal":
+		return false
+	var resident := world._residents.get(resident_id, {}) as Dictionary
+	return not resident.get("conversation") is Dictionary
 
 
 static func _meal_admission_count(
@@ -429,12 +579,22 @@ static func publish_meal_menu_announcement(
 	var service_start := int(
 		period.get("serviceStart", period.get("start", 0)),
 	)
-	var text := "第%d天%s菜单：%s。%02d:%02d开始公共供餐。" % [
+	var service_absolute_minute := (
+		absolute_minute - posmod(absolute_minute, 1440) + service_start
+	)
+	var service_text := (
+		"%02d:%02d开始公共供餐" % [
+			service_start / 60,
+			posmod(service_start, 60),
+		]
+		if absolute_minute <= service_absolute_minute
+		else "餐食现已备好，可以自行取餐"
+	)
+	var text := "第%d天%s菜单：%s。%s。" % [
 		absolute_minute / 1440 + 1,
 		String(period.get("label", "本餐次")),
 		meal_menu_for_period(period),
-		service_start / 60,
-		posmod(service_start, 60),
+		service_text,
 	]
 	for announcement: Dictionary in world.get_announcements():
 		if String(announcement.get("text", "")) == text:

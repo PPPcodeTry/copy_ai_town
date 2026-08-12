@@ -2073,11 +2073,12 @@ static func _complete_recurring_occupation_work_task_before_release(
 			String(task.get("taskId", "")),
 		) as Dictionary
 		if String(completed_task.get("state", "")) == "completed":
-			var prepared_at := int(completed_task.get("createdAtMinute", now))
 			DINING_SERVICE.publish_meal_menu_announcement(
 				world,
-				world._meal_period_for_minute(prepared_at) as Dictionary,
-				prepared_at,
+				world._meal_period_for_minute(int(
+					completed_task.get("createdAtMinute", now),
+				)) as Dictionary,
+				now,
 			)
 		world._activate_waiting_dining_orders()
 		world._schedule_occupation_decisions("occupation_dining_operator")

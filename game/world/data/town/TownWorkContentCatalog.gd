@@ -92,7 +92,7 @@ const TASK_PRIORITY := {
 	"civic_case": 64,
 	"staffing_review": 82,
 	"civic_urgent_case": 84,
-	"meal_demand_order": 76,
+	"meal_demand_order": 90,
 	"warehouse_audit": 52,
 	"inventory_discrepancy": 86,
 	"research_sample_request": 71,

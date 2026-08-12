@@ -3114,6 +3114,7 @@ func _scenario_activity_routine() -> void:
 	).duplicate(true)
 	_verify_all_workplaces(data, opening)
 	_verify_dining_prep_schedule()
+	_verify_dining_departure_awareness(data, opening)
 	_verify_meal_sequence(data, opening)
 	_verify_dining_capacity_agent_reaction(data, opening)
 	_verify_active_meal_routine_save(data, opening)
@@ -3124,6 +3125,16 @@ func _scenario_activity_routine() -> void:
 
 func _verify_dining_prep_schedule() -> void:
 	var schedule_document := _read_json(SCHEDULE_PATH)
+	var activity_document := _read_json(ACTIVITY_PATH)
+	for activity_value: Variant in activity_document.get("activities", []) as Array:
+		var activity := activity_value as Dictionary
+		if String(activity.get("activityId", "")) != "activity_dining_prepare_meal":
+			continue
+		_expect(
+			int(activity.get("durationMinutes", 0)) <= 30,
+			"统一备餐不会占用食堂负责人过长的生活时间",
+		)
+		break
 	var dining_schedule: Dictionary = {}
 	for value: Variant in schedule_document.get("scheduleTemplates", []) as Array:
 		var schedule := value as Dictionary
@@ -3258,6 +3269,114 @@ func _verify_all_workplaces(data: Dictionary, opening: Dictionary) -> void:
 
 
 
+func _verify_dining_departure_awareness(
+	data: Dictionary,
+	opening: Dictionary,
+) -> void:
+	var world: RefCounted = WORLD.new()
+	_expect_equal(
+		(world.call("start", data, opening) as Dictionary).get("ok"),
+		true,
+		"食堂出发前状态检查 World 可启动",
+	)
+	var first_day_breakfast := world.call(
+		"_meal_period_for_minute",
+		570,
+	) as Dictionary
+	_expect_equal(
+		first_day_breakfast.get("id"),
+		"breakfast",
+		"首日早餐备好后仍保留实际发放时段",
+	)
+	_expect(
+		int(first_day_breakfast.get("end", 0)) >= 600,
+		"首日早餐不会在备好的一刻立即被午餐备餐覆盖",
+	)
+	_expect_equal(
+		(world.call("_meal_period_for_minute", 600) as Dictionary).get("id"),
+		"lunch",
+		"早餐发放结束后会及时进入午餐备餐",
+	)
+	var resident_name := "唐小满"
+	var resident_id := "resident_tang_xiaoman_01"
+	var wake := _take_wake_activity_routine(world, resident_name)
+	var place := (
+		(wake.get("snapshot", {}) as Dictionary).get("place", {}) as Dictionary
+	)
+	var dining := place.get("dining", {}) as Dictionary
+	_expect_equal(
+		dining.get("state"),
+		"not_ready",
+		"食堂尚未备好时，外面的居民也能看到真实状态",
+	)
+	_expect(
+		not (place.get("destinations", []) as Array).has("公共食堂"),
+		"餐食尚未备好时不会让外部居民为了吃饭白跑一趟",
+	)
+	var meal_task: Dictionary = {}
+	for task_value: Variant in world.call(
+		"get_work_tasks_for_resident",
+		"resident_lu_qing_01",
+	) as Array:
+		var task := task_value as Dictionary
+		if (
+			String(task.get("capability", "")) == "food.production"
+			and String(task.get("source_ref", "")).begins_with("meal-period:")
+		):
+			meal_task = task
+			break
+	_expect(
+		int(meal_task.get("priority", 0)) >= 85,
+		"当餐统一备餐达到可打断普通闲逛的优先级",
+	)
+	var next_step := meal_task.get("next_step", {}) as Dictionary
+	_expect_equal(
+		next_step.get("place_id"),
+		"公共食堂",
+		"备餐任务明确把食堂负责人引导到真实工作地点",
+	)
+	_expect(
+		String(next_step.get("instruction", "")).contains("统一备餐")
+		and String(next_step.get("instruction", "")).contains("菜单公告"),
+		"备餐任务明确告诉 Agent 完成时限和菜单公告结果",
+	)
+	_expect(
+		_prepare_meal_for_activity_test(world),
+		"出发前状态检查会完成当前餐次备餐",
+	)
+	var service_state := (
+		world.get("_place_service_states") as Dictionary
+	).get("公共食堂", {}) as Dictionary
+	service_state["open"] = false
+	service_state["owner_id"] = ""
+	var resident := (
+		(world.get("_residents") as Dictionary).get(resident_id, {}) as Dictionary
+	)
+	_expect(
+		(world.call("_agent_travel_destinations", resident) as Array).has(
+			"公共食堂",
+		),
+		"统一备餐完成后即使厨师离岗，食堂也会重新成为可前往地点",
+	)
+	_expect(
+		_move_to_place(world, resident_name, "公共食堂"),
+		"餐食备好后厨师缺席也不妨碍居民进入自助取餐",
+	)
+	var collect_option := _activity_option(
+		(world.call("query_activity_options", resident_id) as Dictionary).get(
+			"options",
+			[],
+		) as Array,
+		"activity_dining_collect_meal",
+	)
+	_expect_equal(
+		collect_option.get("available"),
+		true,
+		"厨师缺席时备好的餐食仍可自行取用",
+	)
+	world.call("stop")
+
+
 func _verify_meal_sequence(data: Dictionary, opening: Dictionary) -> void:
 	var world: RefCounted = WORLD.new()
 	world.connect("resident_activity_started", _on_activity_started_activity_routine)
@@ -3361,6 +3480,15 @@ func _verify_meal_sequence(data: Dictionary, opening: Dictionary) -> void:
 			),
 		) as Dictionary,
 		"从餐桌发出的吃饭意图能开始完整过程",
+	)
+	world.call("_schedule_decision", resident_id, true, false, true)
+	_expect_equal(
+		(world.call(
+			"take_pending_decision_requests_by_ids",
+			[resident_id],
+		) as Array).size(),
+		0,
+		"取餐、吃饭和还餐具的连续过程不会被普通或工作重判中途打断",
 	)
 	var positions := {}
 	_expect(
@@ -3509,6 +3637,18 @@ func _verify_dining_capacity_agent_reaction(
 	_expect_equal(capacity.get("occupied"), 4, "四名在途居民已经占满食堂名额")
 	_expect_equal(capacity.get("state"), "full", "四人同时前往后食堂如实报告满员")
 	var wake := _take_wake_activity_routine(world, resident_name)
+	var full_place := (
+		(wake.get("snapshot", {}) as Dictionary).get("place", {}) as Dictionary
+	)
+	_expect_equal(
+		(full_place.get("dining", {}) as Dictionary).get("state"),
+		"full",
+		"第五名居民出发前能看到食堂已经满员",
+	)
+	_expect(
+		(full_place.get("destinations", []) as Array).has("公共食堂"),
+		"满员时仍保留尝试入口，以便途中满员能进入 Agent 反应流程",
+	)
 	var full_decision := _go_activity_routine(
 		wake,
 		"公共食堂",
@@ -4134,6 +4274,8 @@ func _prepare_meal_for_activity_test(world: RefCounted) -> bool:
 		if (
 			not period.is_empty()
 			and bool(world.call("_meal_period_is_prepared", now))
+			and bool(world.call("_meal_service_is_open", now))
+			and posmod(now, 1440) + 30 <= int(period.get("end", 0))
 		):
 			return true
 		var day_start := now - posmod(now, 1440)
