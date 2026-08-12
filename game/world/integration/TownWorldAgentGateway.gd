@@ -39,6 +39,10 @@ const MAX_CONCURRENT_LOCAL_ORDINARY_REQUESTS := 2
 const LOCAL_MODEL_PROVIDER_IDS: Array[String] = ["ollama", "lm-studio"]
 const MAX_DECISION_ATTEMPTS := 2
 const MAX_ERROR_HISTORY := 128
+const BACKGROUND_DEPARTURE_INITIAL_DELAY_SECONDS := 20.0
+const BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS := 8.0
+const BACKGROUND_DEPARTURE_INTERVAL_SECONDS := 45.0
+const BACKGROUND_DEPARTURE_MAX_CANDIDATES := 1
 const DEFAULT_AVATAR_PERSON_ID := "person_7f3a91c2d8e4"
 const DEFAULT_AVATAR_NAME := "旅行者"
 # Keep this in step with ResidentMemorySummaryProjector's player-visible
@@ -65,6 +69,7 @@ const INNER_OBSERVATION_FORBIDDEN_PLAYER_TERMS: Array[String] = [
 	"json",
 ]
 const DEATH_STORY_MAX_CHARS := 96
+const DEATH_STORY_TIMEOUT_MSEC := 45_000
 const DEATH_STORY_FORBIDDEN_TERMS: Array[String] = [
 	"system prompt",
 	"systemprompt",
@@ -113,6 +118,10 @@ var _request_metrics: Dictionary = {
 	"providerDispatch": 0,
 	"providerComplete": 0,
 }
+var _background_departure_probe_id := 0
+var _background_departure_operation_id := ""
+var _background_departure_pending := false
+var _background_departure_messages: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -128,10 +137,175 @@ func _process(_delta: float) -> void:
 	var processed_inner_observation := _advance_inner_observation_requests()
 	if not processed_inner_observation:
 		_advance_agent_preparation()
+	_advance_death_story_requests()
 	set_process(
 		not _inner_observation_inflight.is_empty()
 		or not _agent_preparation_queue.is_empty()
+		or not _death_story_inflight.is_empty()
 	)
+
+
+func _schedule_background_departure_probe(delay_seconds: float) -> void:
+	if not _session_active or not is_inside_tree():
+		return
+	_background_departure_probe_id += 1
+	var probe_id := _background_departure_probe_id
+	get_tree().create_timer(
+		maxf(delay_seconds, 0.1),
+		false,
+		false,
+		true,
+	).timeout.connect(
+		_on_background_departure_probe_timeout.bind(probe_id),
+		CONNECT_ONE_SHOT,
+	)
+
+
+func _on_background_departure_probe_timeout(probe_id: int) -> void:
+	if (
+		probe_id != _background_departure_probe_id
+		or not _session_active
+	):
+		return
+	if _background_departure_pending:
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+		return
+	if not _background_departure_can_run():
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+		return
+	# 先给普通居民请求一次机会。只有确认当前没有普通工作后，才做低优先级留言。
+	if pump(1) > 0 or not _background_departure_can_run():
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+		return
+	_background_departure_pending = true
+	_background_departure_operation_id = (
+		"background-departure-%d" % Time.get_ticks_usec()
+	)
+	var started := _agent_system.prepare_departure_messages(
+		_background_departure_operation_id,
+		BACKGROUND_DEPARTURE_MAX_CANDIDATES,
+		_on_background_departure_messages_ready,
+	) as Dictionary
+	if not bool(started.get("ok", false)):
+		_background_departure_pending = false
+		_background_departure_operation_id = ""
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+		return
+	if bool(started.get("completed", false)) and _background_departure_pending:
+		_on_background_departure_messages_ready(
+			started,
+		)
+
+
+func _background_departure_can_run() -> bool:
+	if not _session_active or _world == null:
+		return false
+	var world_contract := _world as TownWorldContract
+	if world_contract == null or not world_contract.is_running():
+		return false
+	if (
+		not _inflight.is_empty()
+		or not _agent_preparation_queue.is_empty()
+		or not _inner_observation_inflight.is_empty()
+		or not _death_story_inflight.is_empty()
+	):
+		return false
+	if not world_contract.get_active_conversations().is_empty():
+		return false
+	return true
+
+
+func _on_background_departure_messages_ready(result: Dictionary) -> void:
+	if not _background_departure_pending:
+		return
+	_remember_background_departure_messages(result)
+	_background_departure_pending = false
+	_background_departure_operation_id = ""
+	_schedule_background_departure_probe(
+		BACKGROUND_DEPARTURE_INTERVAL_SECONDS,
+	)
+
+
+func _remember_background_departure_messages(result: Dictionary) -> void:
+	var messages_value: Variant = result.get("messages", [])
+	if not messages_value is Array:
+		return
+	for message_value: Variant in messages_value as Array:
+		if not message_value is Dictionary:
+			continue
+		var message := (message_value as Dictionary).duplicate(true)
+		var resident_id := String(message.get("resident_id", "")).strip_edges()
+		var message_id := String(message.get("message_id", "")).strip_edges()
+		if resident_id.is_empty() or message_id.is_empty():
+			continue
+		for index in _background_departure_messages.size():
+			var existing := _background_departure_messages[index]
+			if (
+				String(existing.get("resident_id", "")) == resident_id
+				or String(existing.get("message_id", "")) == message_id
+			):
+				_background_departure_messages.remove_at(index)
+				break
+		_background_departure_messages.append(message)
+	while _background_departure_messages.size() > 2:
+		_background_departure_messages.pop_front()
+
+
+func get_background_departure_messages() -> Array[Dictionary]:
+	return _background_departure_messages.duplicate(true)
+
+
+func clear_background_departure_messages() -> Dictionary:
+	var changed := not _background_departure_messages.is_empty()
+	_background_departure_messages.clear()
+	return {"ok": true, "changed": changed}
+
+
+func _cancel_background_departure_messages() -> void:
+	_background_departure_probe_id += 1
+	if (
+		_background_departure_pending
+		and not _background_departure_operation_id.is_empty()
+		and _agent_system.has_method("cancel_departure_messages")
+	):
+		_agent_system.cancel_departure_messages(
+			_background_departure_operation_id,
+		)
+	_background_departure_pending = false
+	_background_departure_operation_id = ""
+
+
+func cancel_background_departure_messages() -> Dictionary:
+	_cancel_background_departure_messages()
+	return {
+		"ok": true,
+		"changed": true,
+	}
+
+
+func resume_background_departure_messages() -> Dictionary:
+	if not _session_active:
+		return {
+			"ok": false,
+			"errorCode": "AGENT_GATEWAY_SESSION_INACTIVE",
+			"retryable": false,
+		}
+	if not _background_departure_pending:
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+	return {
+		"ok": true,
+		"scheduled": true,
+	}
 
 
 func _reset_request_metrics() -> void:
@@ -197,6 +371,7 @@ func configure_session(
 	_generation += 1
 	_world = null
 	_session_active = false
+	_cancel_background_departure_messages()
 	_photo_store.clear()
 	var photo_storage := _photo_store.configure_session(slot_id,
 		session_id,) as Dictionary
@@ -216,6 +391,7 @@ func configure_session(
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
 	_reset_request_metrics()
+	_background_departure_messages.clear()
 	_pump_cursor = 0
 	_errors.clear()
 	_last_submissions.clear()
@@ -376,6 +552,9 @@ func bind_world(world: RefCounted) -> Dictionary:
 	_connected_resident_ids.sort()
 	_session_active = true
 	_generation += 1
+	_schedule_background_departure_probe(
+		BACKGROUND_DEPARTURE_INITIAL_DELAY_SECONDS,
+	)
 	return {
 		"ok": true,
 		"errorCode": "",
@@ -418,6 +597,10 @@ func pump(max_requests := -1) -> int:
 		requests = _world.take_pending_decision_requests_by_ids(
 			_connected_resident_ids,
 		) as Array[Dictionary]
+	if _background_departure_pending and not requests.is_empty():
+		# 普通居民或玩家刚产生工作时，立即让出模型通道。底层请求即使已经
+		# 发出，取消标识也会阻止它再写入留言提案。
+		_cancel_background_departure_messages()
 	if _frame_probe != null:
 		var now_usec := Time.get_ticks_usec()
 		_frame_probe.record(Engine.get_process_frames(), "agentTakeUsec", now_usec - probe_lap_usec)
@@ -589,8 +772,14 @@ func _mark_superseded_inflight_for_request(
 			String(inflight.get("residentId", "")) == resident_id
 			and inflight_decision_id != current_decision_id
 		):
+			var already_superseded := bool(inflight.get("superseded", false))
 			inflight["superseded"] = true
 			_inflight[inflight_decision_id] = inflight
+			if not already_superseded:
+				_cancel_resident_model_request(
+					resident_id,
+					inflight_decision_id,
+				)
 
 
 func _mark_superseded_inflight_for_pending_requests(
@@ -770,7 +959,9 @@ func request_resident_death_story(
 		"residentId": normalized_resident_id,
 		"generation": captured_generation,
 		"callback": on_complete,
+		"startedAtMsec": Time.get_ticks_msec(),
 	}
+	model_request["_agent_request_id"] = normalized_request_id
 	var accepted := _agent_system.request_json_for_resident(
 		normalized_resident_id,
 		model_request,
@@ -786,6 +977,7 @@ func request_resident_death_story(
 			"DEATH_STORY_AGENT_REQUEST_REJECTED",
 			bool(accepted.get("retryable", false)),
 		)
+	set_process(true)
 	return _death_story_request_accepted(normalized_request_id)
 
 
@@ -822,6 +1014,36 @@ func _deliver_resident_death_story(
 		"generatedBy": "resident_agent",
 		"requestId": request_id,
 	})
+
+
+func _advance_death_story_requests(now_msec: int = -1) -> bool:
+	if _death_story_inflight.is_empty():
+		return false
+	var effective_now_msec := (
+		Time.get_ticks_msec()
+		if now_msec < 0
+		else now_msec
+	)
+	var timed_out := false
+	for request_id_value: Variant in _death_story_inflight.keys():
+		var request_id := String(request_id_value)
+		var pending := _death_story_inflight.get(request_id, {}) as Dictionary
+		var started_at := int(pending.get("startedAtMsec", effective_now_msec))
+		if effective_now_msec - started_at < DEATH_STORY_TIMEOUT_MSEC:
+			continue
+		_death_story_inflight.erase(request_id)
+		var resident_id := String(pending.get("residentId", ""))
+		_cancel_resident_model_request(resident_id, request_id)
+		var callback := pending.get("callback", Callable()) as Callable
+		if callback.is_valid():
+			callback.call({
+				"ok": false,
+				"errorCode": "DEATH_STORY_TIMEOUT",
+				"retryable": true,
+				"errors": ["死亡故事模型请求超时，已使用安全收束故事"],
+			})
+		timed_out = true
+	return timed_out
 
 
 func _normalize_death_story_result(result: Variant) -> String:
@@ -1483,6 +1705,9 @@ func hydrate_agent_restore(
 			)
 	_session_active = true
 	_session_config["restorePending"] = false
+	_schedule_background_departure_probe(
+		BACKGROUND_DEPARTURE_INITIAL_DELAY_SECONDS,
+	)
 	return {
 		"ok": true,
 		"errorCode": "",
@@ -1492,6 +1717,8 @@ func hydrate_agent_restore(
 
 
 func close_session() -> Dictionary:
+	_cancel_background_departure_messages()
+	_background_departure_messages.clear()
 	_generation += 1
 	_inflight.clear()
 	_agent_preparation_queue.clear()
@@ -1511,6 +1738,7 @@ func discard_unpublished_new_game(
 ) -> Dictionary:
 	var context := _save_context.duplicate(true)
 	var had_active_session := _session_active
+	_background_departure_messages.clear()
 	var photo_discard := _photo_store.discard_unpublished_session(restore_photo_blocker,) as Dictionary
 	if not bool(photo_discard.get("ok", false)):
 		return _normalized_failure(
@@ -2433,17 +2661,39 @@ func _wake_is_avatar_conversation_turn(wake: Dictionary) -> bool:
 	if not _wake_requires_conversation_turn(wake):
 		return false
 	var snapshot_value: Variant = wake.get("snapshot")
-	if not snapshot_value is Dictionary:
-		return false
-	var conversation_value: Variant = (
-		snapshot_value as Dictionary
-	).get("conversation")
-	if not conversation_value is Dictionary:
-		return false
-	var conversation := conversation_value as Dictionary
-	return String(
-		conversation.get("with_resident_id", ""),
-	) == _avatar_person_id
+	if snapshot_value is Dictionary:
+		var conversation_value: Variant = (
+			snapshot_value as Dictionary
+		).get("conversation")
+		if conversation_value is Dictionary:
+			var conversation := conversation_value as Dictionary
+			if String(
+				conversation.get("with_resident_id", ""),
+			) == _avatar_person_id:
+				return true
+	# Pending envelopes deliberately avoid rebuilding the full snapshot before
+	# capacity selection. The conversation event is still authoritative enough
+	# to identify a player turn and replace an older request for this resident.
+	# Without this fallback, a rapid conversation reopen can wait behind a full
+	# request group until the stale provider call times out.
+	for event_value: Variant in wake.get("events", []) as Array:
+		if not event_value is Dictionary:
+			continue
+		var event := event_value as Dictionary
+		var participants_value: Variant = event.get(
+			"participant_resident_ids",
+			[],
+		)
+		if participants_value is Array:
+			for participant_value: Variant in participants_value as Array:
+				if String(participant_value) == _avatar_person_id:
+					return true
+		var turn_value: Variant = event.get("turn")
+		if turn_value is Dictionary and String(
+			(turn_value as Dictionary).get("speaker_resident_id", ""),
+		) == _avatar_person_id:
+			return true
+	return false
 
 
 func _wake_requires_conversation_turn(wake: Dictionary) -> bool:
@@ -2732,6 +2982,21 @@ func _redispatch(resident_id: String, decision_id: String) -> void:
 	if _world == null or resident_id.is_empty() or decision_id.is_empty():
 		return
 	_world.redispatch_decision_request_by_id(resident_id, decision_id)
+
+
+func _cancel_resident_model_request(resident_id: String, request_id: String) -> bool:
+	if (
+		_agent_system == null
+		or not _agent_system.has_method("cancel_resident_model_request")
+		or resident_id.is_empty()
+		or request_id.is_empty()
+	):
+		return false
+	var result := _agent_system.cancel_resident_model_request(
+		resident_id,
+		request_id,
+	) as Dictionary
+	return bool(result.get("ok", false))
 
 
 func _record_error(

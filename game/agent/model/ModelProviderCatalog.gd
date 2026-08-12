@@ -327,7 +327,7 @@ func create_provider(provider_id: String, request_host: Node = null, config: Dic
 	if provider == null:
 		return {"ok": false, "errors": ["Provider 工厂未返回合法 adapter：%s" % provider_id]}
 	var missing_methods: Array[String] = []
-	for method_name: String in ["get_provider_descriptor", "validate_configuration", "request_decision", "get_debug_snapshot"]:
+	for method_name: String in ["get_provider_descriptor", "validate_configuration", "request_decision", "cancel_request", "cancel_all_requests", "get_debug_snapshot"]:
 		if not provider.has_method(method_name):
 			missing_methods.append(method_name)
 	if not missing_methods.is_empty():
