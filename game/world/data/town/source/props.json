@@ -131869,6 +131869,15 @@
           336,
           752
         ],
+        "memberAnchors": [
+          {
+            "anchorId": "inspect_south_02",
+            "position": [
+              168,
+              792
+            ]
+          }
+        ],
         "position": [
           168,
           712
@@ -132010,6 +132019,15 @@
         "instancePosition": [
           336,
           752
+        ],
+        "memberAnchors": [
+          {
+            "anchorId": "inspect_north_02",
+            "position": [
+              488,
+              792
+            ]
+          }
         ],
         "position": [
           488,

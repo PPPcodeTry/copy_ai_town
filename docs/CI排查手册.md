@@ -262,6 +262,21 @@ Windows 包必须同时包含 `.exe` 与 `.pck`，macOS 包必须包含 `.app/Co
 
 处理方式：先确认失败字段是否属于生产入口的公开返回契约；如果只是测试用的内部状态，应从测试 World 的内部居民记录读取，并使用测试已有的稳定 ID 常量，不要用显示名称猜测字典键；另外保留公开投影的行为断言。不要为了让断言通过而把内部调试字段泄露到生产接口。
 
+### 修改活动源数据后，World 启动报告活动收据指纹不匹配
+
+表现：Godot 无头导入和活动专项测试可以通过，但 Agent 离线套件中的正式 Bootstrap 返回 `WORLD_DATA_INVALID`；错误包含“Activity Integration 收据与 exact source fingerprint 不匹配”或“未绑定 exact 七份源文档”。
+
+直接原因：修改了 `world/data/town/source/activity_definitions.json` 等活动源文档，并手动同步了 `town_world.json` 中的业务字段，却没有通过正式构建入口重算 `activityIntegrationReceipt.sourceFingerprint` 和对应文档指纹。只改生成文件里的活动值不能完成来源校验。
+
+处理方法：修改活动源文档后运行：
+
+```sh
+"$GODOT_BIN" --headless --path game \
+  --script res://world/data/town/TownWorldDataBuild.gd
+```
+
+确认输出 `TOWN_WORLD_DATA_BUILD_PASS`，检查生成差异只包含预期业务字段和活动收据，再运行正式 Bootstrap 或 Agent 离线套件。不要手工计算或复制指纹。
+
 ## 查看 GitHub CI 日志
 
 先查看 PR 的检查项：
@@ -295,6 +310,16 @@ gh run view <运行编号> --log-failed \
 - Godot 大量素材导入进度：应继续看到日志末尾的脚本错误检查结果。
 
 ## 已发生案例
+
+### 2026-08-12：备餐时长调整后遗漏活动收据重建
+
+表现：食堂活动回归和防复发守卫均通过，远端 Agent 离线套件为 `47/48`；唯一失败的 `agent_debug_lab_test.gd` 在正式 Bootstrap 启动时得到 `WORLD_DATA_INVALID`，后续居民数、存档和恢复断言都是连带失败。
+
+直接原因：统一备餐时长从 60 分钟调整为 30 分钟后，只同步了活动源文档和 `town_world.json` 中的活动定义，没有运行 `TownWorldDataBuild.gd`，导致生成数据仍携带修改前的活动来源指纹。
+
+修复：使用正式世界数据构建入口重新生成 `town_world.json`，同步新的 `activity_definitions.json` 文档指纹和组合来源指纹；随后先单独复查 `agent_debug_lab_test.gd`，再运行完整远端正式套件。
+
+最终验证：修复 head 的 Agent 离线套件、15 项正式故事、独立正式入口和测试后源码清洁检查全部通过；远端正式套件用时 14 分 39 秒，防复发守卫同时通过。
 
 ### 2026-08-12：模型请求生命周期修复引入 provider 资源泄漏
 
@@ -359,6 +384,7 @@ gh run view <运行编号> --log-failed \
 - [ ] 新增脚本所需的 `.gd.uid` 已确认。
 - [ ] 新测试、预览和工具脚本已分类。
 - [ ] 所有新增资源路径已经检查大小写，并确认文件被 Git 跟踪。
+- [ ] 修改活动源文档后已运行 `TownWorldDataBuild.gd`，并确认活动收据和来源指纹同步更新。
 - [ ] 涉及存档目录、事务或临时文件时，Windows 超长路径恢复与清理测试已经通过。
 - [ ] `tools/guards/run_guards.sh` 通过。
 - [ ] Godot 无头导入没有脚本或引擎错误。

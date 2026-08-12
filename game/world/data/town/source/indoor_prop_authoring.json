@@ -347,8 +347,8 @@
         {"name": "公共食堂递餐口", "instanceId": "pantry_cabinet_kitchen_east", "assetId": "pantry_cabinet", "anchorId": "serve_front", "verb": "递餐", "durationMinutes": 5, "effects": {}},
         {"name": "公共食堂面团操作台", "instanceId": "pantry_cabinet_kitchen_east", "assetId": "pantry_cabinet", "anchorId": "dough_front", "verb": "准备面团", "durationMinutes": 25, "effects": {}},
         {"name": "公共食堂餐具架", "instanceId": "dish_rack_kitchen_east", "assetId": "dish_rack", "anchorId": "use_front", "verb": "归还餐具", "durationMinutes": 10, "effects": {}},
-        {"name": "公共食堂西侧餐桌", "instanceId": "dining_table_west", "assetId": "dining_table", "anchorId": "inspect_south", "verb": "吃饭", "durationMinutes": 30, "effects": {"饿": -2}},
-        {"name": "公共食堂餐桌东端", "instanceId": "dining_table_west", "assetId": "dining_table", "anchorId": "inspect_north", "verb": "吃饭", "durationMinutes": 30, "effects": {"饿": -2}}
+        {"name": "公共食堂西侧餐桌", "instanceId": "dining_table_west", "assetId": "dining_table", "anchorId": "inspect_south", "memberAnchors": [{"anchorId": "inspect_south_02", "position": [168, 792]}], "verb": "吃饭", "durationMinutes": 30, "effects": {"饿": -2}},
+        {"name": "公共食堂餐桌东端", "instanceId": "dining_table_west", "assetId": "dining_table", "anchorId": "inspect_north", "memberAnchors": [{"anchorId": "inspect_north_02", "position": [488, 792]}], "verb": "吃饭", "durationMinutes": 30, "effects": {"饿": -2}}
       ]
     },
     {

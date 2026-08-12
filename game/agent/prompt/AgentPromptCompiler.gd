@@ -453,6 +453,22 @@ func _render_snapshot(wake_packet: Dictionary) -> String:
 			else _join(destinations)
 		)
 	)
+	var dining := place.get("dining", {}) as Dictionary
+	if not dining.is_empty():
+		var retry_text := ""
+		var retry_after := int(dining.get("retryAfterMinute", -1))
+		if retry_after >= 0:
+			retry_text = "；最早可在世界时间第%d分钟再次判断" % retry_after
+		lines.append(
+			"公共食堂接待情况：%d/%d个名额已占用，剩余%d个；%s%s。"
+			% [
+				int(dining.get("occupied", 0)),
+				int(dining.get("capacity", 0)),
+				int(dining.get("available", 0)),
+				_safe(dining.get("stateLabel", "")),
+				retry_text,
+			]
+		)
 	var life_destination_options := snapshot.get(
 		"life_destination_options",
 		[],

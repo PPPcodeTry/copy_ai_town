@@ -2807,6 +2807,7 @@ func _scenario_staggered_arrival() -> void:
 	var states := world.call("get_all_resident_states") as Array
 	_expect_equal(states.size(), 15, "all residents keep roster state")
 	var scheduled_minutes: Array[int] = []
+	var dining_worker_arrival := -1
 	for value: Variant in states:
 		var state := value as Dictionary
 		var arrival := state.get("arrivalState", {}) as Dictionary
@@ -2823,6 +2824,10 @@ func _scenario_staggered_arrival() -> void:
 		scheduled_minutes.append(
 			int(arrival.get("scheduledAbsoluteMinute", -1)),
 		)
+		if String(state.get("residentId", "")) == "resident_lu_qing_01":
+			dining_worker_arrival = int(
+				arrival.get("scheduledAbsoluteMinute", -1),
+			)
 	scheduled_minutes.sort()
 	_expect_equal(
 		_unique_ints(scheduled_minutes).size(),
@@ -2833,6 +2838,11 @@ func _scenario_staggered_arrival() -> void:
 	_expect(
 		scheduled_minutes[0] > start_absolute,
 		"no resident appears before the world starts",
+	)
+	_expect_equal(
+		dining_worker_arrival,
+		start_absolute + 1,
+		"the dining operator arrives first so opening-day meal preparation is not delayed until noon",
 	)
 	_expect(
 		scheduled_minutes[-1] <= 719,
