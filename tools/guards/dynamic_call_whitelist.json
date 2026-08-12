@@ -295,6 +295,54 @@
       "func": "request_quit_game",
       "call": "string:.call( \"prepare_departure_messages\", _quit_departure_id, 2, Callable(self, \"_on_quit_departure_messages_ready\").bind( departure_id, ), )",
       "reason": "正式与测试网关共享退出留言契约；绑定本次退出编号，用于忽略超时后迟到的异步回调，避免重复保存、返回主菜单或退出。"
+    },
+    {
+      "path": "game/agent/ResidentRuntime.gd",
+      "func": "cancel_model_request",
+      "call": "string:.call( \"cancel_request\", normalized_request_id, )",
+      "reason": "居民运行时只能通过 Provider 的可选取消契约终止当前真实模型传输；has_method 检查后按固定公共方法名调用。"
+    },
+    {
+      "path": "game/agent/model/OpenAICompatibleModelProvider.gd",
+      "func": "_on_http_request_completed",
+      "call": "variable:.call( { \"result\": result, \"status_code\": response_code, \"headers\": headers, \"body\": body, }, )",
+      "reason": "HTTPRequest 完成信号回到本次请求的唯一结算 Callable，保证取消与迟到响应只结算一次。"
+    },
+    {
+      "path": "game/agent/model/OpenAICompatibleModelProvider.gd",
+      "func": "_request_with_godot_http",
+      "call": "variable:.call( [\"%s 需要有效的 HTTPRequest 宿主节点\" % _provider_label()], {\"error_type\": \"configuration\", \"retryable\": false}, )",
+      "reason": "HTTPRequest 宿主不可用时调用本次请求的失败结算 Callable，释放 Provider 活跃请求状态。"
+    },
+    {
+      "path": "game/agent/model/OpenAICompatibleModelProvider.gd",
+      "func": "_request_with_godot_http",
+      "call": "variable:.call( [\"模型请求未能启动：%s\" % error_string(error)], {\"error_type\": \"request_start\", \"retryable\": false}, )",
+      "reason": "HTTPRequest 启动失败时调用本次请求的失败结算 Callable，保持启动失败和超时共用同一收敛路径。"
+    },
+    {
+      "path": "game/agent/model/OpenAICompatibleModelProvider.gd",
+      "func": "cancel_request",
+      "call": "string:.call(\"cancel_request\", normalized_request_id)",
+      "reason": "注入 transport 可选实现同名取消契约；生产 HTTPRequest 已由 Provider 自身直接取消。"
+    },
+    {
+      "path": "game/agent/model/OpenAICompatibleModelProvider.gd",
+      "func": "cancel_request",
+      "call": "variable:.call( [\"模型请求已取消\"], { \"error_type\": \"cancelled\", \"retryable\": false, \"cancelled\": true, }, )",
+      "reason": "主动取消通过当前请求保存的失败结算 Callable 通知上层一次，随后终止真实传输。"
+    },
+    {
+      "path": "game/world/integration/TownWorldAgentGateway.gd",
+      "func": "_advance_death_story_requests",
+      "call": "variable:.call({ \"ok\": false, \"errorCode\": \"DEATH_STORY_TIMEOUT\", \"retryable\": true, \"errors\": [\"死亡故事模型请求超时，已使用安全收束故事\"], })",
+      "reason": "死亡故事超时通过 UI 注入的 Callable 发送一次恢复结果，避免 loading 状态永久保留。"
+    },
+    {
+      "path": "game/agent/ResidentRuntime.gd",
+      "func": "cancel_all_model_requests",
+      "call": "string:.call(\"cancel_all_requests\")",
+      "reason": "会话关闭或切换时通过 Provider 的全量取消契约终止该居民所有在途模型传输，并让同步回调走 stale 收束。"
     }
   ]
 }

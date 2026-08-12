@@ -22,6 +22,18 @@ func request_decision(_model_request: Dictionary, _on_complete: Callable) -> voi
 	push_error("ModelProvider.request_decision must be implemented by an adapter")
 
 
+# 可选的请求取消接口。生产 Provider 会终止真实传输；不支持取消的
+# 测试或第三方适配器返回 false，仍由上层的 stale/超时逻辑负责收敛状态。
+func cancel_request(_request_id: String) -> bool:
+	return false
+
+
+## 取消此 Provider 当前仍在途的全部模型请求。
+## 返回实际发起取消的请求数量；不支持取消的 Provider 返回 0。
+func cancel_all_requests() -> int:
+	return 0
+
+
 # 结构化 JSON 路线复用同一供应商传输，但不把结果解释为居民动作。
 func request_json(model_request: Dictionary, on_complete: Callable) -> void:
 	request_decision(model_request, _forward_json_result.bind(on_complete))
