@@ -241,10 +241,9 @@ func _end_active_request(request_id: String, request_state: Dictionary) -> void:
 
 
 func _clear_watchdog(request_state: Dictionary) -> void:
-	var timer_value: Variant = request_state.get("watchdogTimer")
-	if timer_value is Timer and is_instance_valid(timer_value):
-		(timer_value as Timer).stop()
-		(timer_value as Timer).queue_free()
+	# SceneTreeTimer 由 SceneTree 自动回收；只解除本次请求对它的引用。
+	# 不能改成临时 Timer 节点：测试在同步回调后立即退出时，queue_free
+	# 尚未处理会被 Godot 记为资源泄漏。
 	request_state["watchdogTimer"] = null
 
 
@@ -378,10 +377,7 @@ func _start_transport_watchdog(
 	if not _request_host.is_inside_tree():
 		return
 	var timeout_seconds := float(_config.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
-	var timer := Timer.new()
-	timer.one_shot = true
-	timer.wait_time = timeout_seconds
-	_request_host.add_child(timer)
+	var timer := _request_host.get_tree().create_timer(timeout_seconds)
 	request_state["watchdogTimer"] = timer
 	timer.timeout.connect(func() -> void:
 		settle_failure.call(
