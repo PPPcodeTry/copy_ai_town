@@ -22,6 +22,8 @@ var _requests: Array[Dictionary] = []
 var _responses: Array[Dictionary] = []
 var _diagnostics: Array[Dictionary] = []
 var _results: Array[Dictionary] = []
+var _active_requests: Dictionary = {}
+var _request_sequence := 0
 var _env_file_cache: Dictionary = {}
 
 
@@ -116,26 +118,42 @@ func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
 	if not api_key.is_empty():
 		headers.append("Authorization: Bearer %s" % api_key)
 	var started_at := Time.get_ticks_msec()
+	var request_id := String(
+		recorded_model_request.get("_agent_request_id", "")
+	).strip_edges()
+	if request_id.is_empty():
+		# 退出留言等结构化请求可能没有决策编号，也必须纳入会话级清理。
+		_request_sequence += 1
+		request_id = "__provider_request_%d" % _request_sequence
+	var request_state := _begin_active_request(request_id)
+	var settled := request_state.get("settled", {}) as Dictionary
+	# transport 回复、请求启动失败、看门狗超时和主动取消竞争同一个
+	# 结算状态：只有第一个占位者能写历史并回调，迟到的回复直接丢弃。
+	var settle_response := func(response: Dictionary) -> void:
+		if settled["done"]:
+			return
+		settled["done"] = true
+		# settle_failure 会捕获 request_state；结算后必须断开 state -> closure
+		# 的引用，否则同步 transport 会留下 RefCounted 循环引用。
+		request_state["settleFailure"] = Callable()
+		_clear_watchdog(request_state)
+		_end_active_request(request_id, request_state)
+		_handle_transport_result(
+			response,
+			on_complete,
+			started_at,
+			recorded_request,
+		)
+	var settle_failure := func(errors: Array, diagnostics: Dictionary) -> void:
+		if settled["done"]:
+			return
+		settled["done"] = true
+		request_state["settleFailure"] = Callable()
+		_clear_watchdog(request_state)
+		_end_active_request(request_id, request_state)
+		_complete_failure(on_complete, errors, diagnostics)
+	request_state["settleFailure"] = settle_failure
 	if _transport != null:
-		# transport 回复、请求启动失败和看门狗超时竞争同一个结算状态：
-		# 只有第一个占位者能写 _responses/_diagnostics/_results 并回调，
-		# 迟到的回复直接丢弃，不留任何历史副作用。
-		var settled := {"done": false}
-		var settle_response := func(response: Dictionary) -> void:
-			if settled["done"]:
-				return
-			settled["done"] = true
-			_handle_transport_result(
-				response,
-				on_complete,
-				started_at,
-				recorded_request,
-			)
-		var settle_failure := func(errors: Array, diagnostics: Dictionary) -> void:
-			if settled["done"]:
-				return
-			settled["done"] = true
-			_complete_failure(on_complete, errors, diagnostics)
 		var error: int = _transport.call(
 			"request_json",
 			endpoint,
@@ -149,9 +167,95 @@ func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
 				{"error_type": "request_start", "retryable": false, "request": recorded_request},
 			)
 			return
-		_start_transport_watchdog(settle_failure, recorded_request)
+		# 某些注入 transport 会同步回调；请求已经结算时不能再创建 watchdog。
+		if bool(settled.get("done", false)):
+			return
+		_start_transport_watchdog(settle_failure, recorded_request, request_state)
 		return
-	_request_with_godot_http(endpoint, headers, body, on_complete, started_at, recorded_request)
+	_request_with_godot_http(
+		endpoint,
+		headers,
+		body,
+		recorded_request,
+		request_state,
+		settle_response,
+		settle_failure,
+	)
+
+
+func cancel_request(request_id: String) -> bool:
+	var normalized_request_id := request_id.strip_edges()
+	if normalized_request_id.is_empty():
+		return false
+	var request_state := _active_requests.get(normalized_request_id, {}) as Dictionary
+	if request_state.is_empty():
+		return false
+	var settled := request_state.get("settled", {}) as Dictionary
+	if bool(settled.get("done", false)):
+		return false
+	var settle_failure := request_state.get("settleFailure", Callable()) as Callable
+	if not settle_failure.is_valid():
+		return false
+	# 先结算上层，避免 transport 的同步取消回调抢先写入普通失败；
+	# 之后再停止 HTTPRequest 或通知注入 transport。
+	settle_failure.call(
+		["模型请求已取消"],
+		{
+			"error_type": "cancelled",
+			"retryable": false,
+			"cancelled": true,
+		},
+	)
+	var http_request_value: Variant = request_state.get("httpRequest")
+	if http_request_value is HTTPRequest and is_instance_valid(http_request_value):
+		var http_request := http_request_value as HTTPRequest
+		http_request.cancel_request()
+		http_request.queue_free()
+	var transport := _transport
+	if transport != null and transport.has_method("cancel_request"):
+		transport.call("cancel_request", normalized_request_id)
+	return true
+
+
+func cancel_all_requests() -> int:
+	var request_ids: Array[String] = []
+	for request_id_value: Variant in _active_requests.keys():
+		request_ids.append(String(request_id_value))
+	var cancelled_count := 0
+	for request_id: String in request_ids:
+		if cancel_request(request_id):
+			cancelled_count += 1
+	return cancelled_count
+
+
+func _begin_active_request(request_id: String) -> Dictionary:
+	var request_state := {
+		"settled": {"done": false},
+		"httpRequest": null,
+		"watchdogTimer": null,
+		"settleFailure": Callable(),
+	}
+	if not request_id.is_empty():
+		_active_requests[request_id] = request_state
+	return request_state
+
+
+func _end_active_request(request_id: String, request_state: Dictionary) -> void:
+	if request_id.is_empty():
+		return
+	if _active_requests.get(request_id, {}) == request_state:
+		_active_requests.erase(request_id)
+
+
+func _clear_watchdog(request_state: Dictionary) -> void:
+	var timer_value: Variant = request_state.get("watchdogTimer")
+	if timer_value is Timer and is_instance_valid(timer_value):
+		var timer := timer_value as Timer
+		timer.stop()
+		# timeout 信号回调期间对象处于锁定状态，必须延迟释放；同步
+		# transport 已完成时不会创建 watchdog，因此不会留下未处理的节点。
+		timer.queue_free()
+	request_state["watchdogTimer"] = null
 
 
 func _build_request_body(model_request: Dictionary) -> Dictionary:
@@ -270,6 +374,7 @@ func _parse_env_file(path: String) -> Dictionary:
 func _start_transport_watchdog(
 	settle_failure: Callable,
 	recorded_request: Dictionary,
+	request_state: Dictionary,
 ) -> void:
 	# 注入 transport 不经过 HTTPRequest 的超时机制；宿主可用时补一个超时兜底，
 	# 防止回调永不到达导致上游永远等待。结算唯一性由 settle_failure 内部
@@ -283,7 +388,11 @@ func _start_transport_watchdog(
 	if not _request_host.is_inside_tree():
 		return
 	var timeout_seconds := float(_config.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
-	var timer := _request_host.get_tree().create_timer(timeout_seconds)
+	var timer := Timer.new()
+	timer.one_shot = true
+	timer.wait_time = timeout_seconds
+	_request_host.add_child(timer)
+	request_state["watchdogTimer"] = timer
 	timer.timeout.connect(func() -> void:
 		settle_failure.call(
 			["模型请求超时：transport 超过 %s 秒未回复" % timeout_seconds],
@@ -294,19 +403,20 @@ func _start_transport_watchdog(
 			},
 		)
 	)
+	timer.start()
 
 
 func _request_with_godot_http(
 	endpoint: String,
 	headers: PackedStringArray,
 	body: Dictionary,
-	on_complete: Callable,
-	started_at: int,
 	recorded_request: Dictionary,
+	request_state: Dictionary,
+	settle_response: Callable,
+	settle_failure: Callable,
 ) -> void:
 	if _request_host == null or not is_instance_valid(_request_host):
-		_complete_failure(
-			on_complete,
+		settle_failure.call(
 			["%s 需要有效的 HTTPRequest 宿主节点" % _provider_label()],
 			{"error_type": "configuration", "retryable": false},
 		)
@@ -319,15 +429,16 @@ func _request_with_godot_http(
 		if system_ca.load_from_string(system_ca_pem) == OK:
 			http_request.set_tls_options(TLSOptions.client(system_ca))
 	_request_host.add_child(http_request)
+	request_state["httpRequest"] = http_request
 	http_request.request_completed.connect(
-		_on_http_request_completed.bind(http_request, on_complete, started_at, recorded_request),
+		_on_http_request_completed.bind(http_request, settle_response),
 		CONNECT_ONE_SHOT,
 	)
 	var error := http_request.request(endpoint, headers, HTTPClient.METHOD_POST, JSON.stringify(body))
 	if error != OK:
 		http_request.queue_free()
-		_complete_failure(
-			on_complete,
+		request_state["httpRequest"] = null
+		settle_failure.call(
 			["模型请求未能启动：%s" % error_string(error)],
 			{"error_type": "request_start", "retryable": false},
 		)
@@ -339,21 +450,17 @@ func _on_http_request_completed(
 	headers: PackedStringArray,
 	body: PackedByteArray,
 	http_request: HTTPRequest,
-	on_complete: Callable,
-	started_at: int,
-	recorded_request: Dictionary,
+	settle_response: Callable,
 ) -> void:
-	http_request.queue_free()
-	_handle_transport_result(
+	if is_instance_valid(http_request):
+		http_request.queue_free()
+	settle_response.call(
 		{
 			"result": result,
 			"status_code": response_code,
 			"headers": headers,
 			"body": body,
 		},
-		on_complete,
-		started_at,
-		recorded_request,
 	)
 
 

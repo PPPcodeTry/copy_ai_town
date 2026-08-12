@@ -9,6 +9,7 @@ const PROVIDER_SERVICE := preload(
 )
 
 var _failures: Array[String] = []
+var _death_results: Array[Dictionary] = []
 
 
 class DelayedFailingAgent:
@@ -31,6 +32,22 @@ class DelayedFailingAgent:
 		callbacks.erase(decision_id)
 		if callback.is_valid():
 			callback.call({"ok": false, "errors": ["invalid model decision"]})
+
+
+class CancellableDelayedAgent:
+	extends DelayedFailingAgent
+
+	var cancelled_requests: Array[Dictionary] = []
+
+	func cancel_resident_model_request(
+		resident_id: String,
+		request_id: String,
+	) -> Dictionary:
+		cancelled_requests.append({
+			"residentId": resident_id,
+			"requestId": request_id,
+		})
+		return {"ok": true, "supported": true}
 
 
 class ImmediatelyRejectingAgent:
@@ -251,6 +268,21 @@ class PendingWorld:
 		}
 
 
+class EnvelopePendingWorld:
+	extends PendingWorld
+
+	func take_pending_decision_envelopes_by_ids(
+		resident_ids: Array,
+	) -> Array[Dictionary]:
+		var requests := take_pending_decision_requests_by_ids(resident_ids)
+		for request in requests:
+			var wake := request.get("wakePacket", {}) as Dictionary
+			# Model the production light envelope: event identity is retained,
+			# while the full snapshot is refreshed only after capacity selection.
+			wake.erase("snapshot")
+		return requests
+
+
 class PausedSubmissionWorld:
 	extends RefCounted
 
@@ -314,6 +346,46 @@ class InnerObservationWorld:
 		return {"doing": "观察花圃"}
 
 
+class DeathStoryWorld:
+	extends RefCounted
+
+	func get_resident_state(_resident_id: String) -> Dictionary:
+		return {
+			"lifecycle": {"isDead": false},
+			"currentPlace": "广场",
+			"doing": "散步",
+		}
+
+	func get_time() -> Dictionary:
+		return {"day": 1, "clock": "08:10"}
+
+	func get_weather() -> String:
+		return "晴天"
+
+
+class DeathStoryAgent:
+	extends RefCounted
+
+	var cancelled_requests: Array[Dictionary] = []
+
+	func request_json_for_resident(
+		_resident_id: String,
+		_request: Dictionary,
+		_callback: Callable,
+	) -> Dictionary:
+		return {"ok": true, "started": true}
+
+	func cancel_resident_model_request(
+		resident_id: String,
+		request_id: String,
+	) -> Dictionary:
+		cancelled_requests.append({
+			"residentId": resident_id,
+			"requestId": request_id,
+		})
+		return {"ok": true, "supported": true}
+
+
 class InnerObservationAgent:
 	extends RefCounted
 
@@ -368,9 +440,12 @@ class FailingMemoryAgent:
 
 func _initialize() -> void:
 	_test_null_conversation_snapshot_is_not_an_avatar_turn()
+	_test_light_conversation_envelope_uses_event_identity()
+	_test_rapid_avatar_reopen_preempts_same_resident_stale_call()
 	_test_duplicate_display_names_route_by_id()
 	_test_runtime_resident_bindings_can_be_replaced_atomically()
 	_test_inner_observation_accepts_newer_read_only_world_revision()
+	_test_death_story_timeout_releases_pending_state()
 	_test_memory_read_failures_are_structured()
 	_test_memory_intervention_uses_world_time_and_agent_contract()
 	_test_replacement_request_retires_old_gateway_slot()
@@ -426,6 +501,125 @@ func _test_null_conversation_snapshot_is_not_an_avatar_turn() -> void:
 	gateway.free()
 
 
+func _test_light_conversation_envelope_uses_event_identity() -> void:
+	var gateway: Node = GATEWAY.new()
+	gateway.set("_avatar_person_id", "player_avatar")
+	var wake := _wake("decision-light-conversation")
+	wake.erase("snapshot")
+	wake["events"] = [{
+		"event_id": "conversation-light-turn",
+		"type": "搭话",
+		"conversation_id": "conversation-new",
+		"participant_resident_ids": ["resident-a", "player_avatar"],
+		"turn": {
+			"speaker_resident_id": "player_avatar",
+		},
+	}]
+	_expect_equal(
+		gateway.call("_wake_is_avatar_conversation_turn", wake),
+		true,
+		"a light conversation envelope keeps the avatar lane from the event identity",
+	)
+	gateway.free()
+
+
+func _test_rapid_avatar_reopen_preempts_same_resident_stale_call() -> void:
+	var agent := CancellableDelayedAgent.new()
+	var world := EnvelopePendingWorld.new()
+	var gateway: Node = GATEWAY.new()
+	gateway.set("_agent_system", agent)
+	gateway.set("_provider_service", ProviderServiceStub.new())
+	gateway.set("_world", world)
+	gateway.set("_avatar_person_id", "player_avatar")
+	var connected_resident_ids: Array[String] = [
+		"resident-a",
+		"resident-busy-1",
+		"resident-busy-2",
+		"resident-busy-3",
+		"resident-busy-4",
+		"resident-busy-5",
+	]
+	gateway.set(
+		"_connected_resident_ids",
+		connected_resident_ids,
+	)
+	gateway.set("_session_active", true)
+	var inflight := {}
+	for index in 6:
+		var resident_id := "resident-a" if index == 0 else "resident-busy-%d" % index
+		var decision_id := "decision-old-%d" % index
+		var old_wake := _wake(decision_id)
+		if index == 0:
+			old_wake["events"] = [{
+				"type": "对方答话",
+				"conversation_id": "conversation-old",
+				"participant_resident_ids": ["resident-a", "player_avatar"],
+			}]
+		inflight[decision_id] = {
+			"residentId": resident_id,
+			"residentName": resident_id,
+			"wakePacket": old_wake,
+		}
+	gateway.set("_inflight", inflight)
+	var new_wake := _wake("decision-reopen")
+	new_wake.erase("snapshot")
+	new_wake["events"] = [{
+		"event_id": "conversation-reopen-turn",
+		"type": "搭话",
+		"conversation_id": "conversation-reopen",
+		"participant_resident_ids": ["resident-a", "player_avatar"],
+		"turn": {"speaker_resident_id": "player_avatar"},
+	}]
+	world.add_request({
+		"residentId": "resident-a",
+		"residentName": "居民甲",
+		"wakePacket": new_wake,
+	})
+	_expect_equal(
+		world.has_method("take_pending_decision_envelopes_by_ids"),
+		true,
+		"the rapid reopen fixture exposes the production envelope API",
+	)
+	_expect_equal(world.pending.size(), 1, "the rapid reopen starts with one pending request")
+	_expect_equal(
+		gateway.call("_wake_is_avatar_conversation_turn", new_wake),
+		true,
+		"the reopen event identifies the player before the pump",
+	)
+	_expect_equal(
+		gateway.call("pump"),
+		1,
+		"an immediate reopen dispatches even when the stale call filled the gateway",
+	)
+	inflight = gateway.get("_inflight") as Dictionary
+	_expect(
+		inflight.has("decision-reopen"),
+		"the new conversation owns a request instead of remaining in World overflow",
+	)
+	_expect(
+		bool(
+			(inflight.get("decision-old-0", {}) as Dictionary).get(
+				"superseded",
+				false,
+			)
+		),
+		"the prior conversation request is marked stale before capacity selection",
+	)
+	_expect(
+		world.redispatched.is_empty(),
+		"the immediate reopen is not redispatched back into the waiting queue",
+	)
+	_expect_equal(
+		agent.cancelled_requests,
+		[{
+			"residentId": "resident-a",
+			"requestId": "decision-old-0",
+		}],
+		"the superseded player conversation asks Agent to cancel the real request",
+	)
+	gateway.free()
+
+
 func _test_memory_read_failures_are_structured() -> void:
 	var gateway: Node = GATEWAY.new()
 	var inactive := gateway.call("get_resident_memory", "resident-a") as Dictionary
@@ -446,6 +640,63 @@ func _test_memory_read_failures_are_structured() -> void:
 		failed.get("retryable", false),
 		true,
 		"transient Agent memory failures preserve retryability",
+	)
+	gateway.free()
+
+
+func _test_death_story_timeout_releases_pending_state() -> void:
+	var gateway: Node = GATEWAY.new()
+	var agent := DeathStoryAgent.new()
+	var world := DeathStoryWorld.new()
+	gateway.set("_agent_system", agent)
+	gateway.set("_world", world)
+	gateway.set("_session_active", true)
+	var connected_resident_ids: Array[String] = ["resident-a"]
+	gateway.set("_connected_resident_ids", connected_resident_ids)
+	gateway.set("_resident_name_by_id", {"resident-a": "居民甲"})
+	_death_results.clear()
+	var accepted := gateway.call(
+		"request_resident_death_story",
+		"resident-a",
+		"death-timeout",
+		Callable(self, "_capture_death_result"),
+	) as Dictionary
+	_expect_equal(
+		accepted.get("ok"),
+		true,
+		"死亡故事请求能进入等待态 %s" % accepted,
+	)
+	var pending := gateway.get("_death_story_inflight") as Dictionary
+	var request := (pending.get("death-timeout", {}) as Dictionary).duplicate(true)
+	request["startedAtMsec"] = Time.get_ticks_msec() - 46_000
+	pending["death-timeout"] = request
+	gateway.set("_death_story_inflight", pending)
+	gateway.call(
+		"_advance_death_story_requests",
+		Time.get_ticks_msec(),
+	)
+	_expect(
+		(gateway.get("_death_story_inflight") as Dictionary).is_empty(),
+		"死亡故事超时后不会永久保留 loading 状态",
+	)
+	_expect_equal(
+		_death_results.size(),
+		1,
+		"死亡故事超时向上层发送一次恢复结果",
+	)
+	if _death_results.size() == 1:
+		_expect_equal(
+			_death_results[0].get("errorCode"),
+			"DEATH_STORY_TIMEOUT",
+			"死亡故事超时使用稳定错误码",
+		)
+	_expect_equal(
+		agent.cancelled_requests,
+		[{
+			"residentId": "resident-a",
+			"requestId": "death-timeout",
+		}],
+		"死亡故事超时会请求取消真实模型调用",
 	)
 	gateway.free()
 
@@ -1748,3 +1999,7 @@ func _expect_equal(actual: Variant, expected: Variant, message: String) -> void:
 		_failures.append(
 			"%s (actual=%s expected=%s)" % [message, actual, expected]
 		)
+
+
+func _capture_death_result(result: Dictionary) -> void:
+	_death_results.append(result.duplicate(true))
