@@ -2474,7 +2474,19 @@ static func _record_facility_use_from_activity(
 		):
 			world.create_occupation_service_request(occupation_request_spec)
 	if activity_id == "activity_dining_eat_meal":
-		var meal_period_ref: String = String(world._meal_period_source_ref(int(now)))
+		# 用餐可能从一个餐次的末尾跨到下一个餐次；优先使用连续用餐
+		# 例程在开始时保存的餐次，而不是完成这一阶段时的当前时刻。
+		var meal_period_ref := ""
+		var meal_routine := world._activity_routines.get(
+			resident_id,
+			{},
+		) as Dictionary
+		if String(meal_routine.get("group", "")) == "meal":
+			meal_period_ref = String(
+				meal_routine.get("mealPeriodRef", ""),
+			).strip_edges()
+		if meal_period_ref.is_empty():
+			meal_period_ref = String(world._meal_period_source_ref(int(now)))
 		if (
 			not meal_period_ref.is_empty()
 			and not world._occupation_services.has_dining_order_completed_for_resident_meal_period(

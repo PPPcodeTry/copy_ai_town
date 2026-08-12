@@ -230,6 +230,9 @@ const AGENT_CONTRACT := preload("res://agent/AgentContract.gd")
 const DINING_SERVICE := preload(
 	"res://world/runtime/work/TownDiningServiceRuntime.gd"
 )
+const WORK_SETTLEMENT := preload(
+	"res://world/runtime/work/TownWorkSettlement.gd"
+)
 
 var _started_events: Array[Dictionary] = []
 var _completed_events: Array[Dictionary] = []
@@ -3116,6 +3119,7 @@ func _scenario_activity_routine() -> void:
 	_verify_dining_prep_schedule()
 	_verify_dining_departure_awareness(data, opening)
 	_verify_meal_sequence(data, opening)
+	_verify_meal_period_boundary_consumption(data, opening)
 	_verify_dining_capacity_agent_reaction(data, opening)
 	_verify_active_meal_routine_save(data, opening)
 	_verify_meal_presentation_progress(data, opening)
@@ -3581,6 +3585,53 @@ func _verify_meal_sequence(data: Dictionary, opening: Dictionary) -> void:
 	).get("currentAction", {}) as Dictionary
 	_expect_equal(leaving_action.get("type"), "去", "吃完后的外出行动已经接入")
 	_expect_equal(leaving_action.get("place"), "市集", "吃完后会前往外部生活地点")
+	world.call("stop")
+
+
+func _verify_meal_period_boundary_consumption(
+	data: Dictionary,
+	opening: Dictionary,
+) -> void:
+	var boundary_opening := opening.duplicate(true)
+	(boundary_opening.get("environment", {}) as Dictionary)["clock"] = "10:00"
+	var world: RefCounted = WORLD.new()
+	_expect_equal(
+		(world.call("start", data, boundary_opening) as Dictionary).get("ok"),
+		true,
+		"跨餐次边界用餐检查 World 可启动",
+	)
+	var resident_id := "resident_tang_xiaoman_01"
+	var breakfast_ref := String(world.call("_meal_period_source_ref", 595))
+	var lunch_ref := String(world.call("_meal_period_source_ref", 600))
+	(world.get("_activity_routines") as Dictionary)[resident_id] = {
+		"group": "meal",
+		"mealPeriodRef": breakfast_ref,
+	}
+	WORK_SETTLEMENT._record_facility_use_from_activity(
+		world,
+		resident_id,
+		{
+			"role": "visitor",
+			"activityId": "activity_dining_eat_meal",
+		},
+	)
+	var occupation_services := world.get("_occupation_services") as RefCounted
+	_expect(
+		bool(occupation_services.call(
+			"has_dining_order_completed_for_resident_meal_period",
+			resident_id,
+			breakfast_ref,
+		)),
+		"跨到午餐时段完成早餐仍登记为早餐",
+	)
+	_expect(
+		not bool(occupation_services.call(
+			"has_dining_order_completed_for_resident_meal_period",
+			resident_id,
+			lunch_ref,
+		)),
+		"跨餐次完成早餐不会错误占用午餐",
+	)
 	world.call("stop")
 
 
