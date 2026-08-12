@@ -50,6 +50,10 @@
   {
     "id": "res://tests/startup_social_feedback_test.gd",
     "min_checks": 65
+  },
+  {
+    "id": "res://ui/startup/tests/StartupTypographyContractTest.gd",
+    "min_checks": 54
   }
  ]
 }
