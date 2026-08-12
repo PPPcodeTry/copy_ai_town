@@ -310,9 +310,9 @@ func _test_traveler_relationship_context(compiler_script: Script) -> void:
 		"traveler_relationship": {
 			"affinity": 28,
 			"affinity_label": "明显疏远",
-			"familiarity_level": 2,
-			"familiarity_label": "有些熟悉",
-			"conversation_count": 2,
+			"familiarity_level": 3,
+			"familiarity_label": "熟悉",
+			"conversation_count": 8,
 			"attack_count": 1,
 			"last_change": "化身攻击-10",
 		},
@@ -330,7 +330,11 @@ func _test_traveler_relationship_context(compiler_script: Script) -> void:
 		"traveler relationship context is accepted by the wake contract",
 	)
 	var compiler: RefCounted = compiler_script.new(_initialization())
-	var request := compiler.call("compile", wake, "") as Dictionary
+	var avatar_memory := (
+		"[关于化身的个人记忆]\n[具体记忆]\n"
+		+ "- 旅行者上次说会帮忙寻找走失的猫（来源：本人亲历；状态：active）"
+	)
+	var request := compiler.call("compile", wake, avatar_memory) as Dictionary
 	var actions := (request.get("derived_constraints", {}) as Dictionary).get("actions", {}) as Dictionary
 	var reply_fields := (actions.get("答话", {}) as Dictionary).get("fields", []) as Array
 	_expect(
@@ -342,6 +346,14 @@ func _test_traveler_relationship_context(compiler_script: Script) -> void:
 	_expect(
 		user_text.contains("与旅行者的关系：好感28（明显疏远）")
 		and user_text.contains("最近一次关系变化：化身攻击-10")
-		and user_text.contains("保持警惕、冷淡和简短"),
-		"traveler relationship changes the Agent's conversation tone guidance",
+		and user_text.contains("熟悉旅行者但对其反感")
+		and user_text.contains("可以记得旧事，同时保持疏远")
+		and user_text.contains("寻找走失的猫"),
+		"familiarity and affinity combine without hiding confirmed avatar memory",
+	)
+	_expect(
+		user_text.contains("普通寒暄和仅仅完成对话通常填 0")
+		and user_text.contains("不能因为变熟自动增加")
+		and user_text.contains("证据不足填 0"),
+		"traveler affinity changes require evidence instead of rewarding every chat",
 	)

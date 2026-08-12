@@ -12,13 +12,14 @@ const AGENT_AFFINITY_DELTA_MAX := 5
 const AVATAR_ATTACK_AFFINITY_DELTA := -10
 
 const FAMILIARITY_LABELS := [
-	"初次见面",
-	"见过几次",
+	"尚未交谈",
+	"刚刚认识",
 	"有些熟悉",
 	"熟悉",
-	"关系不错",
-	"亲近",
+	"很熟悉",
+	"老相识",
 ]
+const FAMILIARITY_CONVERSATION_THRESHOLDS := [0, 1, 3, 6, 12, 24]
 
 
 static func empty_snapshot() -> Dictionary:
@@ -89,15 +90,32 @@ static func record_ended_conversation(
 	var processed := item.get("processedConversationIds", []) as Array
 	if processed.has(conversation_id):
 		return false
-	var turn_count := (conversation.get("turns", []) as Array).size()
-	if turn_count <= 0:
+	var avatar_turn_count := 0
+	var resident_turn_count := 0
+	var confirmed_turn_count := 0
+	for turn_value: Variant in conversation.get("turns", []) as Array:
+		if typeof(turn_value) != TYPE_DICTIONARY:
+			continue
+		var speaker_id := String(
+			(turn_value as Dictionary).get("speaker_resident_id", ""),
+		)
+		if speaker_id == avatar_id:
+			avatar_turn_count += 1
+		elif speaker_id == resident_id:
+			resident_turn_count += 1
+		else:
+			continue
+		confirmed_turn_count += 1
+	if avatar_turn_count <= 0 or resident_turn_count <= 0:
 		return false
 	processed.append(conversation_id)
 	while processed.size() > MAX_PROCESSED_CONVERSATIONS:
 		processed.pop_front()
 	item["processedConversationIds"] = processed
 	item["conversationCount"] = int(item.get("conversationCount", 0)) + 1
-	item["confirmedTurnCount"] = int(item.get("confirmedTurnCount", 0)) + turn_count
+	item["confirmedTurnCount"] = (
+		int(item.get("confirmedTurnCount", 0)) + confirmed_turn_count
+	)
 	item["lastInteractionAt"] = (
 		conversation.get("endedAt", {}) as Dictionary
 	).duplicate(true)
@@ -252,13 +270,13 @@ static func projection_for_resident(
 			"available": true,
 			"level": int(item.get("familiarityLevel", 0)),
 			"segmentCount": 5,
-			"label": String(item.get("familiarityLabel", "初次见面")),
+			"label": String(item.get("familiarityLabel", "尚未交谈")),
 		},
 		"familiarity": {
 			"available": true,
 			"level": int(item.get("familiarityLevel", 0)),
 			"segmentCount": 5,
-			"label": String(item.get("familiarityLabel", "初次见面")),
+			"label": String(item.get("familiarityLabel", "尚未交谈")),
 		},
 		"affinity": {
 			"available": true,
@@ -313,7 +331,7 @@ static func agent_projection_for_resident(
 		"affinity": int(affinity.get("value", 50)),
 		"affinity_label": String(affinity.get("label", "普通")),
 		"familiarity_level": int(familiarity.get("level", 0)),
-		"familiarity_label": String(familiarity.get("label", "初次见面")),
+		"familiarity_label": String(familiarity.get("label", "尚未交谈")),
 		"conversation_count": int(projection.get("conversationCount", 0)),
 		"attack_count": int(projection.get("attackCount", 0)),
 		"last_change": String(projection.get("lastAffinityChangeLabel", "")),
@@ -405,7 +423,11 @@ static func _affinity_change_label(change: Dictionary) -> String:
 
 static func _update_labels(item: Dictionary) -> void:
 	var conversation_count := int(item.get("conversationCount", 0))
-	var familiarity_level := mini(5, conversation_count)
+	var familiarity_level := 0
+	for level in range(FAMILIARITY_CONVERSATION_THRESHOLDS.size()):
+		if conversation_count < FAMILIARITY_CONVERSATION_THRESHOLDS[level]:
+			break
+		familiarity_level = level
 	item["familiarityLevel"] = familiarity_level
 	item["familiarityLabel"] = FAMILIARITY_LABELS[familiarity_level]
 	var affinity := clampi(int(item.get("affinity", 50)), 0, 100)

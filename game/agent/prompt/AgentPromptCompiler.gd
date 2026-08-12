@@ -813,8 +813,13 @@ func _render_traveler_relationship(value: Variant, lines: Array[String]) -> void
 	var relationship := value as Dictionary
 	var affinity := int(relationship.get("affinity", 50))
 	var affinity_label := _safe(relationship.get("affinity_label", "普通"))
+	var familiarity_level := clampi(
+		int(relationship.get("familiarity_level", 0)),
+		0,
+		5,
+	)
 	var familiarity_label := _safe(
-		relationship.get("familiarity_label", "初次见面")
+		relationship.get("familiarity_label", "尚未交谈")
 	)
 	var last_change := _safe(relationship.get("last_change", ""))
 	var tone_hint := (
@@ -828,6 +833,26 @@ func _render_traveler_relationship(value: Variant, lines: Array[String]) -> void
 		if affinity < 75
 		else "关系不错：可以表现亲近和信任，仍要符合本人性格"
 	)
+	var familiarity_hint := (
+		"你们还没有完成过双向对话；不要假装以前聊过，也不要说又见面"
+		if familiarity_level == 0
+		else "你们刚刚认识；认得对方即可，不要表现得像熟人"
+		if familiarity_level == 1
+		else "你们已有一些来往；避免重复初次自我介绍，可接续相关旧话题"
+		if familiarity_level == 2
+		else "你们已经熟悉；当前话题相关时，可自然提起一项已确认的旧事"
+		if familiarity_level == 3
+		else "你们很熟悉；可主动追问一项未完的话题，但不要罗列记忆"
+		if familiarity_level == 4
+		else "你们是老相识；表达应有连续性，但熟悉不等于喜欢或信任"
+	)
+	var combined_hint := (
+		"你熟悉旅行者但对其反感：可以记得旧事，同时保持疏远，不能因熟悉而显得亲近"
+		if familiarity_level >= 2 and affinity < 50
+		else "你对旅行者印象很好但来往还少：可以友善，但不要假装已有深厚共同经历"
+		if familiarity_level <= 1 and affinity >= 75
+		else "熟悉程度决定你是否能自然接续过去，好感度决定你愿意以什么态度接续"
+	)
 	lines.append(
 		"与旅行者的关系：好感%d（%s）；熟悉程度%s；已完成%d次对话；被化身命中%d次。"
 		% [
@@ -840,7 +865,15 @@ func _render_traveler_relationship(value: Variant, lines: Array[String]) -> void
 	)
 	if not last_change.is_empty():
 		lines.append("最近一次关系变化：%s。" % last_change)
-	lines.append("回应语气参考：%s。关系只影响态度和措辞，不自动决定是否接受对话，也不能替本人编造已经发生的事实。" % tone_hint)
+	lines.append("熟悉程度参考：%s。" % familiarity_hint)
+	lines.append("关系组合参考：%s。" % combined_hint)
+	lines.append(
+		"回应语气参考：%s。关系只影响态度和措辞，不自动决定是否接受对话。"
+		% tone_hint,
+	)
+	lines.append(
+		"化身记忆是过去互动线索的唯一来源：若[关于化身的个人记忆]中有与当前话题直接相关且来源明确的内容，可自然接续其中一项；有争议的内容只能按争议状态表达，没有就不要编造。不要复述关系数值、标签或整段记忆。",
+	)
 
 
 func _render_events(events: Array) -> String:
@@ -1252,8 +1285,10 @@ func _render_constraints(constraints: Dictionary) -> String:
 		if data.has("traveler_affinity_delta"):
 			text += (
 				"；traveler_affinity_delta：只能填 -5 到 5 的整数，"
-				+ "根据本人性格和这次对话对旅行者的真实感受决定，"
-				+ "正数表示增加，负数表示减少，拿不准填 0"
+				+ "只根据旅行者这次已确认的言行、本人性格与相关化身记忆判断；"
+				+ "普通寒暄和仅仅完成对话通常填 0，不能因为变熟自动增加；"
+				+ "尊重边界、兑现承诺或切实帮助可增加，冒犯、欺骗或施压可减少；"
+				+ "正数表示增加，负数表示减少，证据不足填 0"
 			)
 		if data.has("options"):
 			var options: Array[String] = []

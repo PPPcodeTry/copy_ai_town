@@ -209,6 +209,9 @@ const AGENT_CONTRACT := preload("res://agent/AgentContract.gd")
 const CONVERSATION_RUNTIME := preload(
 	"res://world/runtime/conversation/TownConversationRuntime.gd"
 )
+const TRAVELER_RELATIONSHIP_RUNTIME := preload(
+	"res://world/runtime/relationship/TownTravelerRelationshipRuntime.gd"
+)
 const CLINIC_AVATAR_SAFE_RETURN := Vector2(4225.0, 1260.0)
 const ANIMAL_PRESENTATION := preload(
 	"res://world/presentation/animals/TownAnimalPresentation.gd"
@@ -2986,6 +2989,7 @@ func _scenario_player_avatar() -> void:
 	_test_observer_avatar_is_absent_until_descent()
 	_test_position_place_and_perception()
 	_test_descent_relocates_avatar_to_a_valid_outdoor_point()
+	_test_traveler_familiarity_requires_a_two_way_conversation()
 	_test_avatar_attack_reduces_traveler_affinity()
 	_test_player_invitation_requires_reply()
 	_test_player_conversation_idle_timeout_only_on_resident_turn()
@@ -3198,6 +3202,120 @@ func _test_descent_relocates_avatar_to_a_valid_outdoor_point() -> void:
 
 
 
+func _test_traveler_familiarity_requires_a_two_way_conversation() -> void:
+	var snapshot := TRAVELER_RELATIONSHIP_RUNTIME.empty_snapshot()
+	var one_sided := {
+		"conversationId": "traveler-one-sided",
+		"status": "ended",
+		"participants": ["player-avatar", RESIDENT_ID],
+		"turns": [{
+			"turn_id": 1,
+			"speaker_resident_id": "player-avatar",
+			"say": "你好。",
+		}],
+		"endedAt": {"day": 1, "clock": "08:00", "period": "上午"},
+	}
+	_expect(
+		not TRAVELER_RELATIONSHIP_RUNTIME.record_ended_conversation(
+			snapshot,
+			"player-avatar",
+			RESIDENT_ID,
+			one_sided,
+		),
+		"a greeting without a resident reply does not increase familiarity",
+	)
+	var untouched := TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+		snapshot,
+		"player-avatar",
+		"旅行者",
+		RESIDENT_ID,
+		true,
+	)
+	_expect_equal(
+		untouched.get("conversationCount"),
+		0,
+		"an unanswered opening leaves the familiarity count unchanged",
+	)
+	_expect_equal(
+		(untouched.get("familiarity", {}) as Dictionary).get("label"),
+		"尚未交谈",
+		"an unanswered opening does not claim a first meeting was completed",
+	)
+
+	for index in 6:
+		var two_way := one_sided.duplicate(true)
+		two_way["conversationId"] = "traveler-two-way-%d" % index
+		two_way["turns"] = [
+			(one_sided.get("turns", []) as Array)[0],
+			{
+				"turn_id": 2,
+				"speaker_resident_id": RESIDENT_ID,
+				"say": "你好。",
+			},
+		]
+		_expect(
+			TRAVELER_RELATIONSHIP_RUNTIME.record_ended_conversation(
+				snapshot,
+				"player-avatar",
+				RESIDENT_ID,
+				two_way,
+			),
+			"a completed two-way conversation increases familiarity once",
+		)
+	var familiar := TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+		snapshot,
+		"player-avatar",
+		"旅行者",
+		RESIDENT_ID,
+		true,
+	)
+	_expect_equal(
+		familiar.get("conversationCount"),
+		6,
+		"six completed conversations are retained",
+	)
+	_expect_equal(
+		(familiar.get("familiarity", {}) as Dictionary).get("label"),
+		"熟悉",
+		"six conversations reach familiar instead of close or intimate",
+	)
+
+	var restored := TRAVELER_RELATIONSHIP_RUNTIME.normalize_snapshot(
+		{
+			"schema": "traveler-relationship",
+			"schemaVersion": 1,
+			"items": {RESIDENT_ID: {
+				"conversationCount": 5,
+				"confirmedTurnCount": 10,
+				"affinity": 58,
+				"familiarityLevel": 5,
+				"familiarityLabel": "亲近",
+			}},
+		},
+		"player-avatar",
+		[RESIDENT_ID],
+	)
+	var restored_projection := (
+		TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+			restored,
+			"player-avatar",
+			"旅行者",
+			RESIDENT_ID,
+			true,
+		)
+	)
+	_expect_equal(
+		(restored_projection.get("familiarity", {}) as Dictionary).get("label"),
+		"有些熟悉",
+		"existing saves recompute the slower familiarity label without migration",
+	)
+	_expect_equal(
+		(restored_projection.get("affinity", {}) as Dictionary).get("value"),
+		58,
+		"recomputing familiarity preserves existing saved affinity",
+	)
+
+
 func _test_player_starts_and_ends_conversation() -> void:
 	var opening := _opening_in_garden()
 	var world := _new_world(opening)
@@ -3247,7 +3365,7 @@ func _test_player_starts_and_ends_conversation() -> void:
 	)
 	_expect_equal(
 		initial_traveler_relationship.get("familiarity_label"),
-		"初次见面",
+		"尚未交谈",
 		"resident wake exposes the default traveler familiarity",
 	)
 	var reply := _reply(lin_invitation, conversation_id, "没见过，我可以帮你留意。", "林岚仔细看了看照片", false, 4)
@@ -3311,6 +3429,16 @@ func _test_player_starts_and_ends_conversation() -> void:
 		traveler_relation.get("relationshipLabel"),
 		"对旅行者的好感",
 		"traveler relationship uses a distinct affinity label",
+	)
+	_expect_equal(
+		traveler_relation.get("conversationCount"),
+		1,
+		"one completed two-way exchange records one familiarity conversation",
+	)
+	_expect_equal(
+		(traveler_relation.get("familiarity", {}) as Dictionary).get("label"),
+		"刚刚认识",
+		"one completed exchange no longer presents the traveler as close",
 	)
 	var public_relationships := world.call(
 		"get_resident_public_relationship_progress",
