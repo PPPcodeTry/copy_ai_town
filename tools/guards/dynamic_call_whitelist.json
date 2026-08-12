@@ -293,8 +293,15 @@
     {
       "path": "game/world/presentation/game_flow/GameFlowHost.gd",
       "func": "request_quit_game",
-      "call": "string:.call( \"prepare_departure_messages\", _quit_departure_id, 2, Callable(self, \"_on_quit_departure_messages_ready\").bind( departure_id, ), )",
-      "reason": "正式与测试网关共享退出留言契约；绑定本次退出编号，用于忽略超时后迟到的异步回调，避免重复保存、返回主菜单或退出。"
+      "call": "string:.call(\"cancel_background_departure_messages\")",
+      "count": 2,
+      "reason": "正式网关和测试网关共享可选的后台留言取消契约；退出前必须取消后台任务，但宿主仍需兼容旧版或测试网关。"
+    },
+    {
+      "path": "game/world/presentation/game_flow/GameFlowHost.gd",
+      "func": "_continue_quit_after_save",
+      "call": "string:.call(\"resume_background_departure_messages\")",
+      "reason": "正式保存失败后恢复后台留言探针；宿主仍需兼容旧版或测试网关，故保留经过 has_method 检查的动态调用。"
     }
   ]
 }

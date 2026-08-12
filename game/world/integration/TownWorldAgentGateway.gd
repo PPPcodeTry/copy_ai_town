@@ -39,6 +39,10 @@ const MAX_CONCURRENT_LOCAL_ORDINARY_REQUESTS := 2
 const LOCAL_MODEL_PROVIDER_IDS: Array[String] = ["ollama", "lm-studio"]
 const MAX_DECISION_ATTEMPTS := 2
 const MAX_ERROR_HISTORY := 128
+const BACKGROUND_DEPARTURE_INITIAL_DELAY_SECONDS := 20.0
+const BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS := 8.0
+const BACKGROUND_DEPARTURE_INTERVAL_SECONDS := 45.0
+const BACKGROUND_DEPARTURE_MAX_CANDIDATES := 1
 const DEFAULT_AVATAR_PERSON_ID := "person_7f3a91c2d8e4"
 const DEFAULT_AVATAR_NAME := "旅行者"
 # Keep this in step with ResidentMemorySummaryProjector's player-visible
@@ -113,6 +117,9 @@ var _request_metrics: Dictionary = {
 	"providerDispatch": 0,
 	"providerComplete": 0,
 }
+var _background_departure_probe_id := 0
+var _background_departure_operation_id := ""
+var _background_departure_pending := false
 
 
 func _ready() -> void:
@@ -132,6 +139,133 @@ func _process(_delta: float) -> void:
 		not _inner_observation_inflight.is_empty()
 		or not _agent_preparation_queue.is_empty()
 	)
+
+
+func _schedule_background_departure_probe(delay_seconds: float) -> void:
+	if not _session_active or not is_inside_tree():
+		return
+	_background_departure_probe_id += 1
+	var probe_id := _background_departure_probe_id
+	get_tree().create_timer(
+		maxf(delay_seconds, 0.1),
+		false,
+		false,
+		true,
+	).timeout.connect(
+		_on_background_departure_probe_timeout.bind(probe_id),
+		CONNECT_ONE_SHOT,
+	)
+
+
+func _on_background_departure_probe_timeout(probe_id: int) -> void:
+	if (
+		probe_id != _background_departure_probe_id
+		or not _session_active
+	):
+		return
+	if _background_departure_pending:
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+		return
+	if not _background_departure_can_run():
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+		return
+	# 先给普通居民请求一次机会。只有确认当前没有普通工作后，才做低优先级留言。
+	if pump(1) > 0 or not _background_departure_can_run():
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+		return
+	_background_departure_pending = true
+	_background_departure_operation_id = (
+		"background-departure-%d" % Time.get_ticks_usec()
+	)
+	var started := _agent_system.prepare_departure_messages(
+		_background_departure_operation_id,
+		BACKGROUND_DEPARTURE_MAX_CANDIDATES,
+		_on_background_departure_messages_ready,
+	) as Dictionary
+	if not bool(started.get("ok", false)):
+		_background_departure_pending = false
+		_background_departure_operation_id = ""
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+		return
+	if bool(started.get("completed", false)) and _background_departure_pending:
+		_on_background_departure_messages_ready(
+			started,
+		)
+
+
+func _background_departure_can_run() -> bool:
+	if not _session_active or _world == null:
+		return false
+	var world_contract := _world as TownWorldContract
+	if world_contract == null or not world_contract.is_running():
+		return false
+	if (
+		not _inflight.is_empty()
+		or not _agent_preparation_queue.is_empty()
+		or not _inner_observation_inflight.is_empty()
+		or not _death_story_inflight.is_empty()
+	):
+		return false
+	if not world_contract.get_active_conversations().is_empty():
+		return false
+	return true
+
+
+func _on_background_departure_messages_ready(_result: Dictionary) -> void:
+	if not _background_departure_pending:
+		return
+	_background_departure_pending = false
+	_background_departure_operation_id = ""
+	_schedule_background_departure_probe(
+		BACKGROUND_DEPARTURE_INTERVAL_SECONDS,
+	)
+
+
+func _cancel_background_departure_messages() -> void:
+	_background_departure_probe_id += 1
+	if (
+		_background_departure_pending
+		and not _background_departure_operation_id.is_empty()
+		and _agent_system.has_method("cancel_departure_messages")
+	):
+		_agent_system.cancel_departure_messages(
+			_background_departure_operation_id,
+		)
+	_background_departure_pending = false
+	_background_departure_operation_id = ""
+
+
+func cancel_background_departure_messages() -> Dictionary:
+	_cancel_background_departure_messages()
+	return {
+		"ok": true,
+		"changed": true,
+	}
+
+
+func resume_background_departure_messages() -> Dictionary:
+	if not _session_active:
+		return {
+			"ok": false,
+			"errorCode": "AGENT_GATEWAY_SESSION_INACTIVE",
+			"retryable": false,
+		}
+	if not _background_departure_pending:
+		_schedule_background_departure_probe(
+			BACKGROUND_DEPARTURE_RETRY_DELAY_SECONDS,
+		)
+	return {
+		"ok": true,
+		"scheduled": true,
+	}
 
 
 func _reset_request_metrics() -> void:
@@ -197,6 +331,7 @@ func configure_session(
 	_generation += 1
 	_world = null
 	_session_active = false
+	_cancel_background_departure_messages()
 	_photo_store.clear()
 	var photo_storage := _photo_store.configure_session(slot_id,
 		session_id,) as Dictionary
@@ -376,6 +511,9 @@ func bind_world(world: RefCounted) -> Dictionary:
 	_connected_resident_ids.sort()
 	_session_active = true
 	_generation += 1
+	_schedule_background_departure_probe(
+		BACKGROUND_DEPARTURE_INITIAL_DELAY_SECONDS,
+	)
 	return {
 		"ok": true,
 		"errorCode": "",
@@ -418,6 +556,10 @@ func pump(max_requests := -1) -> int:
 		requests = _world.take_pending_decision_requests_by_ids(
 			_connected_resident_ids,
 		) as Array[Dictionary]
+	if _background_departure_pending and not requests.is_empty():
+		# 普通居民或玩家刚产生工作时，立即让出模型通道。底层请求即使已经
+		# 发出，取消标识也会阻止它再写入留言提案。
+		_cancel_background_departure_messages()
 	if _frame_probe != null:
 		var now_usec := Time.get_ticks_usec()
 		_frame_probe.record(Engine.get_process_frames(), "agentTakeUsec", now_usec - probe_lap_usec)
@@ -1483,6 +1625,9 @@ func hydrate_agent_restore(
 			)
 	_session_active = true
 	_session_config["restorePending"] = false
+	_schedule_background_departure_probe(
+		BACKGROUND_DEPARTURE_INITIAL_DELAY_SECONDS,
+	)
 	return {
 		"ok": true,
 		"errorCode": "",
@@ -1492,6 +1637,7 @@ func hydrate_agent_restore(
 
 
 func close_session() -> Dictionary:
+	_cancel_background_departure_messages()
 	_generation += 1
 	_inflight.clear()
 	_agent_preparation_queue.clear()

@@ -128,7 +128,6 @@ const DAILY_AUTO_SAVE_REASON := "daily_auto_save"
 const DAILY_AUTO_SAVE_RETRY_INTERVAL_MSEC := 5000
 const DAILY_AUTO_SAVE_ERROR_HISTORY_LIMIT := 32
 # 居民留言是可选彩蛋，不能阻塞返回主菜单或退出游戏。
-const QUIT_DEPARTURE_MESSAGES_TIMEOUT_SECONDS := 3.0
 # 退出留言只是可选内容，不能让玩家长时间停在全屏等待页。
 # 正式 Provider 最长配置为 300 秒；额外留出结算余量，只处理回调契约失效。
 const REPLACEMENT_PERSONA_TIMEOUT_SECONDS := 310.0
@@ -1428,8 +1427,8 @@ func request_return_to_start() -> Dictionary:
 	if not bool(departure.get("ok", false)):
 		_return_to_start_after_departure = false
 		return departure
-	# 没有正式城镇运行时，request_quit_game 会同步完成保存，不经过
-	# _continue_quit_after_optional_messages；这里仍要完成返回主菜单。
+	# 没有正式城镇运行时，request_quit_game 会同步完成保存；这里仍要
+	# 完成返回主菜单。
 	if (
 		not bool(departure.get("pending", false))
 		and _return_to_start_after_departure
@@ -1481,6 +1480,12 @@ func request_quit_game(execute_process_quit := true) -> Dictionary:
 		or not is_instance_valid(_town_runtime)
 		or _internal_playtest_enabled()
 	):
+		if (
+			_gateway != null
+			and is_instance_valid(_gateway)
+			and _gateway.has_method("cancel_background_departure_messages")
+		):
+			_gateway.call("cancel_background_departure_messages")
 		var direct_departure := _prepare_session_departure()
 		_last_result = direct_departure.duplicate(true)
 		if bool(direct_departure.get("ok", false)) and execute_process_quit:
@@ -1503,104 +1508,34 @@ func request_quit_game(execute_process_quit := true) -> Dictionary:
 		_last_result = service_missing.duplicate(true)
 		return service_missing
 	if (
-		_gateway == null
-		or not is_instance_valid(_gateway)
-		or not _gateway.has_method("prepare_departure_messages")
+		_gateway != null
+		and is_instance_valid(_gateway)
+		and _gateway.has_method("cancel_background_departure_messages")
 	):
-		return _continue_quit_after_optional_messages(
-			[],
-			execute_process_quit,
-		)
+		_gateway.call("cancel_background_departure_messages")
 	if _quit_departure_id.is_empty():
 		_quit_departure_id = "departure-%d" % Time.get_ticks_usec()
 	var departure_id := _quit_departure_id
 	_quit_departure_pending = true
 	_quit_execute_process = execute_process_quit
+	# 居民留言在平时的空闲时段准备。退出只取消后台任务并保存权威状态，
+	# 不能在这里重新遍历记忆或等待模型回调。
 	_begin_town_entry_loading("quit_game")
-	_advance_town_entry_loading(0.18, "正在整理并保存小镇…")
-	var started := _gateway.call(
-		"prepare_departure_messages",
-		_quit_departure_id,
-		2,
-		Callable(self, "_on_quit_departure_messages_ready").bind(
-			departure_id,
-		),
-	) as Dictionary
-	if not bool(started.get("ok", false)):
-		return _continue_quit_after_optional_messages(
-			[],
-			execute_process_quit,
-		)
-	_schedule_quit_departure_messages_timeout(departure_id)
-	return {
-		"ok": true,
-		"errorCode": "",
-		"retryable": false,
-		"pending": _quit_departure_pending,
-		"departureId": departure_id,
-		"quitRequested": true,
-		"processQuitExecuted": (
-			not _quit_departure_pending and execute_process_quit
-		),
-	}
-
-
-func _schedule_quit_departure_messages_timeout(departure_id: String) -> void:
-	if (
-		not is_inside_tree()
-		or not _quit_departure_pending
-		or departure_id != _quit_departure_id
-	):
-		return
-	get_tree().create_timer(
-		QUIT_DEPARTURE_MESSAGES_TIMEOUT_SECONDS,
-		true,
-		false,
-		true,
-	).timeout.connect(
-		_on_quit_departure_messages_timeout.bind(departure_id),
-		CONNECT_ONE_SHOT,
+	_advance_town_entry_loading(0.58, "正在保存小镇…")
+	var departure := _continue_quit_after_save(
+		[],
+		execute_process_quit,
 	)
-
-
-func _on_quit_departure_messages_timeout(departure_id: String) -> void:
-	if (
-		not _quit_departure_pending
-		or departure_id != _quit_departure_id
-	):
-		return
-	_continue_quit_after_optional_messages([], _quit_execute_process)
-
-
-func _on_quit_departure_messages_ready(
-	result: Dictionary,
-	departure_id: String,
-) -> void:
-	if (
-		not _quit_departure_pending
-		or departure_id != _quit_departure_id
-	):
-		return
-	if not bool(result.get("ok", false)):
-		_continue_quit_after_optional_messages(
-			[],
-			_quit_execute_process,
-		)
-		return
-	var messages_value: Variant = result.get("messages", [])
-	if not messages_value is Array:
-		_continue_quit_after_optional_messages(
-			[],
-			_quit_execute_process,
-		)
-		return
-	_continue_quit_after_optional_messages(
-		(messages_value as Array).duplicate(true),
-		_quit_execute_process,
+	departure["departureId"] = departure_id
+	departure["quitRequested"] = bool(departure.get("ok", false))
+	departure["processQuitExecuted"] = (
+		bool(departure.get("ok", false))
+		and execute_process_quit
 	)
+	return departure
 
 
-func _continue_quit_after_optional_messages(
+func _continue_quit_after_save(
 	messages: Array,
 	execute_process_quit: bool,
 ) -> Dictionary:
@@ -1617,6 +1552,12 @@ func _continue_quit_after_optional_messages(
 	var return_to_start := _return_to_start_after_departure
 	_return_to_start_after_departure = false
 	if not bool(departure.get("ok", false)):
+		if (
+			_gateway != null
+			and is_instance_valid(_gateway)
+			and _gateway.has_method("resume_background_departure_messages")
+		):
+			_gateway.call("resume_background_departure_messages")
 		_dismiss_town_entry_loading()
 		call_deferred(
 			"_present_pause_departure_failure",

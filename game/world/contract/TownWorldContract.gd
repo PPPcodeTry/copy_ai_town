@@ -41,6 +41,11 @@ func get_active_conversations() -> Array[Dictionary]:
 	return []
 
 
+func is_running() -> bool:
+	push_error("TownWorldContract.is_running 未实现")
+	return false
+
+
 func get_agent_initialization_by_id(resident_id: String) -> Dictionary:
 	push_error("TownWorldContract.get_agent_initialization_by_id 未实现")
 	return {}
