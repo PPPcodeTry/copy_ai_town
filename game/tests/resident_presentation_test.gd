@@ -3319,6 +3319,37 @@ func _test_traveler_familiarity_requires_a_two_way_conversation() -> void:
 		"开始在意",
 		"a modest positive change reaches the first visible affinity stage",
 	)
+	var malformed_snapshot := TRAVELER_RELATIONSHIP_RUNTIME.normalize_snapshot(
+		{
+			"items": {RESIDENT_ID: {
+				"lastInteractionAt": null,
+				"lastAffinityChange": "not-an-object",
+				"processedReplyIds": null,
+				"processedAttackIds": "not-an-array",
+				"affinityChangeHistory": null,
+				"processedConversationIds": false,
+			}},
+		},
+		"player-avatar",
+		[RESIDENT_ID],
+	)
+	var malformed_projection := TRAVELER_RELATIONSHIP_RUNTIME.projection_for_resident(
+		malformed_snapshot,
+		"player-avatar",
+		"旅行者",
+		RESIDENT_ID,
+		true,
+	)
+	_expect_equal(
+		malformed_projection.get("conversationCount"),
+		0,
+		"malformed relationship collections fall back to an empty relation",
+	)
+	_expect_equal(
+		malformed_projection.get("lastAffinityChangeLabel"),
+		"",
+		"malformed relationship timestamps and change records do not crash projection",
+	)
 	for affinity_case: Dictionary in [
 		{"value": 52, "label": "普通"},
 		{"value": 53, "label": "开始在意"},

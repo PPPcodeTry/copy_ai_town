@@ -75,7 +75,10 @@ static func record_ended_conversation(
 		or String(conversation.get("status", "")) != "ended"
 	):
 		return false
-	var participants := conversation.get("participants", []) as Array
+	var participants_value: Variant = conversation.get("participants", [])
+	if not participants_value is Array:
+		return false
+	var participants := participants_value as Array
 	if not participants.has(avatar_id) or not participants.has(resident_id):
 		return false
 	var conversation_id := String(conversation.get("conversationId", "")).strip_edges()
@@ -116,9 +119,12 @@ static func record_ended_conversation(
 	item["confirmedTurnCount"] = (
 		int(item.get("confirmedTurnCount", 0)) + confirmed_turn_count
 	)
+	var ended_at_value: Variant = conversation.get("endedAt", {})
 	item["lastInteractionAt"] = (
-		conversation.get("endedAt", {}) as Dictionary
-	).duplicate(true)
+		ended_at_value.duplicate(true)
+		if ended_at_value is Dictionary
+		else {}
+	)
 	item["lastConversationId"] = conversation_id
 	item["lastInteractionSource"] = "conversation_end"
 	_update_labels(item)
@@ -173,7 +179,12 @@ static func record_resident_reply(
 		0,
 		100,
 	)
-	item["lastInteractionAt"] = conversation.get("updatedAt", {}).duplicate(true)
+	var updated_at_value: Variant = conversation.get("updatedAt", {})
+	item["lastInteractionAt"] = (
+		updated_at_value.duplicate(true)
+		if updated_at_value is Dictionary
+		else {}
+	)
 	item["lastConversationId"] = conversation_id
 	item["lastInteractionSource"] = "resident_reply"
 	_record_affinity_change(item, bounded_delta, "resident_reply", interaction_id)
@@ -343,6 +354,15 @@ static func _normalized_item(
 	avatar_id: String,
 	resident_id: String,
 ) -> Dictionary:
+	var last_interaction_at_value: Variant = value.get("lastInteractionAt", {})
+	var last_affinity_change_value: Variant = value.get("lastAffinityChange", {})
+	var processed_reply_ids_value: Variant = value.get("processedReplyIds", [])
+	var processed_attack_ids_value: Variant = value.get("processedAttackIds", [])
+	var affinity_change_history_value: Variant = value.get("affinityChangeHistory", [])
+	var processed_conversation_ids_value: Variant = value.get(
+		"processedConversationIds",
+		[],
+	)
 	var item := {
 		"travelerId": avatar_id,
 		"residentId": resident_id,
@@ -350,27 +370,39 @@ static func _normalized_item(
 		"confirmedTurnCount": maxi(0, int(value.get("confirmedTurnCount", 0))),
 		"affinity": clampi(int(value.get("affinity", 50)), 0, 100),
 		"lastInteractionAt": (
-			value.get("lastInteractionAt", {}) as Dictionary
-		).duplicate(true),
+			last_interaction_at_value.duplicate(true)
+			if last_interaction_at_value is Dictionary
+			else {}
+		),
 		"lastConversationId": String(value.get("lastConversationId", "")),
 		"lastInteractionSource": String(value.get("lastInteractionSource", "")),
 		"lastAffinityDelta": int(value.get("lastAffinityDelta", 0)),
 		"lastAffinityChange": (
-			value.get("lastAffinityChange", {}) as Dictionary
-		).duplicate(true),
+			last_affinity_change_value.duplicate(true)
+			if last_affinity_change_value is Dictionary
+			else {}
+		),
 		"attackCount": maxi(0, int(value.get("attackCount", 0))),
 		"processedReplyIds": (
-			value.get("processedReplyIds", []) as Array
-		).duplicate(),
+			processed_reply_ids_value.duplicate()
+			if processed_reply_ids_value is Array
+			else []
+		),
 		"processedAttackIds": (
-			value.get("processedAttackIds", []) as Array
-		).duplicate(),
+			processed_attack_ids_value.duplicate()
+			if processed_attack_ids_value is Array
+			else []
+		),
 		"affinityChangeHistory": (
-			value.get("affinityChangeHistory", []) as Array
-		).duplicate(true),
+			affinity_change_history_value.duplicate(true)
+			if affinity_change_history_value is Array
+			else []
+		),
 		"processedConversationIds": (
-			value.get("processedConversationIds", []) as Array
-		).duplicate(),
+			processed_conversation_ids_value.duplicate()
+			if processed_conversation_ids_value is Array
+			else []
+		),
 	}
 	var processed := item["processedConversationIds"] as Array
 	while processed.size() > MAX_PROCESSED_CONVERSATIONS:
