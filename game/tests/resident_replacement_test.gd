@@ -14,7 +14,8 @@ const RESIDENT_REPLACEMENT := preload(
 class ReturnToStartGateway:
 	extends Node
 	var calls := 0
-	var requested_limit := 0
+	var cancel_calls := 0
+	var clear_calls := 0
 	var messages: Array[Dictionary] = [{
 		"message_id": "resident-message-return-test",
 		"resident_id": "resident-lin-lan",
@@ -22,28 +23,56 @@ class ReturnToStartGateway:
 		"content": "下次回来，记得告诉我路上看见了什么。",
 	}]
 
-	func prepare_departure_messages(
-		_departure_id: String,
-		max_candidates: int,
-		on_complete: Callable,
-	) -> Dictionary:
-		calls += 1
-		requested_limit = max_candidates
-		on_complete.call({"ok": true, "messages": messages.duplicate(true)})
-		return {"ok": true, "started": true, "pending": true}
+	func cancel_background_departure_messages() -> Dictionary:
+		cancel_calls += 1
+		return {"ok": true, "changed": true}
+
+	func get_background_departure_messages() -> Array[Dictionary]:
+		return messages.duplicate(true)
+
+	func clear_background_departure_messages() -> Dictionary:
+		clear_calls += 1
+		return {"ok": true, "changed": true}
 
 
-class NeverCompletingReturnToStartGateway:
+class EmptyBackgroundDepartureGateway:
 	extends Node
-	var calls := 0
 
-	func prepare_departure_messages(
-		_departure_id: String,
-		_max_candidates: int,
-		_on_complete: Callable,
-	) -> Dictionary:
-		calls += 1
-		return {"ok": true, "started": true, "pending": true}
+	func cancel_background_departure_messages() -> Dictionary:
+		return {"ok": true, "changed": false}
+
+	func get_background_departure_messages() -> Array[Dictionary]:
+		return []
+
+
+class DepartureSaveService:
+	extends RefCounted
+	var request: Dictionary = {}
+
+	func get_save_snapshot() -> Dictionary:
+		return {"canSave": true}
+
+	func create_save(value: Dictionary) -> Dictionary:
+		request = value.duplicate(true)
+		return {"ok": true, "errorCode": "", "retryable": false}
+
+
+class BaseDepartureHarness:
+	extends "res://world/presentation/game_flow/GameFlowHost.gd"
+
+	func _begin_town_entry_loading(
+		_route_kind: String,
+		_generation := -1,
+		_owner := "",
+		_context: Dictionary = {},
+	) -> void:
+		pass
+
+	func _advance_town_entry_loading(
+		_progress: float,
+		_status_text: String,
+	) -> void:
+		pass
 
 
 class ReturnToStartWiringHarness:
@@ -113,26 +142,17 @@ class ReplacementProviderService:
 class GameFlowRecoveryHarness:
 	extends "res://world/presentation/game_flow/GameFlowHost.gd"
 	var presented_replacements: Array[Dictionary] = []
-	var continued_quit_messages: Array[Array] = []
 
 	func _present_generated_replacement(candidate: Dictionary) -> void:
 		presented_replacements.append(candidate.duplicate(true))
 
-	func _continue_quit_after_optional_messages(
-		messages: Array,
-		_execute_process_quit: bool,
-	) -> Dictionary:
-		continued_quit_messages.append(messages.duplicate(true))
-		_quit_departure_pending = false
-		_quit_departure_id = ""
-		return {"ok": true, "errorCode": "", "retryable": false}
 
 func _initialize() -> void:
 	call_deferred("_run")
 
 
 func _run() -> void:
-	_verify_return_to_start_messages()
+	_verify_return_to_start_does_not_wait_for_messages()
 	var data := _build_data()
 	var opening := _load_opening(data)
 	var identities: Array[Dictionary] = []
@@ -301,7 +321,7 @@ func _run() -> void:
 	_finish_suite("RESIDENT_REPLACEMENT_PASS")
 
 
-func _verify_return_to_start_messages() -> void:
+func _verify_return_to_start_does_not_wait_for_messages() -> void:
 	var gateway := ReturnToStartGateway.new()
 	var host := ReturnToStartWiringHarness.new()
 	var runtime := Node.new()
@@ -310,62 +330,47 @@ func _verify_return_to_start_messages() -> void:
 	host.set("_town_runtime", runtime)
 	host.set("_session_ui_service", save_service)
 	var result := host.request_return_to_start()
-	_expect_equal(gateway.calls, 1, "返回主菜单会请求一次居民留言")
-	_expect_equal(gateway.requested_limit, 2, "返回主菜单沿用最多两条留言的限制")
-	_expect_equal(host.saved_messages, gateway.messages, "居民留言会进入离开存档")
+	_expect_equal(gateway.calls, 0, "返回主菜单不会临时请求居民留言")
+	_expect_equal(gateway.cancel_calls, 1, "返回主菜单会取消后台留言任务")
+	_expect_equal(host.saved_messages, gateway.messages, "返回主菜单会保存后台已准备的居民留言")
 	_expect_equal(host.routed_departures.size(), 1, "留言保存后只返回一次主菜单")
 	_expect_equal(host.process_quit_count, 0, "返回主菜单不会退出游戏进程")
-	_expect(bool(result.get("ok", false)), "返回主菜单留言链路成功结束")
+	_expect(bool(result.get("ok", false)), "返回主菜单保存链路成功结束")
 	host.free()
 	runtime.free()
 	gateway.free()
 
-	var timeout_gateway := NeverCompletingReturnToStartGateway.new()
-	var timeout_host := ReturnToStartWiringHarness.new()
-	var timeout_runtime := Node.new()
-	var timeout_save_service := RefCounted.new()
-	timeout_host.set("_gateway", timeout_gateway)
-	timeout_host.set("_town_runtime", timeout_runtime)
-	timeout_host.set("_session_ui_service", timeout_save_service)
-	var timeout_result := timeout_host.request_return_to_start()
+	var base_gateway := ReturnToStartGateway.new()
+	var base_host := BaseDepartureHarness.new()
+	var base_runtime := Node.new()
+	var base_save_service := DepartureSaveService.new()
+	base_host.set("_gateway", base_gateway)
+	base_host.set("_town_runtime", base_runtime)
+	base_host.set("_session_ui_service", base_save_service)
+	var base_result := base_host.call("_prepare_session_departure") as Dictionary
+	_expect(bool(base_result.get("ok", false)), "正式退出保存会成功结束")
 	_expect_equal(
-		timeout_gateway.calls,
-		1,
-		"返回主菜单的留言请求只启动一次",
+		base_save_service.request.get("residentMessages", []),
+		base_gateway.messages,
+		"正式退出保存会带上后台已准备的居民留言",
 	)
-	_expect_equal(
-		timeout_result.get("pending"),
-		true,
-		"居民留言不回调时返回主菜单进入等待状态",
-	)
-	var timeout_departure_id := String(timeout_result.get("departureId", ""))
-	timeout_host.call(
-		"_on_quit_departure_messages_timeout",
-		timeout_departure_id,
-	)
-	_expect_equal(
-		timeout_host.saved_messages,
-		[],
-		"居民留言超时后仍能保存并返回主菜单",
-	)
-	_expect_equal(
-		timeout_host.routed_departures.size(),
-		1,
-		"居民留言超时后只返回一次主菜单",
-	)
-	timeout_host.call(
-		"_on_quit_departure_messages_ready",
-		{"ok": true, "messages": [{"text": "迟到留言"}]},
-		timeout_departure_id,
-	)
-	_expect_equal(
-		timeout_host.routed_departures.size(),
-		1,
-		"居民留言超时后的迟到回调不会重复返回主菜单",
-	)
-	timeout_host.free()
-	timeout_runtime.free()
-	timeout_gateway.free()
+	_expect_equal(base_gateway.clear_calls, 1, "保存成功后清理后台留言缓存")
+	base_host.free()
+	base_runtime.free()
+	base_gateway.free()
+
+	var empty_gateway := EmptyBackgroundDepartureGateway.new()
+	var empty_host := ReturnToStartWiringHarness.new()
+	var empty_runtime := Node.new()
+	var empty_save_service := RefCounted.new()
+	empty_host.set("_gateway", empty_gateway)
+	empty_host.set("_town_runtime", empty_runtime)
+	empty_host.set("_session_ui_service", empty_save_service)
+	empty_host.request_return_to_start()
+	_expect_equal(empty_host.saved_messages, [], "没有后台留言时保存空留言列表")
+	empty_host.free()
+	empty_runtime.free()
+	empty_gateway.free()
 
 func _verify_async_recovery(
 	opening: Dictionary,
@@ -421,53 +426,4 @@ func _verify_async_recovery(
 		"补位资料超时后的迟到回调不会重复弹出候选人",
 	)
 
-	host.set("_quit_departure_pending", true)
-	host.set("_quit_departure_id", "departure-timeout")
-	host.set("_quit_execute_process", false)
-	host.call(
-		"_on_quit_departure_messages_timeout",
-		"departure-timeout",
-	)
-	_expect_equal(
-		host.continued_quit_messages.size(),
-		1,
-		"退出留言不回调时按超时继续退出流程",
-	)
-	_expect_equal(
-		host.continued_quit_messages[0],
-		[],
-		"退出留言超时后不携带未确认留言",
-	)
-	host.call(
-		"_on_quit_departure_messages_ready",
-		{"ok": true, "messages": [{"text": "迟到留言"}]},
-		"departure-timeout",
-	)
-	_expect_equal(
-		host.continued_quit_messages.size(),
-		1,
-		"退出留言超时后的迟到回调不会重复执行退出",
-	)
-
-	host.set("_quit_departure_pending", true)
-	host.set("_quit_departure_id", "departure-success")
-	host.call(
-		"_on_quit_departure_messages_ready",
-		{"ok": true, "messages": [{"text": "按时留言"}]},
-		"departure-success",
-	)
-	_expect_equal(
-		host.continued_quit_messages.size(),
-		2,
-		"按时返回的退出留言正常继续退出流程",
-	)
-	host.call(
-		"_on_quit_departure_messages_timeout",
-		"departure-success",
-	)
-	_expect_equal(
-		host.continued_quit_messages.size(),
-		2,
-		"退出已经继续后，旧超时不会再次结算",
-	)
 	host.free()

@@ -28,6 +28,7 @@ var _on_retired_drained := Callable()
 var _persistent_state_applied := false
 var _model_provider: Object
 var _departure_message_proposals: Dictionary = {}
+var _cancelled_departure_ids: Dictionary = {}
 
 
 func _init(
@@ -342,6 +343,10 @@ func request_departure_message(
 ) -> Dictionary:
 	if not on_complete.is_valid():
 		return {"ok": false, "errors": ["退出留言回调无效"]}
+	var normalized_departure_id := departure_id.strip_edges()
+	if normalized_departure_id.is_empty():
+		return {"ok": false, "errors": ["退出留言标识无效"]}
+	_cancelled_departure_ids.erase(normalized_departure_id)
 	var organization := _avatar_memory_module.prepare_departure_organization(
 	) as Dictionary
 	if not bool(organization.get("ok", false)):
@@ -853,6 +858,9 @@ func _on_departure_organization_result(
 ) -> void:
 	if bool(completion_state.get("completed", false)):
 		return
+	if _cancelled_departure_ids.has(departure_id):
+		_finish_request(completion_state)
+		return
 	var attempt_key := "departure_organization_attempt_%d_completed" % (
 		retry_attempt
 	)
@@ -915,6 +923,10 @@ func _on_departure_message_result(
 ) -> void:
 	if bool(completion_state.get("completed", false)):
 		return
+	var departure_id := String(token.get("departure_id", ""))
+	if _cancelled_departure_ids.has(departure_id):
+		_finish_request(completion_state)
+		return
 	if _session_epoch != null and not bool(
 		_session_epoch.is_current(captured_epoch),
 	):
@@ -949,12 +961,23 @@ func _on_departure_message_result(
 		and bool(accepted.get("wrote", false))
 		and accepted.get("proposal") is Dictionary
 	):
-		var departure_id := String(token.get("departure_id", ""))
 		_departure_message_proposals[departure_id] = (
 			accepted.get("proposal", {}) as Dictionary
 		).duplicate(true)
 		accepted.erase("proposal")
 	on_complete.call(accepted.duplicate(true))
+
+
+func cancel_departure_message(departure_id: String) -> Dictionary:
+	var normalized_id := departure_id.strip_edges()
+	if normalized_id.is_empty():
+		return {"ok": false, "errors": ["退出留言取消标识无效"]}
+	_cancelled_departure_ids[normalized_id] = true
+	var discarded := discard_departure_message_proposal(normalized_id)
+	if not bool(discarded.get("ok", false)):
+		return discarded
+	discarded["changed"] = true
+	return discarded
 
 
 func _combined_memory_prompt(
