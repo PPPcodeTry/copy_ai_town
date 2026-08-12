@@ -210,7 +210,7 @@
       "label": "准备饭菜",
       "kind": "work",
       "tags": ["food.prepare", "food.serve"],
-      "durationMinutes": 60,
+      "durationMinutes": 30,
       "effects": {"energy": -4},
       "interruptible": true,
       "poseFamily": "work"

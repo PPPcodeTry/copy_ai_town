@@ -325,7 +325,7 @@
     },
     {
       "activityId": "activity_dining_prepare_meal",
-      "durationMinutes": 60.0,
+      "durationMinutes": 30.0,
       "effects": {
         "energy": -4.0
       },
@@ -1048,15 +1048,15 @@
     "receiptVersion": 1,
     "scheduleTemplatesResolved": true,
     "sourceDocumentFingerprints": {
-      "activity_definitions.json": "1ffcfdd0e3c33628ccac320194b5a6af4f9d61a3ed171a2d0b65e49bceba36f1",
-      "activity_slots.json": "c30ad36039ff2b6016a443fd9df149a98e411717807e8d4ca9f07f297921b8ef",
-      "indoor_prop_authoring.json": "6a742d3f4df13228e679c23f521531c074c19f53b5edd208b958a3808f8992ae",
+      "activity_definitions.json": "7e214115e4bd332e2be6f441bf026d09a9b5288fdf0a60ad458f4a426efa9d9c",
+      "activity_slots.json": "b1d646753a396c8be1cb505933e6d881100fcb6231ae2dd7f4a3200cdeb53e17",
+      "indoor_prop_authoring.json": "9c636eabef2a7ef1517fb1b024111137ba62f2e076c6c68299addaa315d2e286",
       "occupation_catalog.json": "eddae46da2c289df21ee8ec93b1042d36c22db8211a1bc51a0addd3e65c139af",
       "places.json": "17dc9a4fdd84421544713171fd69f394d5f40efd10586bb2de9e3de3c241342e",
-      "props.json": "9936605fc44f1da6facae39db8b31fdece6ab4d091bfa16a7241deeac03639b9",
-      "schedule_templates.json": "cb24336fd32adb32e520dcfc536558834288541a236e0c47fb314860a0c902d9"
+      "props.json": "90ca9c6f5f0fdc14df9eacb33088144cb53273a36661f27d8746b86f3896b934",
+      "schedule_templates.json": "c813a58fb45813c52230c398181b2bc2ebd5aa9a1f6b76cb2c5d7c0708c50d63"
     },
-    "sourceFingerprint": "584ba4b89019f92378131a56bc380e0c2dec5e460d977d7050484996a9c57a9f",
+    "sourceFingerprint": "70dcd511461e5266174f3ddb5323d2adf4ecd5caf38cf25d7ba886ead3e3b818",
     "sourceWorldId": "town",
     "staticReferencesValidated": true,
     "status": "formal_executable",
@@ -1613,6 +1613,32 @@
     },
     {
       "activityId": "activity_dining_eat_meal",
+      "facing": "left",
+      "fallback": "same_activity_other_slot",
+      "memberAnchors": [
+        {
+          "anchorId": "inspect_north_02",
+          "memberAnchorId": "member_dining_eat_east_02",
+          "position": [
+            488.0,
+            792.0
+          ]
+        }
+      ],
+      "placeName": "公共食堂",
+      "poseFamily": "eat_drink",
+      "role": "visitor",
+      "sceneId": "dining_hall",
+      "slotId": "slot_dining_eat_east_02",
+      "target": {
+        "actionVerb": "吃饭",
+        "anchorId": "inspect_north_02",
+        "propName": "公共食堂餐桌东端"
+      },
+      "targetType": "prop"
+    },
+    {
+      "activityId": "activity_dining_eat_meal",
       "facing": "right",
       "fallback": "same_activity_other_slot",
       "memberAnchors": [
@@ -1633,6 +1659,32 @@
       "target": {
         "actionVerb": "吃饭",
         "anchorId": "inspect_south",
+        "propName": "公共食堂西侧餐桌"
+      },
+      "targetType": "prop"
+    },
+    {
+      "activityId": "activity_dining_eat_meal",
+      "facing": "right",
+      "fallback": "same_activity_other_slot",
+      "memberAnchors": [
+        {
+          "anchorId": "inspect_south_02",
+          "memberAnchorId": "member_dining_eat_west_02",
+          "position": [
+            168.0,
+            792.0
+          ]
+        }
+      ],
+      "placeName": "公共食堂",
+      "poseFamily": "eat_drink",
+      "role": "visitor",
+      "sceneId": "dining_hall",
+      "slotId": "slot_dining_eat_west_02",
+      "target": {
+        "actionVerb": "吃饭",
+        "anchorId": "inspect_south_02",
         "propName": "公共食堂西侧餐桌"
       },
       "targetType": "prop"
@@ -210325,6 +210377,15 @@
           336.0,
           752.0
         ],
+        "memberAnchors": [
+          {
+            "anchorId": "inspect_south_02",
+            "position": [
+              168.0,
+              792.0
+            ]
+          }
+        ],
         "position": [
           168.0,
           712.0
@@ -210466,6 +210527,15 @@
         "instancePosition": [
           336.0,
           752.0
+        ],
+        "memberAnchors": [
+          {
+            "anchorId": "inspect_north_02",
+            "position": [
+              488.0,
+              792.0
+            ]
+          }
         ],
         "position": [
           488.0,
@@ -213213,14 +213283,14 @@
             "food.clean",
             "baking.prepare"
           ],
-          "endMinute": 750.0,
+          "endMinute": 600.0,
           "goalPressure": {
             "goalId": "occupation_activity",
             "weight": 80.0
           },
           "role": "worker",
-          "startMinute": 570.0,
-          "windowId": "window_food_prepare_lunch"
+          "startMinute": 300.0,
+          "windowId": "window_food_prepare_breakfast"
         },
         {
           "activityTagsAny": [
@@ -213229,14 +213299,14 @@
             "food.clean",
             "baking.prepare"
           ],
-          "endMinute": 870.0,
+          "endMinute": 840.0,
           "goalPressure": {
             "goalId": "occupation_activity",
             "weight": 90.0
           },
           "role": "worker",
-          "startMinute": 750.0,
-          "windowId": "window_food_lunch_service"
+          "startMinute": 600.0,
+          "windowId": "window_food_prepare_lunch"
         },
         {
           "activityTagsAny": [
@@ -213251,8 +213321,8 @@
             "weight": 55.0
           },
           "role": "worker",
-          "startMinute": 870.0,
-          "windowId": "window_food_afternoon_close"
+          "startMinute": 960.0,
+          "windowId": "window_food_prepare_dinner"
         }
       ]
     },

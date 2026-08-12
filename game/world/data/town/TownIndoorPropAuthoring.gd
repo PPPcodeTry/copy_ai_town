@@ -457,27 +457,39 @@ static func _build_indoor_prop(
 		binding,
 		errors,
 	)
+	var member_anchors: Array = []
+	for member_value: Variant in binding.get("memberAnchors", []) as Array:
+		if not member_value is Dictionary:
+			continue
+		var member := member_value as Dictionary
+		member_anchors.append({
+			"anchorId": str(member.get("anchorId", "")),
+			"position": (member.get("position", []) as Array).duplicate(true),
+		})
+	var interaction := {
+		"spaceId": space_id,
+		"regionId": region_id,
+		"position": _pair(interaction_position),
+		"roomId": room_id,
+		"instanceId": instance_id,
+		"assetId": asset_id,
+		"anchorId": anchor_id,
+		"anchorKind": str(source_anchor.get("kind", "")),
+		"actorFacing": GEOMETRY.rotate_facing(
+			str(source_anchor.get("actor_facing", "")),
+			direction,
+		),
+		"sourceAnchorPosition": _pair(source_anchor_position),
+		"anchorSnappedToFloor": not source_anchor_position.is_equal_approx(interaction_position),
+		"instancePosition": _pair(instance_position),
+		"direction": direction,
+	}
+	if not member_anchors.is_empty():
+		interaction["memberAnchors"] = member_anchors
 	return {
 		"name": prop_name,
 		"placeName": place_name,
-		"interaction": {
-			"spaceId": space_id,
-			"regionId": region_id,
-			"position": _pair(interaction_position),
-			"roomId": room_id,
-			"instanceId": instance_id,
-			"assetId": asset_id,
-			"anchorId": anchor_id,
-			"anchorKind": str(source_anchor.get("kind", "")),
-			"actorFacing": GEOMETRY.rotate_facing(
-				str(source_anchor.get("actor_facing", "")),
-				direction,
-			),
-			"sourceAnchorPosition": _pair(source_anchor_position),
-			"anchorSnappedToFloor": not source_anchor_position.is_equal_approx(interaction_position),
-			"instancePosition": _pair(instance_position),
-			"direction": direction,
-		},
+		"interaction": interaction,
 		"actions": actions,
 	}
 

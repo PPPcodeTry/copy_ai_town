@@ -894,6 +894,7 @@ func _prepare_new_game_arrival_schedule(
 		var held := candidate_minutes[index]
 		candidate_minutes[index] = candidate_minutes[swap_index]
 		candidate_minutes[swap_index] = held
+	DINING_SERVICE.prioritize_dining_worker_arrival(opening_config, resident_ids, candidate_minutes)
 	var schedule := {}
 	for index in resident_ids.size():
 		schedule[resident_ids[index]] = candidate_minutes[index]
@@ -2426,6 +2427,7 @@ func _apply_prepared_restore_candidate(
 		) as Dictionary
 	).get("routinesByResident", {}) as Dictionary
 	_activity_routines = _activity_routines.duplicate(true)
+	DINING_SERVICE.backfill_meal_period_refs(self, _activity_routines, _residents)
 	_activity_work_task_bindings = (
 		prepared.get(
 			"activityWorkTaskBindingsPrepared",
@@ -2539,8 +2541,6 @@ func _apply_prepared_restore_candidate(
 	conflict_projection_changed.emit(get_public_conflict_projection())
 	world_restored.emit(summary.duplicate(true))
 	return summary
-
-
 
 
 func get_time() -> Dictionary:
@@ -2924,6 +2924,7 @@ func get_work_tasks_for_resident(
 				"place_id": String(recipient.get("currentPlace", "")),
 				"instruction": "前往收件人所在处，并当面对收件人说出原文",
 			}
+		DINING_SERVICE.decorate_projected_meal_task(task, projected_task, int(_environment.get_absolute_minute()))
 		var occupation_service_request := _occupation_services.request(
 			String(task.get("sourceRef", "")),
 		) as Dictionary
@@ -2996,8 +2997,6 @@ func get_work_tasks_for_resident(
 		)
 	)
 	return result
-
-
 func get_staffing_snapshot() -> Dictionary:
 	if not _running:
 		return {
@@ -4374,9 +4373,9 @@ func _sync_production_tasks(absolute_minute: int) -> void:
 
 
 func _sync_food_chain_tasks(absolute_minute: int) -> void:
-	# Ordinary meals and drinks are made for real orders from always-available
-	# base supplies. They must not create inventory-threshold production or
-	# restock cargo. Specialty baking is driven by a daily work plan instead.
+	# Ordinary meals are prepared once per meal period from always-available base
+	# supplies, then served during that period. Specialty baking is driven by a
+	# daily work plan instead.
 	var minute_of_day := posmod(absolute_minute, 1440)
 	if minute_of_day < 360 or minute_of_day >= 720:
 		return
@@ -5375,38 +5374,18 @@ func _apply_occupation_service_activity_availability(
 		option["available"] = false
 		option["disabledReason"] = "DINING_MEAL_ROUTINE_ONLY"
 		return
-	if (
-		activity_id == "activity_dining_collect_meal"
-		and not _dining_collect_can_finish_in_current_period(
-			int(_environment.get_absolute_minute()),
-		)
-	):
-		option["available"] = false
-		option["disabledReason"] = "DINING_SERVICE_CLOSED"
-		return
-	if (
-		activity_id == "activity_dining_collect_meal"
-		and not _meal_period_source_ref(
-			int(_environment.get_absolute_minute()),
-		).is_empty()
-		and _occupation_services.has_dining_order_completed_for_resident_meal_period(
-			resident_id,
-			_meal_period_source_ref(int(_environment.get_absolute_minute())),
-		)
-	):
-		option["available"] = false
-		option["disabledReason"] = "DINING_MEAL_ALREADY_SERVED"
-		return
-	if (
-		activity_id == "activity_dining_collect_meal"
-		and not _dining_order_for_resident_meal_period(
+	if activity_id == "activity_dining_collect_meal":
+		var collect_disabled_reason := DINING_SERVICE.collect_disabled_reason(
+			self,
 			resident_id,
 			int(_environment.get_absolute_minute()),
-			["completed"],
-		).is_empty()
-	):
-		option["available"] = false
-		option["disabledReason"] = "DINING_MEAL_ALREADY_SERVED"
+		)
+		if not collect_disabled_reason.is_empty():
+			option["available"] = false
+			option["disabledReason"] = collect_disabled_reason
+			return
+		# 公共食堂按餐次一次性备餐，开餐后居民自行取餐；
+		# 日常用餐不再要求一个逐单接待员在柜台等待。
 		return
 	if _visitor_onsite_occupation_service_is_staffed(
 		resident_id,
@@ -5421,6 +5400,12 @@ func _visitor_onsite_occupation_service_is_staffed(
 	resident_id: String,
 	activity_id: String,
 ) -> bool:
+	if activity_id == "activity_dining_collect_meal":
+		return DINING_SERVICE.collect_disabled_reason(
+			self,
+			resident_id,
+			_authoritative_absolute_minute(),
+		).is_empty()
 	var request_spec := _visitor_occupation_service_spec(
 		resident_id,
 		activity_id,
@@ -5677,6 +5662,10 @@ func _perform_activity_step_internal(
 			"ACTIVITY_NOT_ELIGIBLE",
 			["当前精力还足，不需要睡觉"],
 		)
+	if requested_activity_id == "activity_dining_collect_meal":
+		var dining_full_failure := DINING_SERVICE.collect_full_failure(self, normalized_resident_id, int(_environment.get_absolute_minute()))
+		if not dining_full_failure.is_empty():
+			return dining_full_failure
 	var activity_social_state := _activity_social_state_for(
 		normalized_resident_id,
 		requested_activity_id,
@@ -7460,6 +7449,7 @@ func _closed_service_place_for_visitor(
 	resident: Dictionary,
 	place_id: String,
 ) -> bool:
+	if DINING_SERVICE.can_admit_without_worker(self, place_id, int(_environment.get_absolute_minute())): return false
 	var state := _place_service_states.get(place_id, {}) as Dictionary
 	if state.is_empty() or bool(state.get("open", true)):
 		return false
@@ -9765,6 +9755,7 @@ func submit_agent_decision(resident_name: String, decision: Dictionary) -> Dicti
 			action,
 			String((preparation.get("errors", ["动作不合法"]) as Array)[0]),
 		)
+		DINING_SERVICE.decorate_go_rejection(rejection, preparation)
 		if conversation_end_reason == "拒绝接话":
 			CONVERSATION_RUNTIME._end_conversation(self, String(active_conversation.get("conversationId", "")), conversation_end_reason, "rejected")
 		return _complete_agent_submission(rejection)
@@ -10421,6 +10412,9 @@ func _activate_agent_activity(
 	conversation_end_reason: String,
 	allow_current_activity_interrupt := false,
 ) -> Dictionary:
+	var meal_result := DINING_SERVICE.activate_agent_meal_routine(self, resident_id, resident, decision_id, action, conversation_end_reason, allow_current_activity_interrupt) as Dictionary
+	if not meal_result.is_empty():
+		return meal_result
 	var performed := _perform_activity_step_internal(
 		resident_id,
 		"agent-activity:%s" % decision_id,
@@ -10680,6 +10674,7 @@ func _activate_activity_routine(
 		"sourceActionId": String(source_action.get("action_id", "")),
 		"placeId": String(mapping.get("placeId", "")),
 		"group": group,
+		"mealPeriodRef": DINING_SERVICE.meal_period_ref_for_routine(self, group, absolute_minute),
 		"endAbsoluteMinute": (
 			absolute_minute
 			+ int(ACTIVITY_ROUTINE_DURATION_MINUTES.get(group, 30))
@@ -11705,6 +11700,7 @@ func _schedule_decision(
 		):
 			return
 	var current_action := resident.get("currentAction", {}) as Dictionary
+	if DINING_SERVICE.keep_meal_routine_running(self, resident_name, current_action): return
 	if (
 		not current_action.is_empty()
 		and not prefetch
@@ -12102,6 +12098,7 @@ func _prepare_action(
 					wait_cap_minutes,
 				)
 			)
+			DINING_SERVICE.cap_full_wait(self, resident, prepared)
 			if _resident_has_current_animal_wait_assignment(
 				String(resident.get("residentId", "")),
 				prepared,
@@ -12476,6 +12473,8 @@ func _prepare_go_action(
 			"ok": false,
 			"errors": ["%s今天没有营业，不能进去" % target_place],
 		}
+	var dining_failure := DINING_SERVICE.go_admission_failure(self, resident, target_place, int(_environment.get_absolute_minute()))
+	if not dining_failure.is_empty(): return dining_failure
 	var route := ROUTE_QUERY.find_route_from_state(
 		_world_data,
 		{
@@ -14477,6 +14476,7 @@ func _close_activity_routine(
 		return
 	var routine := _activity_routines[resident_id] as Dictionary
 	_activity_routines.erase(resident_id)
+	DINING_SERVICE.settle_closed_meal_routine(self, resident_id, routine, status)
 	var resident := _residents[resident_id] as Dictionary
 	resident["doing"] = reason
 	var last_activity_id := String(
@@ -15026,6 +15026,7 @@ func _wake_packet(
 			resident_name,
 		),
 	}
+	DINING_SERVICE.attach_capacity_status(self, place_snapshot, String(perception_resident.get("residentId", "")), String(perception_resident.get("currentPlace", "")), int(_environment.get_absolute_minute()))
 	var priority_service_task := _priority_onsite_service_task_for_resident(
 		String(resident.get("residentId", "")),
 	)
@@ -15146,9 +15147,7 @@ func _priority_onsite_service_task_for_resident(
 			request.is_empty()
 			and String(task.get("capability", "")) == "food.production"
 			and String(task.get("sourceKind", "")) == "meal_demand"
-			and _meal_period_has_waiting_orders(
-				String(task.get("sourceRef", "")),
-			)
+			and String(task.get("sourceRef", "")).begins_with("meal-period:")
 		):
 			if (
 				selected.is_empty()
@@ -15621,12 +15620,11 @@ func _agent_travel_destinations(
 				resident,
 				place_name,
 			)
+			or not DINING_SERVICE.travel_destination_available(self, resident, place_name, int(_environment.get_absolute_minute()))
 		):
 			continue
 		result.append(place_name)
 	return result
-
-
 func _agent_life_destination_options(
 	resident: Dictionary,
 ) -> Array[Dictionary]:
@@ -15637,9 +15635,9 @@ func _agent_life_destination_options(
 		resident_id,
 	).is_empty()
 	var sleep_needed := _resident_sleep_needed(resident)
-	# 平常仍由职业任务优先；精力已经偏低时，回家睡觉不能再被工作
-	# 选项整个遮住，否则居民永远没有形成请假的机会。
-	if has_work_tasks and not sleep_needed:
+	var meal_needed := int((resident.get("activityState", _empty_activity_state()) as Dictionary).get("satiety", 50)) <= 35
+	# 平常仍由职业任务优先；精力或饥饿达到阈值时，生活选项不能被工作遮住。
+	if has_work_tasks and not sleep_needed and not meal_needed:
 		return []
 	var social_state := resident.get("socialState", {}) as Dictionary
 	var home_place := String(social_state.get("home", ""))
@@ -15673,7 +15671,7 @@ func _agent_life_destination_options(
 				place_id != home_place or not sleep_needed
 			):
 				continue
-			if has_work_tasks and activity_id != SLEEP_ACTIVITY_ID:
+			if has_work_tasks and not DINING_SERVICE.activity_allowed_during_work(activity_id):
 				continue
 			var matched := INTERESTS.matched_labels_for_activity(
 				interests,
@@ -17427,6 +17425,8 @@ func _advance_passive_activity_needs(absolute_minute: int) -> void:
 		# C1(docs/居民状态通知链减负方案.md):整点需求只改 activityState/body,
 		# 均不在表现合同内,不发射;HUD 饿/累经 world_revision_changed 拉取更新。
 		_sync_body_from_activity_needs(resident, next)
+		if ACTIVITY_SCALARS.hunger_crossed_decision_threshold(previous, next):
+			_schedule_decision(resident_id, false)
 		lap_usec = _advance_profile_lap(_advance_profile_scratch, "passiveNeedsComputeUsec", lap_usec)
 	_advance_profile_lap(_advance_profile_scratch, "passiveNeedsComputeUsec", lap_usec)
 
@@ -21464,13 +21464,11 @@ func _meal_service_is_open(absolute_minute: int) -> bool:
 	return posmod(absolute_minute, 1440) >= int(
 		period.get("serviceStart", period.get("start", 0)),
 	)
-
-
 func _dining_collect_can_finish_in_current_period(
 	absolute_minute: int,
 ) -> bool:
 	var period := _meal_period_for_minute(absolute_minute)
-	if period.is_empty():
+	if period.is_empty() or not _meal_service_is_open(absolute_minute):
 		return false
 	var minute_of_day := posmod(absolute_minute, 1440)
 	return minute_of_day + 5 <= int(period.get("end", 0))
@@ -21583,10 +21581,13 @@ func _sync_meal_period_tasks(absolute_minute: int) -> void:
 		"processFacts": {
 			"periodId": String(period.get("id", "")),
 			"periodLabel": String(period.get("label", "")),
+			"menu": DINING_SERVICE.meal_menu_for_period(period),
+			"serviceStartMinute": int(period.get("serviceStart", 0)),
 			"baseSupply": true,
 			"nextActivityId": "activity_dining_prepare_meal",
 		},
 	})
+	DINING_SERVICE.reserve_meal_preparation_task(self, source_ref)
 	_activate_waiting_dining_orders()
 
 
@@ -22638,7 +22639,6 @@ func _ensure_postal_sort_task(batch_id: String, created_at: int) -> void:
 		"createdAtMinute": created_at,
 		"priority": CONTENT_CATALOG.TASK_PRIORITY["postal_sort"],
 	})
-
 
 func _reserve_postal_delivery_tasks(batch_id: String) -> void:
 	for message_value: Variant in _private_messages.values():

@@ -244,6 +244,7 @@ static func prepare_activity_routines(
 	var allowed_fields := required_fields.duplicate()
 	allowed_fields.append("visitedActivityIds")
 	allowed_fields.append("choiceSeed")
+	allowed_fields.append("mealPeriodRef")
 	for value: Variant in snapshot.get("routines", []) as Array:
 		if not value is Dictionary:
 			return {
@@ -277,6 +278,10 @@ static func prepare_activity_routines(
 			or int(routine.get("sequence", -1)) < 0
 			or String(routine.get("lastActivityId", "")).is_empty()
 			or not routine.get("lastPhase") is String
+			or (
+				routine.has("mealPeriodRef")
+				and not routine.get("mealPeriodRef") is String
+			)
 		):
 			return {
 				"ok": false,
