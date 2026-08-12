@@ -389,7 +389,6 @@ func _start_transport_watchdog(
 			},
 		)
 	)
-	timer.start()
 
 
 func _request_with_godot_http(
