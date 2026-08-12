@@ -393,6 +393,28 @@ static func meal_period_ref_for_routine(
 	return world._meal_period_source_ref(absolute_minute) if group == "meal" else ""
 
 
+static func backfill_meal_period_refs(
+	world,
+	routines: Dictionary,
+	residents: Dictionary,
+) -> void:
+	for resident_id_value: Variant in routines:
+		var resident_id := String(resident_id_value)
+		var routine := routines[resident_id] as Dictionary
+		if (
+			String(routine.get("group", "")) != "meal"
+			or not String(routine.get("mealPeriodRef", "")).is_empty()
+		):
+			continue
+		var resident := residents.get(resident_id, {}) as Dictionary
+		var action := resident.get("currentAction", {}) as Dictionary
+		var started_minute := int(
+			action.get("startedAbsoluteMinute", world._environment.get_absolute_minute())
+		)
+		routine["mealPeriodRef"] = world._meal_period_source_ref(started_minute)
+		routines[resident_id] = routine
+
+
 static func cap_full_wait(
 	world,
 	resident: Dictionary,

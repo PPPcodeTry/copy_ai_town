@@ -2422,6 +2422,7 @@ func _apply_prepared_restore_candidate(
 		) as Dictionary
 	).get("routinesByResident", {}) as Dictionary
 	_activity_routines = _activity_routines.duplicate(true)
+	DINING_SERVICE.backfill_meal_period_refs(self, _activity_routines, _residents)
 	_activity_work_task_bindings = (
 		prepared.get(
 			"activityWorkTaskBindingsPrepared",
@@ -22638,7 +22639,6 @@ func _ensure_postal_sort_task(batch_id: String, created_at: int) -> void:
 		"createdAtMinute": created_at,
 		"priority": CONTENT_CATALOG.TASK_PRIORITY["postal_sort"],
 	})
-
 
 func _reserve_postal_delivery_tasks(batch_id: String) -> void:
 	for message_value: Variant in _private_messages.values():
