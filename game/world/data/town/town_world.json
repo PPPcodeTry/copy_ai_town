@@ -1054,9 +1054,9 @@
       "occupation_catalog.json": "eddae46da2c289df21ee8ec93b1042d36c22db8211a1bc51a0addd3e65c139af",
       "places.json": "17dc9a4fdd84421544713171fd69f394d5f40efd10586bb2de9e3de3c241342e",
       "props.json": "90ca9c6f5f0fdc14df9eacb33088144cb53273a36661f27d8746b86f3896b934",
-      "schedule_templates.json": "cb24336fd32adb32e520dcfc536558834288541a236e0c47fb314860a0c902d9"
+      "schedule_templates.json": "c813a58fb45813c52230c398181b2bc2ebd5aa9a1f6b76cb2c5d7c0708c50d63"
     },
-    "sourceFingerprint": "c6cf26a7cc6c583a063b5c6f705ed6be0536d3965aed45c66169a681ff765334",
+    "sourceFingerprint": "13b4060c3177ef818d02c8f61eb5fdfb5d34d48f8270f406ec7ce723339a3dcd",
     "sourceWorldId": "town",
     "staticReferencesValidated": true,
     "status": "formal_executable",
@@ -213283,14 +213283,14 @@
             "food.clean",
             "baking.prepare"
           ],
-          "endMinute": 750.0,
+          "endMinute": 600.0,
           "goalPressure": {
             "goalId": "occupation_activity",
             "weight": 80.0
           },
           "role": "worker",
-          "startMinute": 570.0,
-          "windowId": "window_food_prepare_lunch"
+          "startMinute": 300.0,
+          "windowId": "window_food_prepare_breakfast"
         },
         {
           "activityTagsAny": [
@@ -213299,14 +213299,14 @@
             "food.clean",
             "baking.prepare"
           ],
-          "endMinute": 870.0,
+          "endMinute": 840.0,
           "goalPressure": {
             "goalId": "occupation_activity",
             "weight": 90.0
           },
           "role": "worker",
-          "startMinute": 750.0,
-          "windowId": "window_food_lunch_service"
+          "startMinute": 600.0,
+          "windowId": "window_food_prepare_lunch"
         },
         {
           "activityTagsAny": [
@@ -213321,8 +213321,8 @@
             "weight": 55.0
           },
           "role": "worker",
-          "startMinute": 870.0,
-          "windowId": "window_food_afternoon_close"
+          "startMinute": 960.0,
+          "windowId": "window_food_prepare_dinner"
         }
       ]
     },

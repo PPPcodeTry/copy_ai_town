@@ -90,6 +90,9 @@ static func capacity_status(
 		"mealPeriodRef": period_ref,
 		"retryAfterMinute": retry_after,
 		"maxWaitMinutes": 10,
+		"serviceMode": "self_service",
+		"serviceRule": "餐食由食堂提前统一备好，开餐后居民自行取餐，不需要等工作人员逐人递餐",
+		"menu": meal_menu_for_period(period) if not period.is_empty() else "",
 	}
 
 
@@ -200,6 +203,45 @@ static func attach_capacity_status(
 		)
 
 
+static func go_admission_failure(
+	world,
+	resident: Dictionary,
+	target_place: String,
+	absolute_minute: int,
+) -> Dictionary:
+	if target_place != CONTENT_CATALOG.PLACE_DINING_HALL:
+		return {}
+	var dining_status := capacity_status(
+		world,
+		String(resident.get("residentId", "")),
+		absolute_minute,
+	)
+	if String(dining_status.get("state", "")) != "full":
+		return {}
+	return {
+		"ok": false,
+		"errorCode": "DINING_HALL_FULL",
+		"retryable": true,
+		"dining": dining_status,
+		"errors": ["公共食堂当前已满，等有人离开后再来"],
+	}
+
+
+static func decorate_go_rejection(
+	rejection: Dictionary,
+	preparation: Dictionary,
+) -> void:
+	for detail_key: String in ["errorCode", "retryable", "dining"]:
+		if preparation.has(detail_key):
+			rejection[detail_key] = preparation.get(detail_key)
+	if String(preparation.get("errorCode", "")) != "DINING_HALL_FULL":
+		return
+	# 满员是正常生活状态：行动没有执行，但 World 已消费决定，并把结果交给
+	# 下一轮 Agent 生成符合人设的反应，不应计作网关错误。
+	rejection["ok"] = true
+	rejection["status"] = "handled"
+
+
 static func activity_allowed_during_work(activity_id: String) -> bool:
 	return activity_id in [
 		"activity_home_sleep",
@@ -222,10 +264,16 @@ static func cap_full_wait(
 ) -> void:
 	var resident_id := String(resident.get("residentId", ""))
 	var now := int(prepared.get("startedAbsoluteMinute", 0))
-	if capacity_status(world, resident_id, now).get("state", "") == "full":
+	var capacity := capacity_status(world, resident_id, now)
+	var is_dining_visitor := (
+		String(resident.get("currentPlace", ""))
+		== CONTENT_CATALOG.PLACE_DINING_HALL
+		and not _resident_is_dining_worker(resident)
+	)
+	if capacity.get("state", "") == "full" or is_dining_visitor:
 		prepared["completeAbsoluteMinute"] = mini(
 			int(prepared.get("completeAbsoluteMinute", now)),
-		now + 10,
+			now + 10,
 		)
 
 
@@ -236,7 +284,7 @@ static func _meal_admission_count(
 ) -> int:
 	if period_ref.is_empty():
 		return 0
-	var count := 0
+	var admitted: Dictionary = {}
 	for resident_id_value: Variant in world._activity_routines:
 		var resident_id := String(resident_id_value)
 		if resident_id == excluded_resident_id:
@@ -248,8 +296,21 @@ static func _meal_admission_count(
 			== CONTENT_CATALOG.PLACE_DINING_HALL
 			and String(routine.get("mealPeriodRef", "")) == period_ref
 		):
-			count += 1
-	return count
+			admitted[resident_id] = true
+	for resident_id_value: Variant in world._residents:
+		var resident_id := String(resident_id_value)
+		if resident_id == excluded_resident_id:
+			continue
+		var resident := world._residents[resident_id] as Dictionary
+		if _resident_is_dining_worker(resident):
+			continue
+		if (
+			String(resident.get("currentPlace", ""))
+			== CONTENT_CATALOG.PLACE_DINING_HALL
+			or _resident_is_heading_to_dining_hall(resident)
+		):
+			admitted[resident_id] = true
+	return admitted.size()
 
 
 static func _resident_has_meal_admission(
@@ -257,14 +318,60 @@ static func _resident_has_meal_admission(
 	resident_id: String,
 	period_ref: String,
 ) -> bool:
-	if not world._activity_routines.has(resident_id):
+	if world._activity_routines.has(resident_id):
+		var routine := world._activity_routines[resident_id] as Dictionary
+		if (
+			String(routine.get("group", "")) == "meal"
+			and String(routine.get("placeId", ""))
+			== CONTENT_CATALOG.PLACE_DINING_HALL
+			and String(routine.get("mealPeriodRef", "")) == period_ref
+		):
+			return true
+	var resident := world._residents.get(resident_id, {}) as Dictionary
+	if resident.is_empty() or _resident_is_dining_worker(resident):
 		return false
-	var routine := world._activity_routines[resident_id] as Dictionary
 	return (
-		String(routine.get("group", "")) == "meal"
-		and String(routine.get("placeId", ""))
+		String(resident.get("currentPlace", ""))
 		== CONTENT_CATALOG.PLACE_DINING_HALL
-		and String(routine.get("mealPeriodRef", "")) == period_ref
+		or _resident_is_heading_to_dining_hall(resident)
+	)
+
+
+static func _resident_is_heading_to_dining_hall(resident: Dictionary) -> bool:
+	var action := resident.get("currentAction", {}) as Dictionary
+	return (
+		String(action.get("type", "")) == "去"
+		and String(action.get("place", ""))
+		== CONTENT_CATALOG.PLACE_DINING_HALL
+	)
+
+
+static func _resident_is_dining_worker(resident: Dictionary) -> bool:
+	return String(
+		(resident.get("socialState", {}) as Dictionary).get("workplace", ""),
+	) == CONTENT_CATALOG.PLACE_DINING_HALL
+
+
+static func settle_closed_meal_routine(
+	world,
+	resident_id: String,
+	routine: Dictionary,
+	status: String,
+) -> void:
+	if (
+		status != "completed"
+		or String(routine.get("group", "")) != "meal"
+		or not (routine.get("visitedActivityIds", []) as Array).has(
+			"activity_dining_eat_meal",
+		)
+	):
+		return
+	var period_ref := String(routine.get("mealPeriodRef", "")).strip_edges()
+	if period_ref.is_empty():
+		return
+	world._occupation_services.mark_dining_order_completed_for_resident_meal_period(
+		resident_id,
+		period_ref,
 	)
 
 

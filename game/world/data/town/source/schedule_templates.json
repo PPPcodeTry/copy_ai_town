@@ -114,9 +114,9 @@
       "role": "worker",
       "windows": [
         {
-          "windowId": "window_food_prepare_lunch",
-          "startMinute": 570,
-          "endMinute": 750,
+          "windowId": "window_food_prepare_breakfast",
+          "startMinute": 300,
+          "endMinute": 600,
           "role": "worker",
           "goalPressure": {
             "goalId": "occupation_activity",
@@ -125,9 +125,9 @@
           "activityTagsAny": ["food.prepare", "food.serve", "food.clean", "baking.prepare"]
         },
         {
-          "windowId": "window_food_lunch_service",
-          "startMinute": 750,
-          "endMinute": 870,
+          "windowId": "window_food_prepare_lunch",
+          "startMinute": 600,
+          "endMinute": 840,
           "role": "worker",
           "goalPressure": {
             "goalId": "occupation_activity",
@@ -136,8 +136,8 @@
           "activityTagsAny": ["food.prepare", "food.serve", "food.clean", "baking.prepare"]
         },
         {
-          "windowId": "window_food_afternoon_close",
-          "startMinute": 870,
+          "windowId": "window_food_prepare_dinner",
+          "startMinute": 960,
           "endMinute": 1200,
           "role": "worker",
           "goalPressure": {

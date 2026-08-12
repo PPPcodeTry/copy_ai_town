@@ -9753,6 +9753,7 @@ func submit_agent_decision(resident_name: String, decision: Dictionary) -> Dicti
 			action,
 			String((preparation.get("errors", ["动作不合法"]) as Array)[0]),
 		)
+		DINING_SERVICE.decorate_go_rejection(rejection, preparation)
 		if conversation_end_reason == "拒绝接话":
 			CONVERSATION_RUNTIME._end_conversation(self, String(active_conversation.get("conversationId", "")), conversation_end_reason, "rejected")
 		return _complete_agent_submission(rejection)
@@ -12469,6 +12470,8 @@ func _prepare_go_action(
 			"ok": false,
 			"errors": ["%s今天没有营业，不能进去" % target_place],
 		}
+	var dining_failure := DINING_SERVICE.go_admission_failure(self, resident, target_place, int(_environment.get_absolute_minute()))
+	if not dining_failure.is_empty(): return dining_failure
 	var route := ROUTE_QUERY.find_route_from_state(
 		_world_data,
 		{
@@ -14470,6 +14473,7 @@ func _close_activity_routine(
 		return
 	var routine := _activity_routines[resident_id] as Dictionary
 	_activity_routines.erase(resident_id)
+	DINING_SERVICE.settle_closed_meal_routine(self, resident_id, routine, status)
 	var resident := _residents[resident_id] as Dictionary
 	resident["doing"] = reason
 	var last_activity_id := String(
