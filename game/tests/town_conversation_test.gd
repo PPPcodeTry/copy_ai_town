@@ -2319,6 +2319,19 @@ func _scenario_ui_adapter_player_conversation_identity() -> void:
 	_expect_equal(snapshot.get("title"), "闻叙", "聊天页标题没有显示实际 Agent 名字")
 	_expect_equal(snapshot.get("subtitle"), "聊天中", "聊天页没有保持玩家聊天模式")
 	_expect_equal(snapshot.get("thinkingVisible"), true, "稳定 residentId 等待态没有显示思考中")
+	var balanced_bubble_width := float(screen.call(
+		"_bubble_width",
+		"这是一段刚刚超过聊天气泡最大宽度并且过去会在最后单独留下一个字的测试文字",
+		"",
+	))
+	_expect(
+		balanced_bubble_width < 520.0,
+		"聊天气泡略超最大宽度时没有改用均衡行宽",
+	)
+	_expect(
+		balanced_bubble_width >= 272.0,
+		"均衡后的聊天气泡没有满足最小可读宽度",
+	)
 
 	var ended_conversation_id := "conversation-resident-wen"
 	var ended_conversation := (

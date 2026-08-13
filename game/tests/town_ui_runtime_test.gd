@@ -1299,6 +1299,12 @@ const HOST_SCRIPT := preload(
 const AVATAR_HUD_SCENE := preload(
 	"res://ui/avatar_mode/runtime/AvatarModeHud.tscn"
 )
+const SYSTEM_FEEDBACK_TOAST_SCENE := preload(
+	"res://ui/common/system_feedback/SystemFeedbackToast.tscn"
+)
+const PROVIDER_SETTINGS_SCREEN_SCENE := preload(
+	"res://ui/provider_settings/ProviderSettingsScreen.tscn"
+)
 const RESIDENT_PROFILE_EDITOR_SERVICE_SCRIPT := preload(
 	"res://ui/resident_overview/ResidentProfileEditorService.gd"
 )
@@ -1523,12 +1529,199 @@ func _initialize() -> void:
 
 
 func _run_all() -> void:
+	await _scenario_dynamic_feedback_text_is_complete()
 	await _scenario_ui_runtime_host_navigation()
 	await _scenario_formal_ui_runtime_contract()
 	_scenario_game_flow_resident_model_assignment_route()
 	_scenario_session_production_composition()
 	_scenario_hud_pause_clock()
 	_finish_suite("TOWN_UI_RUNTIME_PASS")
+
+
+func _scenario_dynamic_feedback_text_is_complete() -> void:
+	var long_system_message := (
+		"上次保存未完成，系统已经恢复最近一份完整存档。请先检查居民状态、"
+		+ "当前地点和模型连接，再决定是否继续刚才的操作。"
+	)
+	var toast := SYSTEM_FEEDBACK_TOAST_SCENE.instantiate() as Control
+	toast.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	toast.size = Vector2(560, 115)
+	toast.set("expanded", false)
+	root.add_child(toast)
+	await process_frame
+	var feedback_issues := toast.call("configure", {
+		"scope": "save",
+		"status": "ready",
+		"revision": 1,
+		"data": {
+			"source": "runtime",
+			"capabilityMode": "formal",
+			"formalReady": true,
+			"feedback": {
+				"feedbackId": "long-system-feedback-test",
+				"component": "toast",
+				"tone": "warning",
+				"title": "已恢复完整存档",
+				"message": long_system_message,
+				"blocking": false,
+				"dismissPolicy": "auto_or_manual",
+				"durationMsec": 3000,
+			},
+		},
+		"actions": {},
+		"operation": {"status": "idle", "requestId": ""},
+		"error": null,
+	}, "toast") as PackedStringArray
+	_expect(feedback_issues.is_empty(), "长系统反馈可应用到紧凑提示框")
+	await process_frame
+	var toast_snapshot := toast.call("runtime_text_snapshot") as Dictionary
+	var toast_pages := toast_snapshot.get("pages", []) as Array
+	_expect(toast_pages.size() > 1, "紧凑横屏系统反馈会完整分页")
+	_expect_equal(
+		"".join(toast_pages),
+		"已恢复完整存档：%s" % long_system_message,
+		"系统反馈分页保留标题和完整正文",
+	)
+	_expect_equal(
+		toast_snapshot.get("overrun"),
+		TextServer.OVERRUN_NO_TRIMMING,
+		"系统反馈页不再静默裁字或显示省略号",
+	)
+	_expect_equal(
+		toast_snapshot.get("visibleLines"),
+		1,
+		"紧凑横屏系统反馈当前页实际完整显示一行",
+	)
+	toast.call("_process", 2.6)
+	_expect_equal(
+		(toast.call("runtime_text_snapshot") as Dictionary).get("pageIndex"),
+		1,
+		"系统反馈会轮播到后续正文页",
+	)
+	_expect(
+		int(toast.call("minimum_read_duration_msec")) > 3000,
+		"自动提示会为全部正文页保留阅读时间",
+	)
+	toast.free()
+
+	var long_avatar_message := (
+		"当前目标离开了可交互范围，路径也被临时占用，请重新靠近目标后再试。"
+	)
+	var avatar_hud := AVATAR_HUD_SCENE.instantiate() as Control
+	avatar_hud.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	avatar_hud.size = Vector2(1280, 720)
+	root.add_child(avatar_hud)
+	await process_frame
+	avatar_hud.call("configure", {
+		"avatar": {
+			"scope": "avatar",
+			"status": "ready",
+			"revision": 1,
+			"data": {
+				"source": "runtime",
+				"capabilityMode": "formal",
+				"formalReady": true,
+				"mode": "avatar_active",
+			},
+			"actions": {
+				"retry": {
+					"intent": "avatar.retry",
+					"enabled": true,
+					"disabledReason": "",
+				},
+			},
+			"operation": {
+				"status": "error",
+				"requestId": "avatar-long-error",
+				"intent": "avatar.interact",
+			},
+			"error": {"code": "TARGET_UNREACHABLE", "message": long_avatar_message},
+		},
+		"conversation": {
+			"scope": "conversation",
+			"status": "ready",
+			"revision": 1,
+			"data": {"conversationId": "", "displayMode": "player"},
+			"actions": {},
+			"operation": {"status": "idle", "requestId": ""},
+			"error": null,
+		},
+	}, {"inputMode": "keyboard_mouse"})
+	await process_frame
+	await process_frame
+	var avatar_feedback := avatar_hud.call("operation_feedback_snapshot") as Dictionary
+	var avatar_pages := avatar_feedback.get("pages", []) as Array
+	_expect(avatar_pages.size() > 1, "化身长错误会拆成多个两行反馈页")
+	_expect_equal(
+		"".join(avatar_pages),
+		long_avatar_message + "　R 重试",
+		"化身错误分页保留完整原因和重试提示",
+	)
+	_expect_equal(
+		avatar_feedback.get("maxLines"),
+		2,
+		"化身反馈每页保持两行可见区域",
+	)
+	_expect_equal(
+		avatar_feedback.get("overrun"),
+		TextServer.OVERRUN_NO_TRIMMING,
+		"化身反馈页不再用省略号吞掉重试提示",
+	)
+	var avatar_visible_lines := int(avatar_feedback.get("visibleLines", 0))
+	_expect(
+		avatar_visible_lines >= 1 and avatar_visible_lines <= 2,
+		"化身操作反馈当前页实际完整显示一至两行",
+	)
+	avatar_hud.call("_process", 2.1)
+	_expect_equal(
+		(avatar_hud.call("operation_feedback_snapshot") as Dictionary).get("pageIndex"),
+		1,
+		"化身操作反馈会显示下一页完整原因",
+	)
+	avatar_hud.free()
+
+	var provider_screen := PROVIDER_SETTINGS_SCREEN_SCENE.instantiate() as Control
+	provider_screen.set("_layout_profile", "phone_portrait")
+	provider_screen.set("_view_model", {
+		"actions": {},
+		"operation": {"status": "idle", "requestId": ""},
+		"error": null,
+	})
+	var long_provider_message := (
+		"模型服务已经返回响应，但当前模型名称与服务端可用列表不一致，"
+		+ "请检查连接地址、模型名称和访问权限后重新检查。"
+	)
+	var provider_panel := provider_screen.call("_build_status_section", {
+		"providerId": "deepseek",
+		"displayName": "DeepSeek",
+		"enabled": true,
+		"connection": {
+			"status": "unavailable",
+			"label": "连接失败",
+			"message": long_provider_message,
+		},
+	}) as Control
+	var provider_message_label: Label
+	for child: Node in provider_panel.find_children("*", "Label", true, false):
+		if String(child.get_meta("gate_id", "")) == "connection_status_message":
+			provider_message_label = child as Label
+			break
+	_expect(provider_message_label != null, "模型连接状态正文已创建")
+	if provider_message_label != null:
+		_expect_equal(provider_message_label.text, long_provider_message, "模型连接结果保留完整错误原文")
+		_expect_equal(provider_message_label.max_lines_visible, -1, "模型连接结果不再固定两行")
+		_expect_equal(
+			provider_message_label.text_overrun_behavior,
+			TextServer.OVERRUN_NO_TRIMMING,
+			"模型连接结果不再使用省略号裁切",
+		)
+		_expect(not provider_message_label.clip_text, "模型连接结果不再静默裁字")
+		_expect(
+			provider_message_label.custom_minimum_size.y > 60.0,
+			"紧凑布局会按长错误内容增加正文高度",
+		)
+	provider_panel.free()
+	provider_screen.free()
 
 
 func _verify_conversation_agent_dispatch_first_frame(runtime: Node) -> void:

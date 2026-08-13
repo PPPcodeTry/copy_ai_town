@@ -848,6 +848,12 @@ func _start_toast_timer(entry: Dictionary) -> void:
 	var component := _entry_component(entry)
 	if component == null:
 		return
+	var feedback_component := component as SystemFeedbackComponent
+	if feedback_component != null:
+		duration_msec = maxi(
+			duration_msec,
+			feedback_component.minimum_read_duration_msec(),
+		)
 	var timer := Timer.new()
 	timer.name = "AutoDismissTimer"
 	timer.one_shot = true

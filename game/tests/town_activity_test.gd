@@ -6677,6 +6677,23 @@ func _scenario_far_resident_activity_incremental_refresh() -> void:
 	var layer := LAYER_SCENE.instantiate()
 	host.add_child(layer)
 	await process_frame
+	var seventeen_unit_pages := layer.call(
+		"_split_thought_pages",
+		"一二三四五六七八九十一二三四五，尾",
+	) as Array
+	_expect_equal(seventeen_unit_pages.size(), 2, "十六加一公开想法会拆成两页")
+	_expect(
+		abs(
+			String(seventeen_unit_pages[0]).length()
+			- String(seventeen_unit_pages[1]).length()
+		) <= 1,
+		"十六加一公开想法不会留下单字尾页",
+	)
+	_expect_equal(
+		"".join(seventeen_unit_pages),
+		"一二三四五六七八九十一二三四五，尾",
+		"十六加一公开想法分页保留完整原文",
+	)
 
 	var view_model := _view_model_far_resident_activity_incremental_refresh(10)
 	_expect(layer.apply_view_model(view_model), "初次 HUD 数据可应用")
@@ -6816,8 +6833,28 @@ func _scenario_far_resident_activity_incremental_refresh() -> void:
 	)
 	_expect_equal(
 		middle_thought_slot.get("semanticThoughtPageCount"),
-		1,
-		"长想法会在思绪页完整显示，避免末尾只剩残缺单字",
+		2,
+		"长想法均衡分页，避免末尾只剩残缺单字",
+	)
+	var thought_pages := (
+		middle_thought_slot.get("semanticThoughtPages", []) as Array
+	)
+	_expect(
+		abs(
+			String(thought_pages[0]).length()
+			- String(thought_pages[1]).length()
+		) <= 1,
+		"十六加一边界会重新均衡为长度接近的想法页",
+	)
+	_expect_equal(
+		"".join(thought_pages),
+		"得先把客人的需求听清楚，再决定怎么安排后面的工作",
+		"公开想法分页保留完整原文",
+	)
+	_expect_equal(
+		middle_thought_slot.get("labelVisibleLineCount"),
+		2,
+		"想法页实际只显示两行完整文字",
 	)
 	_expect_equal(
 		middle_thought_slot.get("iconVisible"),
@@ -6833,7 +6870,7 @@ func _scenario_far_resident_activity_incremental_refresh() -> void:
 		not String(middle_thought_slot.get("label", "")).contains("…"),
 		"初次思绪页应完整展示，不含截断省略号",
 	)
-	await create_timer(2.1).timeout
+	await create_timer(4.1).timeout
 	var middle_slot := (
 		((layer.audit_snapshot() as Dictionary).get("slots", []) as Array)[0]
 		as Dictionary
@@ -6849,9 +6886,19 @@ func _scenario_far_resident_activity_incremental_refresh() -> void:
 		"动作页收起普通想法气泡文字",
 	)
 	_expect_equal(
-		middle_slot.get("behaviorLabel"),
+		String(middle_slot.get("behaviorLabel", "")).replace("\n", ""),
 		"正在杂货摊接待客人",
 		"动作页显示正在进行的正式动作文字",
+	)
+	_expect_equal(
+		middle_slot.get("behaviorLabelMaxLinesVisible"),
+		2,
+		"普通长动作文字允许均衡显示两行",
+	)
+	_expect_equal(
+		middle_slot.get("behaviorLabelVisibleLineCount"),
+		2,
+		"普通长动作文字实际完整显示为两行",
 	)
 	_expect_equal(
 		middle_slot.get("iconVisible"),
@@ -6976,7 +7023,72 @@ func _scenario_far_resident_activity_incremental_refresh() -> void:
 		0.0,
 		"近景图标加文字气泡仍严格贴住居民头顶",
 	)
-	var edge := _view_model_far_resident_activity_incremental_refresh(17)
+	var long_action := _view_model_far_resident_activity_incremental_refresh(18)
+	(long_action.get("data", {}) as Dictionary)["density"] = {"zoomBand": "near"}
+	var long_action_activity := (
+		(long_action.get("data", {}) as Dictionary).get(
+			"farResidentActivity",
+			{},
+		) as Dictionary
+	)
+	var long_action_label := "正在逐一核对花盆工具和天气记录并安排下午花园维护工作"
+	long_action_activity["visibleBudget"] = 1
+	long_action_activity["items"] = [{
+		"overlayId": "resident:long-action",
+		"kind": "semantic_icon",
+		"residentId": "resident_long_action",
+		"screenAnchor": {"x": 640.0, "y": 420.0},
+		"anchorPolicy": "live_resident_head",
+		"motionPolicy": "follow_resident",
+		"expiresAtMsec": 0,
+		"iconType": "sort_mail",
+		"phase": "performing",
+		"activeActionLabel": long_action_label,
+		"showLabel": true,
+	}]
+	_expect(layer.apply_view_model(long_action), "超长动作文字气泡数据可应用")
+	await process_frame
+	var long_action_first := (
+		((layer.audit_snapshot() as Dictionary).get("slots", []) as Array)[0]
+		as Dictionary
+	)
+	var action_pages := (
+		long_action_first.get("semanticActionPages", []) as Array
+	)
+	_expect(action_pages.size() > 1, "超长动作文字拆成多个轮播页")
+	_expect_equal(
+		"".join(action_pages),
+		long_action_label,
+		"动作分页保留完整原文",
+	)
+	_expect(
+		not String(long_action_first.get("behaviorLabel", "")).contains("…"),
+		"动作页不使用省略号吞掉内容",
+	)
+	_expect_equal(
+		long_action_first.get("behaviorLabelVisibleLineCount"),
+		2,
+		"超长动作当前页实际完整显示为两行",
+	)
+	var first_action_page := String(
+		long_action_first.get("behaviorLabel", "")
+	).replace("\n", "")
+	await create_timer(2.1).timeout
+	var long_action_second := (
+		((layer.audit_snapshot() as Dictionary).get("slots", []) as Array)[0]
+		as Dictionary
+	)
+	_expect_equal(
+		long_action_second.get("semanticActionPage"),
+		1,
+		"超长动作按两秒轮播到下一页",
+	)
+	_expect(
+		String(long_action_second.get("behaviorLabel", "")).replace("\n", "")
+		!= first_action_page,
+		"动作轮播页文字确实发生变化",
+	)
+	var edge := _view_model_far_resident_activity_incremental_refresh(19)
 	var edge_activity := (
 		(edge.get("data", {}) as Dictionary).get(
 			"farResidentActivity",
@@ -7900,6 +8012,37 @@ func _scenario_ui_adapter_activity_semantic() -> void:
 		),
 		"刚到镇上，先回住处放东西，看看接下…",
 		"公开想法不会在第一个逗号处被截成半句话",
+	)
+	_expect_equal(
+		adapter.call(
+			"_hud_public_thought_text",
+			"abcdefghijklmnopqrstuvwxyzABCDEFGH",
+		),
+		"abcdefghijklmnopqrstuvwxyzABCDEFGH",
+		"英文公开想法按实际显示宽度计算，不按字符数误截断",
+	)
+	_expect_equal(
+		adapter.call(
+			"_hud_public_thought_text",
+			"WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+		),
+		"WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+		"等宽像素字体中的英文恰好放得下时不误加省略号",
+	)
+	_expect_equal(
+		adapter.call(
+			"_hud_public_thought_text",
+			"安排meeting后检查tools再出发",
+		),
+		"安排meeting后检查tools再出发",
+		"中英混排公开想法未超过显示宽度时不误加省略号",
+	)
+	_expect(
+		String(adapter.call(
+			"_hud_public_thought_text",
+			"安排meeting后检查tools再出发并完成今天所有工作",
+		)).ends_with("…"),
+		"公开想法确实超过显示宽度时才显示省略号",
 	)
 
 	adapter.queue_free()

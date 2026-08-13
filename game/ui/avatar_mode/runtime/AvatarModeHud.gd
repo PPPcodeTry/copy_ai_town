@@ -204,6 +204,13 @@ var _movement_hint_dismissed := false
 var _feedback_active_key := ""
 var _feedback_hidden_key := ""
 var _feedback_expire_at_msec := 0
+const FEEDBACK_PAGE_DURATION_SECONDS := 2.0
+const FEEDBACK_PAGE_MAX_UNITS := 30.0
+const FEEDBACK_LINE_MAX_UNITS := 15.0
+var _feedback_pages: Array[String] = []
+var _feedback_page_index := 0
+var _feedback_page_elapsed := 0.0
+var _feedback_full_text := ""
 var _time_control_panel_face: TextureRect
 
 
@@ -273,10 +280,11 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not is_visible_in_tree():
 		return
 	_sync_live_resident_prompt_anchor()
+	_update_operation_feedback_page(delta)
 	if (
 		_feedback_expire_at_msec <= 0
 		or Time.get_ticks_msec() < _feedback_expire_at_msec
@@ -732,6 +740,13 @@ func get_text_rects() -> Array:
 					"id": text_id,
 					"text": node.text,
 					"fontSize": node.get_theme_font_size("font_size"),
+					"fullText": String(node.get_meta("full_text", node.text)),
+					"maxLines": node.max_lines_visible,
+					"lineCount": node.get_line_count(),
+					"visibleLineCount": node.get_visible_line_count(),
+					"overrun": node.text_overrun_behavior,
+					"pageCount": int(node.get_meta("page_count", 1)),
+					"pageIndex": int(node.get_meta("page_index", 0)),
 					"rect": [
 						local_position.x,
 						local_position.y,
@@ -741,6 +756,23 @@ func get_text_rects() -> Array:
 				}
 			)
 	return rects
+
+
+func operation_feedback_snapshot() -> Dictionary:
+	var label := _text_nodes.get("operation_feedback_label") as Label
+	return {
+		"fullText": _feedback_full_text,
+		"pages": _feedback_pages.duplicate(),
+		"pageIndex": _feedback_page_index,
+		"visibleText": label.text if label != null else "",
+		"maxLines": label.max_lines_visible if label != null else 0,
+		"visibleLines": label.get_visible_line_count() if label != null else 0,
+		"overrun": (
+			label.text_overrun_behavior
+			if label != null
+			else TextServer.OVERRUN_NO_TRIMMING
+		),
+	}
 
 
 func get_portrait_rects() -> Array:
@@ -1667,7 +1699,11 @@ func _build_operation_feedback(avatar: Dictionary) -> void:
 			_feedback_active_key = ""
 			_feedback_hidden_key = ""
 			_feedback_expire_at_msec = 0
-		return
+			_feedback_pages.clear()
+			_feedback_page_index = 0
+			_feedback_page_elapsed = 0.0
+			_feedback_full_text = ""
+			return
 	var error_value: Variant = avatar.get("error", {})
 	var error: Dictionary = {}
 	if error_value is Dictionary:
@@ -1683,9 +1719,22 @@ func _build_operation_feedback(avatar: Dictionary) -> void:
 	if feedback_key != _feedback_active_key:
 		_feedback_active_key = feedback_key
 		_feedback_hidden_key = ""
+		_feedback_full_text = message
+		_feedback_pages = _split_feedback_pages(message)
+		_feedback_page_index = 0
+		_feedback_page_elapsed = 0.0
 		var lifetime_msec := 0
 		if status in ["success", "rejected", "error"]:
 			lifetime_msec = 1800 if status == "success" else 4000
+		if _feedback_pages.size() > 1:
+			lifetime_msec = maxi(
+				lifetime_msec,
+				int(ceil(
+					_feedback_pages.size()
+					* FEEDBACK_PAGE_DURATION_SECONDS
+					* 1000.0
+				)) + 500,
+			)
 		_feedback_expire_at_msec = (
 			Time.get_ticks_msec() + lifetime_msec
 			if lifetime_msec > 0
@@ -1700,6 +1749,17 @@ func _build_operation_feedback(avatar: Dictionary) -> void:
 				message += "　A 重试"
 			_:
 				message += "　R 重试"
+	if message != _feedback_full_text:
+		_feedback_full_text = message
+		_feedback_pages = _split_feedback_pages(message)
+		_feedback_page_index = 0
+		_feedback_page_elapsed = 0.0
+		if status in ["rejected", "error"] and _feedback_pages.size() > 1:
+			_feedback_expire_at_msec = Time.get_ticks_msec() + int(ceil(
+				_feedback_pages.size()
+				* FEEDBACK_PAGE_DURATION_SECONDS
+				* 1000.0
+			)) + 500
 	var panel := _new_section_frame(
 		"operation_feedback",
 		"ui.avatar-mode.basic-ninepatch.primary-frame",
@@ -1708,12 +1768,136 @@ func _build_operation_feedback(avatar: Dictionary) -> void:
 	if bool(retry_action.get("enabled", false)):
 		_add_intent_button(panel, retry_action, "retry")
 	panel.set_meta("feedback_status", status)
-	var label := _new_label("operation_feedback_label", message, 24, ink)
+	var visible_message := (
+		_balanced_feedback_lines(_feedback_pages[_feedback_page_index])
+		if not _feedback_pages.is_empty()
+		else message
+	)
+	var label := _new_label("operation_feedback_label", visible_message, 24, ink)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
 	label.max_lines_visible = 2
-	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	label.tooltip_text = _feedback_full_text
+	label.set_meta("full_text", _feedback_full_text)
+	label.set_meta("page_count", _feedback_pages.size())
+	label.set_meta("page_index", _feedback_page_index)
 	panel.add_child(label)
+
+
+func _update_operation_feedback_page(delta: float) -> void:
+	if _feedback_pages.size() <= 1:
+		return
+	_feedback_page_elapsed += delta
+	var next_index := int(floor(
+		_feedback_page_elapsed / FEEDBACK_PAGE_DURATION_SECONDS
+	)) % _feedback_pages.size()
+	if next_index == _feedback_page_index:
+		return
+	_feedback_page_index = next_index
+	var label := _text_nodes.get("operation_feedback_label") as Label
+	if label == null:
+		return
+	label.text = _balanced_feedback_lines(_feedback_pages[_feedback_page_index])
+	label.set_meta("page_index", _feedback_page_index)
+
+
+func _split_feedback_pages(value: String) -> Array[String]:
+	var normalized := _normalize_feedback_text(value)
+	var pages: Array[String] = []
+	var remaining := normalized
+	while _feedback_display_units(remaining) > FEEDBACK_PAGE_MAX_UNITS:
+		var remaining_units := _feedback_display_units(remaining)
+		var page_count := int(ceil(
+			remaining_units / FEEDBACK_PAGE_MAX_UNITS
+		))
+		var split_at := _feedback_split_index(
+			remaining,
+			remaining_units / float(page_count),
+			FEEDBACK_PAGE_MAX_UNITS,
+		)
+		pages.append(remaining.left(split_at).strip_edges())
+		remaining = remaining.substr(split_at).strip_edges()
+	if not remaining.is_empty():
+		pages.append(remaining)
+	return pages
+
+
+func _balanced_feedback_lines(value: String) -> String:
+	var units := _feedback_display_units(value)
+	if units <= FEEDBACK_LINE_MAX_UNITS:
+		return value
+	var split_at := _feedback_split_index(
+		value,
+		units / 2.0,
+		FEEDBACK_LINE_MAX_UNITS,
+	)
+	return "%s\n%s" % [
+		value.left(split_at).strip_edges(),
+		value.substr(split_at).strip_edges(),
+	]
+
+
+func _feedback_split_index(
+	value: String,
+	target_units: float,
+	max_units: float,
+) -> int:
+	const BREAKS := "。！？!?；;，,、：: "
+	var minimum_units := maxf(2.0, target_units * 0.6)
+	var units := 0.0
+	var fallback := 1
+	var fallback_distance := INF
+	var best := -1
+	var best_score := INF
+	for index: int in value.length():
+		var next_units := units + _feedback_character_units(value, index)
+		if next_units > max_units:
+			break
+		units = next_units
+		var distance := absf(units - target_units)
+		if distance <= fallback_distance:
+			fallback_distance = distance
+			fallback = index + 1
+		var character := value.substr(index, 1)
+		if units < minimum_units or not BREAKS.contains(character):
+			continue
+		if _feedback_display_units(value.substr(index + 1)) < minimum_units:
+			continue
+		var score := distance - (2.0 if "。！？!?；;".contains(character) else 0.5)
+		if score < best_score:
+			best_score = score
+			best = index + 1
+	return best if best >= 0 else fallback
+
+
+func _normalize_feedback_text(value: String) -> String:
+	var normalized := value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+	while normalized.contains("  "):
+		normalized = normalized.replace("  ", " ")
+	return normalized.strip_edges()
+
+
+func _feedback_display_units(value: String) -> float:
+	var units := 0.0
+	for index: int in value.length():
+		units += _feedback_character_units(value, index)
+	return units
+
+
+func _feedback_character_units(value: String, index: int) -> float:
+	var character := value.substr(index, 1)
+	if _font != null:
+		return maxf(
+			0.5,
+			_font.get_string_size(
+				character,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1.0,
+				24,
+			).x / 24.0,
+		)
+	return 1.0 if value.unicode_at(index) > 0x2E7F else 0.5
 
 
 func _layout_runtime() -> void:

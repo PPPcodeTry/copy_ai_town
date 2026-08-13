@@ -1871,6 +1871,14 @@ func _bubble_width(copy: String, identity_copy: String = "") -> float:
 		identity_width = float(
 			identity_copy.length() * PageTheme.SPEAKER_FONT_SIZE
 		)
+	# A line only slightly wider than the maximum used to wrap as “full line +
+	# one character”. Use the width of evenly distributed wrapped lines so the
+	# final visible line cannot collapse into a one-character tail.
+	if copy_width > BUBBLE_MAX_TEXT_WIDTH:
+		var wrapped_line_count := int(ceil(
+			copy_width / BUBBLE_MAX_TEXT_WIDTH
+		))
+		copy_width = ceil(copy_width / float(wrapped_line_count))
 	var measured_text_width := maxf(copy_width, identity_width)
 	return clampf(
 		measured_text_width + 52.0,
