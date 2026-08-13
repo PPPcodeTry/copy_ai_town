@@ -234,6 +234,8 @@ static func _apply_resident_action_migration(
 		if not execution_value is Dictionary:
 			continue
 		var execution := execution_value as Dictionary
+		if String(execution.get("status", "")) != "executing":
+			continue
 		var resident_id := String(execution.get("residentId", ""))
 		if resident_id.is_empty():
 			continue
@@ -295,13 +297,13 @@ static func _resident_action_matches_execution(
 ) -> bool:
 	var action_id := String(action.get("action_id", action.get("actionId", "")))
 	var execution_action_id := String(execution.get("actionId", ""))
-	if not action_id.is_empty() and action_id == execution_action_id:
-		return true
 	var action_source_id := String(action.get("sourceActionId", ""))
 	var execution_source_id := String(execution.get("sourceActionId", ""))
 	return (
-		not action_source_id.is_empty()
-		and not execution_source_id.is_empty()
+		not action_id.is_empty()
+		and action_id == execution_action_id
+		and String(action.get("sourceContract", ""))
+			== String(execution.get("sourceContract", ""))
 		and action_source_id == execution_source_id
 	)
 

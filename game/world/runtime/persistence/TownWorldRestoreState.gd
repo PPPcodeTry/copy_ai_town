@@ -785,6 +785,7 @@ static func _refresh_migrated_activity_action_routes(
 			or String(action.get("sourceContract", "")) not in [
 				"agent.activity",
 				"legacy.agent.use_prop",
+				"activity.perform",
 			]
 		):
 			continue

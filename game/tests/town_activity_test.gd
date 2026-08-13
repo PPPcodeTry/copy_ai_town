@@ -2481,6 +2481,8 @@ func _verify_save_restore(
 			"",
 		)
 	)
+	var historical_in_progress_execution := historical_execution.duplicate(true)
+	historical_in_progress_execution["status"] = "executing"
 	var legacy_action_migration := SAVE_SCHEMA_REGISTRY.migrate_world_state(
 		{
 			"activityRuntime": {
@@ -2488,13 +2490,14 @@ func _verify_save_restore(
 					SAVE_SCHEMA_REGISTRY
 					.ACTIVITY_SOURCE_FINGERPRINT_BEFORE_PUBLIC_DINING_SLOT_REWORK
 				),
-				"executions": [historical_execution.duplicate(true)],
+				"executions": [historical_in_progress_execution],
 			},
 			"residents": [
 				{
 					"residentId": "resident_su_tang_01",
 					"currentAction": {
 						"action_id": "activity-legacy-dining-prep",
+						"sourceContract": "agent.activity",
 						"sourceActionId": "legacy-dining-prep",
 						"prop": "公共食堂备餐柜",
 						"verb": "准备面团",
@@ -2522,6 +2525,89 @@ func _verify_save_restore(
 		migrated_legacy_action.get("verb"),
 		"准备面团",
 		"migrated in-progress resident action preserves the dough action",
+	)
+	var direct_activity_action_migration := SAVE_SCHEMA_REGISTRY.migrate_world_state(
+		{
+			"activityRuntime": {
+				"sourceFingerprint": (
+					SAVE_SCHEMA_REGISTRY
+					.ACTIVITY_SOURCE_FINGERPRINT_BEFORE_PUBLIC_DINING_SLOT_REWORK
+				),
+				"executions": [
+					{
+						"residentId": "resident_su_tang_01",
+						"actionId": "activity-direct-dining-prep",
+						"sourceContract": "activity.perform",
+						"sourceActionId": "",
+						"activityId": "activity_baker_prepare_dough",
+						"slotId": "slot_baker_prepare_dough_01",
+						"targetType": "prop",
+						"targetPropName": "公共食堂备餐柜",
+						"targetActionVerb": "准备面团",
+						"status": "executing",
+					},
+				],
+			},
+			"residents": [
+				{
+					"residentId": "resident_su_tang_01",
+					"currentAction": {
+						"action_id": "activity-direct-dining-prep",
+						"sourceContract": "activity.perform",
+						"sourceActionId": "",
+						"prop": "公共食堂备餐柜",
+						"verb": "准备面团",
+					},
+				},
+			],
+		},
+		current_activity_source,
+	)
+	var direct_activity_action := (
+		(
+			(direct_activity_action_migration.get("state", {}) as Dictionary)
+			.get("residents", []) as Array
+		)[0] as Dictionary
+		).get("currentAction", {}) as Dictionary
+	_expect_equal(
+		direct_activity_action.get("prop"),
+		"公共食堂面团操作台",
+		"direct activity.perform migration uses the current dough station",
+	)
+	var completed_collision_migration := SAVE_SCHEMA_REGISTRY.migrate_world_state(
+		{
+			"activityRuntime": {
+				"sourceFingerprint": (
+					SAVE_SCHEMA_REGISTRY
+					.ACTIVITY_SOURCE_FINGERPRINT_BEFORE_PUBLIC_DINING_SLOT_REWORK
+				),
+				"executions": [historical_execution.duplicate(true)],
+			},
+			"residents": [
+				{
+					"residentId": "resident_su_tang_01",
+					"currentAction": {
+						"action_id": "activity-legacy-dining-prep",
+						"sourceContract": "agent.activity",
+						"sourceActionId": "legacy-dining-prep",
+						"prop": "公共食堂备餐柜",
+						"verb": "准备面团",
+					},
+				},
+			],
+		},
+		current_activity_source,
+	)
+	var completed_collision_action := (
+		(
+			(completed_collision_migration.get("state", {}) as Dictionary)
+			.get("residents", []) as Array
+		)[0] as Dictionary
+		).get("currentAction", {}) as Dictionary
+	_expect_equal(
+		completed_collision_action.get("prop"),
+		"公共食堂备餐柜",
+		"completed activity execution does not rewrite a resident action",
 	)
 	var beta2_compatibility_migration := SAVE_SCHEMA_REGISTRY.migrate_world_state(
 		{
@@ -2656,6 +2742,62 @@ func _verify_save_restore(
 		true,
 		"恢复进行中的旧版活动会重建到新目标的路线终点",
 	)
+	var direct_active_legacy_snapshot := active_legacy_snapshot.duplicate(true)
+	var direct_active_legacy_state := (
+		direct_active_legacy_snapshot.get("state", {}) as Dictionary
+	)
+	var direct_active_legacy_runtime := (
+		direct_active_legacy_state.get("activityRuntime", {}) as Dictionary
+	)
+	var direct_active_legacy_execution := (
+		direct_active_legacy_runtime.get("executions", []) as Array
+	)[0] as Dictionary
+	direct_active_legacy_execution["sourceContract"] = "activity.perform"
+	direct_active_legacy_execution["sourceActionId"] = ""
+	var direct_active_legacy_resident := _saved_resident(
+		direct_active_legacy_state,
+		resident_id,
+	)
+	var direct_active_legacy_action := (
+		direct_active_legacy_resident.get("currentAction", {}) as Dictionary
+	)
+	direct_active_legacy_action["sourceContract"] = "activity.perform"
+	direct_active_legacy_action["sourceActionId"] = ""
+	var direct_active_legacy_world: RefCounted = WORLD.new()
+	var direct_active_legacy_restore := direct_active_legacy_world.call(
+		"restore_from_snapshot",
+		data,
+		opening,
+		direct_active_legacy_snapshot,
+	) as Dictionary
+	_expect_equal(
+		direct_active_legacy_restore.get("ok"),
+		true,
+		"直接 activity.perform 来源的旧版活动可以恢复",
+	)
+	var direct_active_legacy_migrated_state := (
+		(direct_active_legacy_world.call("create_save_snapshot") as Dictionary)
+		.get("snapshot", {}) as Dictionary
+	).get("state", {}) as Dictionary
+	var direct_active_legacy_migrated_action := (
+		_saved_resident(direct_active_legacy_migrated_state, resident_id)
+		.get("currentAction", {}) as Dictionary
+	)
+	_expect_equal(
+		direct_active_legacy_migrated_action.get("prop"),
+		"公共食堂面团操作台",
+		"直接 activity.perform 来源会同步更新居民当前道具",
+	)
+	_expect_equal(
+		(
+			_decoded_vector2(
+				direct_active_legacy_migrated_action.get("targetPosition")
+			)
+		).is_equal_approx(Vector2(680, 472)),
+		true,
+		"直接 activity.perform 来源会重建到新目标的路线终点",
+	)
+	direct_active_legacy_world.call("stop")
 	active_legacy_world.call("stop")
 	migrated_world.call("stop")
 	var drifted := snapshot.duplicate(true)
