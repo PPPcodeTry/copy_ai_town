@@ -2601,7 +2601,7 @@ func _verify_save_restore(
 	active_legacy_resident["currentPlace"] = "公共食堂"
 	active_legacy_resident["spaceId"] = "indoor_dining_hall"
 	active_legacy_resident["regionId"] = "region_portal_dining_hall_entry"
-	active_legacy_resident["position"] = Vector2(680, 376)
+	active_legacy_resident["position"] = _encoded_vector2(Vector2(680, 376))
 	active_legacy_resident["routeConnector"] = []
 	var active_legacy_action := (
 		active_legacy_resident.get("currentAction", {}) as Dictionary
@@ -2612,8 +2612,8 @@ func _verify_save_restore(
 	active_legacy_action["prop"] = "公共食堂备餐柜"
 	active_legacy_action["verb"] = "准备面团"
 	active_legacy_action["action_id"] = active_legacy_execution.get("actionId")
-	active_legacy_action["pathPoints"] = [Vector2(680, 376)]
-	active_legacy_action["targetPosition"] = Vector2(680, 376)
+	active_legacy_action["pathPoints"] = [_encoded_vector2(Vector2(680, 376))]
+	active_legacy_action["targetPosition"] = _encoded_vector2(Vector2(680, 376))
 	active_legacy_action["returnRouteConnector"] = []
 	active_legacy_resident["currentAction"] = active_legacy_action
 	active_legacy_runtime["sourceFingerprint"] = (
@@ -2651,8 +2651,7 @@ func _verify_save_restore(
 	)
 	_expect_equal(
 		(
-			active_legacy_migrated_action.get("targetPosition", Vector2.ZERO)
-			as Vector2
+			_decoded_vector2(active_legacy_migrated_action.get("targetPosition"))
 		).is_equal_approx(Vector2(680, 472)),
 		true,
 		"恢复进行中的旧版活动会重建到新目标的路线终点",
@@ -3188,6 +3187,15 @@ func _saved_resident(state: Dictionary, resident_id: String) -> Dictionary:
 		if String(resident.get("residentId", "")) == resident_id:
 			return resident
 	return {}
+
+
+func _encoded_vector2(point: Vector2) -> Dictionary:
+	return SAVE_CODEC.encode_checked(point).get("value", {}) as Dictionary
+
+
+func _decoded_vector2(value: Variant) -> Vector2:
+	var decoded := SAVE_CODEC.decode_checked(value) as Dictionary
+	return decoded.get("value", Vector2.ZERO) as Vector2
 
 
 
