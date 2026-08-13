@@ -26,7 +26,9 @@ void fragment() {
 	) {
 		discard;
 	}
-	COLOR = texture(TEXTURE, UV) * COLOR;
+	// Godot has already multiplied COLOR by TEXTURE before fragment() runs.
+	// Sampling TEXTURE again would square every RGB channel and visibly darken
+	// the foreground slice as soon as a character enters its activation area.
 }
 """
 
