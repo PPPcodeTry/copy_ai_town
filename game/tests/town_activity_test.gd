@@ -7926,3 +7926,10 @@ func _scenario_weather_activity_policy() -> void:
 			context.has("outdoorPolicy"),
 			"%s 必须提供稳定的户外策略" % weather,
 		)
+
+
+func _expect_ok(result: Dictionary, message: String) -> void:
+	_expect(
+		bool(result.get("ok", false)),
+		"%s（%s）" % [message, result.get("errorCode", "")],
+	)
