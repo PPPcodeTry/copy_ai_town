@@ -50,6 +50,7 @@ func _initialize() -> void:
 	_expect_equal(
 		_model_ids(catalog, "minimax"),
 		[
+			"MiniMax-M3",
 			"MiniMax-M2.7",
 			"MiniMax-M2.7-highspeed",
 			"MiniMax-M2.5",
@@ -58,7 +59,7 @@ func _initialize() -> void:
 			"MiniMax-M2.1-highspeed",
 			"MiniMax-M2",
 		],
-		"MiniMax exposes the current OpenAI-compatible text models",
+		"MiniMax exposes the current OpenAI-compatible models",
 	)
 	_expect_equal(
 		_model_ids(catalog, "volcengine-ark"),
@@ -161,6 +162,11 @@ func _initialize() -> void:
 		"DeepSeek declares text input explicitly",
 	)
 	_expect_equal(
+		catalog.call("model_descriptor", "minimax", "MiniMax-M3").get("input_modalities"),
+		["text", "image"],
+		"MiniMax M3 declares visual input explicitly",
+	)
+	_expect_equal(
 		catalog.call("model_descriptor", "aliyun-bailian", "qwen3.7-plus").get("input_modalities"),
 		["text", "image"],
 		"Qwen 3.7 Plus declares visual input explicitly",
@@ -212,6 +218,25 @@ func _initialize() -> void:
 			minimax_creation.get("provider").call("get_provider_descriptor").get("model_id"),
 			"MiniMax-M2.7",
 			"MiniMax model id reaches the shared adapter",
+		)
+	var minimax_m3_creation := catalog.call(
+		"create_model",
+		"minimax",
+		"MiniMax-M3",
+		null,
+		{"api_key": "test-key"},
+	) as Dictionary
+	_expect_equal(minimax_m3_creation.get("ok"), true, "catalog creates MiniMax M3 through the model seam")
+	if minimax_m3_creation.get("ok") == true:
+		_expect_equal(
+			minimax_m3_creation.get("provider").call("get_provider_descriptor").get("model_id"),
+			"MiniMax-M3",
+			"MiniMax M3 model id reaches the shared adapter",
+		)
+		_expect_equal(
+			minimax_m3_creation.get("provider").call("get_provider_descriptor").get("input_modalities"),
+			["text", "image"],
+			"MiniMax M3 visual input reaches the shared adapter",
 		)
 	if k3_creation.get("ok") == true:
 		_expect_equal(k3_creation.get("model_descriptor", {}).get("provider_id"), "kimi", "created K3 retains its route")

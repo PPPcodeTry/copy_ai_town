@@ -9,6 +9,7 @@ func _initialize() -> void:
 	_expect(provider_script != null, "MiniMax Provider script loads")
 	if provider_script != null:
 		_test_text_request(provider_script)
+		_test_m3_request(provider_script)
 		_test_unknown_model_rejected(provider_script)
 	_finish_suite("MINIMAX_PROVIDER_PROTOCOL_PASS")
 
@@ -72,6 +73,58 @@ func _test_text_request(provider_script: Script) -> void:
 		)
 
 
+func _test_m3_request(provider_script: Script) -> void:
+	var transport := FakeTransport.new()
+	transport.response = _success_response("minimax-m3-decision")
+	var provider: RefCounted = provider_script.new(null, transport, {
+		"api_key": "temporary-minimax-key",
+		"model": "MiniMax-M3",
+		"input_modalities": ["text", "image"],
+		"thinking_type": "enabled",
+	})
+	var collector := ResultCollector.new()
+	var image_messages := [{
+		"role": "user",
+		"content": [
+			{"type": "text", "text": "根据图片只返回决定 JSON"},
+			{
+				"type": "image_url",
+				"image_url": {"url": "https://example.invalid/town.png"},
+			},
+		],
+	}]
+	provider.call(
+		"request_decision",
+		{
+			"messages": image_messages,
+			"max_tokens": 600000,
+		},
+		collector.collect,
+	)
+
+	_expect_equal(
+		collector.values,
+		[{"ok": true, "decision": _decision("minimax-m3-decision")}],
+		"MiniMax M3 returns a provider-neutral decision",
+	)
+	_expect_equal(transport.requests.size(), 1, "MiniMax M3 sends one request")
+	if transport.requests.size() == 1:
+		var request := transport.requests[0]
+		var body := request.get("body", {}) as Dictionary
+		_expect_equal(body.get("model"), "MiniMax-M3", "MiniMax M3 sends its exact model id")
+		_expect_equal(
+			body.get("thinking"),
+			{"type": "disabled"},
+			"MiniMax M3 disables thinking for fast structured decisions",
+		)
+		_expect_equal(body.get("reasoning_split"), true, "MiniMax M3 separates reasoning from answer content")
+		_expect_equal(
+			body.get("max_completion_tokens"),
+			524288,
+			"MiniMax M3 uses its documented output token ceiling",
+		)
+		_expect(not body.has("max_tokens"), "MiniMax M3 omits the legacy max_tokens field")
+		_expect_equal(body.get("messages"), image_messages, "MiniMax M3 preserves image messages")
 func _test_unknown_model_rejected(provider_script: Script) -> void:
 	var provider: RefCounted = provider_script.new(null, null, {
 		"api_key": "temporary-minimax-key",
