@@ -43,6 +43,7 @@ const SEMANTIC_ICON_SIZE := 40.0
 const COMPACT_ICON_SIZE := 36.0
 const VALIDATION_ICON_SIZE := 32.0
 const PLACEHOLDER_ICON_SIZE := 64.0
+const MESSAGE_PAGE_DURATION_SECONDS := 2.5
 const ICON_PATHS := {
 	"success": ICON_ROOT + "success.svg",
 	"warning": ICON_ROOT + "warning.svg",
@@ -112,6 +113,12 @@ var _last_confirmed_data: Dictionary = {}
 var _revision := -1
 var _previous_focus: Control
 var _loading_elapsed := 0.0
+var _message_pages: Array[String] = []
+var _message_page_index := 0
+var _message_page_elapsed := 0.0
+var _message_page_signature := ""
+var _message_page_target: Label
+var _message_full_text := ""
 
 
 func _ready() -> void:
@@ -122,15 +129,15 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_message_page(delta)
 	if (
-		reduced_motion
-		or _icon == null
-		or _current_surface != "loading_overlay"
+		not reduced_motion
+		and _icon != null
+		and _current_surface == "loading_overlay"
 	):
-		return
-	_loading_elapsed += delta
-	var quarter_turn := int(floor(_loading_elapsed * 4.0)) % 4
-	_icon.rotation = float(quarter_turn) * PI * 0.5
+		_loading_elapsed += delta
+		var quarter_turn := int(floor(_loading_elapsed * 4.0)) % 4
+		_icon.rotation = float(quarter_turn) * PI * 0.5
 
 
 func configure(
@@ -520,6 +527,7 @@ func _layout() -> void:
 			_layout_map_anchor()
 		_:
 			_layout_toast()
+	_configure_message_pages()
 
 
 func _set_frame(
@@ -831,6 +839,229 @@ func _place_label(
 		else TextServer.AUTOWRAP_OFF
 	)
 	label.visible = true
+
+
+func message_page_count() -> int:
+	return _message_pages.size()
+
+
+func minimum_read_duration_msec() -> int:
+	return int(ceil(
+		maxi(1, _message_pages.size())
+		* MESSAGE_PAGE_DURATION_SECONDS
+		* 1000.0
+	)) + 500
+
+
+func runtime_text_snapshot() -> Dictionary:
+	return {
+		"surface": _current_surface,
+		"fullText": _message_full_text,
+		"pages": _message_pages.duplicate(),
+		"pageIndex": _message_page_index,
+		"visibleText": (
+			_message_page_target.text
+			if is_instance_valid(_message_page_target)
+			else ""
+		),
+		"maxLines": (
+			_message_page_target.max_lines_visible
+			if is_instance_valid(_message_page_target)
+			else 0
+		),
+		"visibleLines": (
+			_message_page_target.get_visible_line_count()
+			if is_instance_valid(_message_page_target)
+			else 0
+		),
+		"overrun": (
+			_message_page_target.text_overrun_behavior
+			if is_instance_valid(_message_page_target)
+			else TextServer.OVERRUN_NO_TRIMMING
+		),
+	}
+
+
+func _configure_message_pages() -> void:
+	var target_and_text := _message_target_and_text()
+	var target := target_and_text.get("target") as Label
+	var full_text := _normalize_message_text(
+		String(target_and_text.get("text", ""))
+	)
+	if target == null:
+		_message_pages.clear()
+		_message_page_target = null
+		_message_full_text = ""
+		_message_page_signature = ""
+		return
+	_message_page_target = target
+	var page_capacity := _message_page_capacity(target)
+	var signature := "%s|%s|%d|%s" % [
+		_current_surface,
+		target.name,
+		page_capacity,
+		full_text,
+	]
+	if signature != _message_page_signature:
+		_message_page_signature = signature
+		_message_pages = _split_message_pages(full_text, page_capacity)
+		_message_page_index = 0
+		_message_page_elapsed = 0.0
+	_message_full_text = full_text
+	target.tooltip_text = full_text
+	target.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	target.autowrap_mode = (
+		TextServer.AUTOWRAP_WORD_SMART
+		if target.max_lines_visible > 1
+		else TextServer.AUTOWRAP_OFF
+	)
+	target.text = (
+		_message_pages[_message_page_index]
+		if not _message_pages.is_empty()
+		else ""
+	)
+
+
+func _message_target_and_text() -> Dictionary:
+	var title := String(_feedback.get("title", "")).strip_edges()
+	var message := String(_feedback.get("message", "")).strip_edges()
+	var combined := title
+	if not message.is_empty():
+		combined = "%s：%s" % [title, message] if not title.is_empty() else message
+	match _current_surface:
+		"toast":
+			if expanded or size.y >= 148.0:
+				return {"target": _body, "text": message}
+			return {"target": _compact, "text": combined}
+		"dialog", "loading_overlay":
+			return {"target": _body, "text": message}
+		"asset_placeholder":
+			return {"target": _body, "text": message}
+		"disabled_reason", "validation", "map_anchor":
+			return {"target": _compact, "text": combined}
+	return {}
+
+
+func _message_page_capacity(label: Label) -> int:
+	var font_size := maxi(1, label.get_theme_font_size("font_size"))
+	var font := label.get_theme_font("font")
+	var line_height := (
+		font.get_height(font_size)
+		if font != null
+		else float(font_size)
+	)
+	var height_line_count := maxi(1, int(floor(label.size.y / line_height)))
+	var line_count := mini(
+		maxi(1, label.max_lines_visible),
+		height_line_count,
+	)
+	var units_per_line := maxi(4, int(floor(
+		label.size.x / (float(font_size) * 1.05)
+	)))
+	return maxi(4, units_per_line * line_count)
+
+
+func _update_message_page(delta: float) -> void:
+	if _message_pages.size() <= 1 or not is_instance_valid(_message_page_target):
+		return
+	_message_page_elapsed += delta
+	var next_index := int(
+		floor(_message_page_elapsed / MESSAGE_PAGE_DURATION_SECONDS)
+	) % _message_pages.size()
+	if next_index == _message_page_index:
+		return
+	_message_page_index = next_index
+	_message_page_target.text = _message_pages[_message_page_index]
+
+
+func _split_message_pages(value: String, max_units: int) -> Array[String]:
+	var result: Array[String] = []
+	var remaining := value.strip_edges()
+	while _message_display_units(remaining) > float(max_units):
+		var remaining_units := _message_display_units(remaining)
+		var page_count := int(ceil(remaining_units / float(max_units)))
+		var target_units := remaining_units / float(page_count)
+		var split_at := _message_split_index(
+			remaining,
+			target_units,
+			float(max_units),
+		)
+		var page := remaining.left(split_at).strip_edges()
+		if page.is_empty():
+			break
+		result.append(page)
+		remaining = remaining.substr(split_at).strip_edges()
+	if not remaining.is_empty():
+		result.append(remaining)
+	return result
+
+
+func _message_split_index(
+	value: String,
+	target_units: float,
+	max_units: float,
+) -> int:
+	const BREAKS := "。！？!?；;，,、：: "
+	var minimum_units := maxf(2.0, target_units * 0.6)
+	var units := 0.0
+	var fallback := 1
+	var fallback_distance := INF
+	var best := -1
+	var best_score := INF
+	for index: int in value.length():
+		var next_units := units + _message_character_units(value, index)
+		if next_units > max_units:
+			break
+		units = next_units
+		var distance := absf(units - target_units)
+		if distance <= fallback_distance:
+			fallback_distance = distance
+			fallback = index + 1
+		var character := value.substr(index, 1)
+		if units < minimum_units or not BREAKS.contains(character):
+			continue
+		if _message_display_units(value.substr(index + 1)) < minimum_units:
+			continue
+		var score := distance - (2.0 if "。！？!?；;".contains(character) else 0.5)
+		if score < best_score:
+			best_score = score
+			best = index + 1
+	return best if best >= 0 else fallback
+
+
+func _normalize_message_text(value: String) -> String:
+	var normalized := value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+	while normalized.contains("  "):
+		normalized = normalized.replace("  ", " ")
+	return normalized.strip_edges()
+
+
+func _message_display_units(value: String) -> float:
+	var units := 0.0
+	for index: int in value.length():
+		units += _message_character_units(value, index)
+	return units
+
+
+func _message_character_units(value: String, index: int) -> float:
+	var character := value.substr(index, 1)
+	if is_instance_valid(_message_page_target):
+		var font_size := maxi(
+			1,
+			_message_page_target.get_theme_font_size("font_size"),
+		)
+		var font := _message_page_target.get_theme_font("font")
+		if font != null:
+			return maxf(
+				0.5,
+				font.get_string_size(
+					character,
+					HORIZONTAL_ALIGNMENT_LEFT,
+					-1.0,
+					font_size,
+				).x / float(font_size),
+			)
+	return 1.0 if value.unicode_at(index) > 0x2E7F else 0.5
 
 
 func _toast_close_required() -> bool:

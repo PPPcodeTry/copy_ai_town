@@ -10,8 +10,13 @@ extends RefCounted
 
 const BUBBLE_HOLD_MSEC: int = 1200
 const MAX_BUBBLE_DISPLAY_UNITS: float = 18.0
+const MIN_BUBBLE_DISPLAY_UNITS: float = 4.0
 const STRONG_END_MARKS: String = "。！？!?；;"
+const WEAK_BREAK_MARKS: String = "，,、：:"
 const CLOSING_MARKS: String = "”’」』）】》〉\"'"
+const BUBBLE_FONT := preload(
+	"res://assets/fonts/zheng_ge_dian_hei_16/ZhengGeDianHei-16.ttf"
+)
 
 var _states: Dictionary = {}
 var _paused: bool = false
@@ -234,27 +239,164 @@ func _split_speech(value: String) -> Array[String]:
 		index += 1
 	_flush_sentence(current, sentences)
 	var result: Array[String] = []
+	var pending: String = ""
 	for sentence: String in sentences:
-		result.append_array(_split_long_sentence(sentence))
-	return result
+		for piece: String in _split_long_sentence(sentence):
+			if pending.is_empty():
+				pending = piece
+				continue
+			if (
+				_display_units(pending) + _display_units(piece)
+				<= MAX_BUBBLE_DISPLAY_UNITS
+			):
+				pending += piece
+				continue
+			result.append(pending)
+			pending = piece
+	_flush_sentence(pending, result)
+	return _rebalance_short_segments(result)
 
 
 func _split_long_sentence(value: String) -> Array[String]:
 	var result: Array[String] = []
-	var current: String = ""
+	var remaining: String = value.strip_edges()
+	while _display_units(remaining) > MAX_BUBBLE_DISPLAY_UNITS:
+		var remaining_units: float = _display_units(remaining)
+		var remaining_pages: int = int(ceil(
+			remaining_units / MAX_BUBBLE_DISPLAY_UNITS
+		))
+		var target_units: float = remaining_units / float(remaining_pages)
+		var split_at: int = _balanced_split_index(
+			remaining,
+			target_units,
+			MAX_BUBBLE_DISPLAY_UNITS,
+		)
+		if split_at <= 0 or split_at >= remaining.length():
+			split_at = _prefix_length_for_units(
+				remaining,
+				target_units,
+			)
+		var piece: String = remaining.substr(0, split_at).strip_edges()
+		if piece.is_empty():
+			break
+		result.append(piece)
+		remaining = remaining.substr(split_at).strip_edges()
+	if not remaining.is_empty():
+		result.append(remaining)
+	return result
+
+
+func _rebalance_short_segments(values: Array[String]) -> Array[String]:
+	var result: Array[String] = values.duplicate()
+	var index: int = 0
+	while index < result.size():
+		if (
+			result.size() <= 1
+			or _display_units(result[index]) >= MIN_BUBBLE_DISPLAY_UNITS
+		):
+			index += 1
+			continue
+		var neighbor_index: int = index - 1 if index > 0 else index + 1
+		var merged: String = (
+			result[neighbor_index] + result[index]
+			if neighbor_index < index
+			else result[index] + result[neighbor_index]
+		)
+		var replacement: Array[String] = _split_long_sentence(merged)
+		var replace_at: int = mini(index, neighbor_index)
+		result.remove_at(maxi(index, neighbor_index))
+		result.remove_at(replace_at)
+		for replacement_index: int in range(replacement.size() - 1, -1, -1):
+			result.insert(replace_at, replacement[replacement_index])
+		index = maxi(0, replace_at - 1)
+	return result
+
+
+func _balanced_split_index(
+	value: String,
+	target_units: float,
+	max_units: float,
+) -> int:
+	var minimum_units: float = maxf(
+		MIN_BUBBLE_DISPLAY_UNITS,
+		target_units * 0.6,
+	)
+	var best_index: int = -1
+	var best_score: float = INF
 	var units: float = 0.0
 	for index: int in value.length():
+		units += _character_units(value, index)
+		if units > max_units:
+			break
+		if units < minimum_units:
+			continue
 		var character: String = value.substr(index, 1)
-		var character_units: float = 1.0 if value.unicode_at(index) > 0x2E7F else 0.5
-		if not current.is_empty() and units + character_units > MAX_BUBBLE_DISPLAY_UNITS:
-			result.append(current.strip_edges())
-			current = ""
-			units = 0.0
-		current += character
-		units += character_units
-	if not current.strip_edges().is_empty():
-		result.append(current.strip_edges())
-	return result
+		if (
+			not STRONG_END_MARKS.contains(character)
+			and not WEAK_BREAK_MARKS.contains(character)
+			and character != " "
+		):
+			continue
+		var split_at: int = index + 1
+		while split_at < value.length():
+			var following: String = value.substr(split_at, 1)
+			if not CLOSING_MARKS.contains(following):
+				break
+			split_at += 1
+		if (
+			_display_units(value) > max_units
+			and _display_units(value.substr(split_at))
+			< MIN_BUBBLE_DISPLAY_UNITS
+		):
+			continue
+		var priority_bonus: float = (
+			3.0
+			if STRONG_END_MARKS.contains(character)
+			else (1.5 if WEAK_BREAK_MARKS.contains(character) else 0.5)
+		)
+		var score: float = absf(units - target_units) - priority_bonus
+		if score < best_score:
+			best_score = score
+			best_index = split_at
+	if best_index >= 0:
+		return best_index
+	return _prefix_length_for_units(value, target_units)
+
+
+func _prefix_length_for_units(value: String, target_units: float) -> int:
+	var units: float = 0.0
+	var best_index: int = 1
+	var best_distance: float = INF
+	for index: int in value.length():
+		var next_units: float = units + _character_units(value, index)
+		if next_units > MAX_BUBBLE_DISPLAY_UNITS:
+			break
+		units = next_units
+		var distance: float = absf(units - target_units)
+		if distance <= best_distance:
+			best_distance = distance
+			best_index = index + 1
+	return best_index
+
+
+func _display_units(value: String) -> float:
+	var units: float = 0.0
+	for index: int in value.length():
+		units += _character_units(value, index)
+	return units
+
+
+func _character_units(value: String, index: int) -> float:
+	var character: String = value.substr(index, 1)
+	return maxf(
+		0.5,
+		BUBBLE_FONT.get_string_size(
+			character,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			20,
+		).x / 20.0,
+	)
 
 
 func _flush_sentence(value: String, target: Array[String]) -> void:

@@ -65,6 +65,10 @@ const THOUGHT_FONT_SIZE := 20
 const SEMANTIC_THOUGHT_PAGE_MAX_UNITS := 16
 const SEMANTIC_THOUGHT_PAGE_DURATION_MSEC := 2000
 const SEMANTIC_ACTION_FONT_SIZE := 20
+const SEMANTIC_ACTION_PAGE_MAX_UNITS := 16
+const SEMANTIC_ACTION_PAGE_DURATION_MSEC := 2000
+const SEMANTIC_THOUGHT_LINE_MAX_UNITS := 11.0
+const SEMANTIC_ACTION_LINE_MAX_UNITS := 8.0
 const SEMANTIC_ACTION_LABEL_RECT := Rect2(68.0, 7.0, 177.0, 62.0)
 const SEMANTIC_BACKDROP_POSITION := Vector2(13.0, 17.0)
 const SEMANTIC_BACKDROP_SIZE := Vector2(46.0, 18.0)
@@ -113,6 +117,7 @@ var _slot_items: Array[Dictionary] = []
 var _slot_semantic_preview_signatures: Array[String] = []
 var _slot_semantic_preview_started_msec: Array[int] = []
 var _slot_semantic_preview_pages: Array[int] = []
+var _slot_semantic_action_pages: Array[int] = []
 var _slot_semantic_preview_modes: Array[String] = []
 var _action_icon_frames: Dictionary = {}
 var _action_markers: Dictionary = {}
@@ -332,6 +337,10 @@ func audit_snapshot() -> Dictionary:
 			"semanticDisplayMode": _slot_semantic_preview_modes[index],
 			"semanticThoughtPage": _slot_semantic_preview_pages[index],
 			"semanticThoughtPageCount": _semantic_thought_pages(item).size(),
+			"semanticThoughtPages": _semantic_thought_pages(item),
+			"semanticActionPage": _slot_semantic_action_pages[index],
+			"semanticActionPageCount": _semantic_action_pages(item).size(),
+			"semanticActionPages": _semantic_action_pages(item),
 			"labelRect": Rect2(
 				_slot_labels[index].position,
 				_slot_labels[index].size,
@@ -350,6 +359,15 @@ func audit_snapshot() -> Dictionary:
 			"labelLineCount": _slot_labels[index].get_line_count(),
 			"labelVisibleLineCount": (
 				_slot_labels[index].get_visible_line_count()
+			),
+			"behaviorLabelMaxLinesVisible": (
+				_slot_behavior_labels[index].max_lines_visible
+			),
+			"behaviorLabelLineCount": (
+				_slot_behavior_labels[index].get_line_count()
+			),
+			"behaviorLabelVisibleLineCount": (
+				_slot_behavior_labels[index].get_visible_line_count()
 			),
 			"dotsVisible": false,
 			"skinPath": (
@@ -601,7 +619,7 @@ func _ensure_slot_count(required_count: int) -> void:
 		behavior_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 		behavior_label.clip_text = true
 		behavior_label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
-		behavior_label.max_lines_visible = 1
+		behavior_label.max_lines_visible = 2
 		behavior_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		behavior_label.add_theme_font_override("font", FONT)
 		behavior_label.add_theme_font_size_override(
@@ -619,6 +637,7 @@ func _ensure_slot_count(required_count: int) -> void:
 		_slot_semantic_preview_signatures.append("")
 		_slot_semantic_preview_started_msec.append(0)
 		_slot_semantic_preview_pages.append(0)
+		_slot_semantic_action_pages.append(0)
 		_slot_semantic_preview_modes.append("")
 
 		var button := Button.new()
@@ -1031,10 +1050,6 @@ func _render_semantic_preview(
 ) -> void:
 	var pages := _semantic_thought_pages(item)
 	var signature := _semantic_preview_signature(item)
-	if pages.is_empty():
-		_slot_semantic_preview_modes[index] = "action"
-		_render_semantic_action(index, item)
-		return
 	if _slot_semantic_preview_signatures[index] != signature:
 		_slot_semantic_preview_signatures[index] = signature
 		_slot_semantic_preview_started_msec[index] = int(
@@ -1043,16 +1058,26 @@ func _render_semantic_preview(
 		if _slot_semantic_preview_started_msec[index] == 0:
 			_slot_semantic_preview_started_msec[index] = now_msec
 		_slot_semantic_preview_pages[index] = 0
-		_slot_semantic_preview_modes[index] = "thought"
+		_slot_semantic_action_pages[index] = 0
+		_slot_semantic_preview_modes[index] = (
+			"action" if pages.is_empty() else "thought"
+		)
 	var elapsed_msec := maxi(
 		0,
 		now_msec - _slot_semantic_preview_started_msec[index],
 	)
-	if elapsed_msec >= pages.size() * SEMANTIC_THOUGHT_PAGE_DURATION_MSEC:
+	var thought_duration_msec := (
+		pages.size() * SEMANTIC_THOUGHT_PAGE_DURATION_MSEC
+	)
+	if elapsed_msec >= thought_duration_msec:
 		_slot_semantic_preview_modes[index] = "action"
 		_slot_semantic_preview_pages[index] = pages.size()
 	if _slot_semantic_preview_modes[index] == "action":
-		_render_semantic_action(index, item)
+		_render_semantic_action(
+			index,
+			item,
+			maxi(0, elapsed_msec - thought_duration_msec),
+		)
 		return
 	var page_index := mini(
 		int(elapsed_msec / SEMANTIC_THOUGHT_PAGE_DURATION_MSEC),
@@ -1066,7 +1091,10 @@ func _render_semantic_thought(index: int, thought_page: String) -> void:
 	var skin := _slot_skins[index]
 	var label := _slot_labels[index]
 	skin.texture = THOUGHT_SHELL
-	label.text = thought_page
+	label.text = _balanced_two_line_text(
+		thought_page,
+		SEMANTIC_THOUGHT_LINE_MAX_UNITS,
+	)
 	label.position = Vector2(14.0, 7.0)
 	label.size = Vector2(239.0, 62.0)
 	label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
@@ -1080,7 +1108,11 @@ func _render_semantic_thought(index: int, thought_page: String) -> void:
 	_slot_behavior_labels[index].visible = false
 
 
-func _render_semantic_action(index: int, item: Dictionary) -> void:
+func _render_semantic_action(
+	index: int,
+	item: Dictionary,
+	action_elapsed_msec: int,
+) -> void:
 	var skin := _slot_skins[index]
 	var icon := _slot_icons[index]
 	var marker := _slot_markers[index]
@@ -1088,8 +1120,20 @@ func _render_semantic_action(index: int, item: Dictionary) -> void:
 	skin.texture = THOUGHT_SHELL
 	icon.position = Vector2(18.0, 14.0)
 	marker.position = Vector2(54.0, 8.0)
-	behavior_label.text = _normalized_bubble_line(
-		String(item.get("activeActionLabel", item.get("label", ""))),
+	var action_pages := _semantic_action_pages(item)
+	var page_index := 0
+	if action_pages.size() > 1:
+		page_index = int(
+			action_elapsed_msec / SEMANTIC_ACTION_PAGE_DURATION_MSEC
+		) % action_pages.size()
+	_slot_semantic_action_pages[index] = page_index
+	behavior_label.text = (
+		_balanced_two_line_text(
+			action_pages[page_index],
+			SEMANTIC_ACTION_LINE_MAX_UNITS,
+		)
+		if not action_pages.is_empty()
+		else ""
 	)
 	behavior_label.visible = not behavior_label.text.is_empty()
 	_slot_labels[index].visible = false
@@ -1099,6 +1143,7 @@ func _reset_semantic_preview(index: int) -> void:
 	_slot_semantic_preview_signatures[index] = ""
 	_slot_semantic_preview_started_msec[index] = 0
 	_slot_semantic_preview_pages[index] = 0
+	_slot_semantic_action_pages[index] = 0
 	_slot_semantic_preview_modes[index] = ""
 	_slot_behavior_labels[index].text = ""
 	_slot_behavior_labels[index].visible = false
@@ -1112,7 +1157,12 @@ func _semantic_preview_signature(item: Dictionary) -> String:
 	return "%s|%s|%s" % [
 		resident_id,
 		action_id,
-		_normalized_bubble_line(String(item.get("thoughtLabel", ""))),
+		"%s|%s" % [
+			_normalized_public_bubble_line(String(item.get("thoughtLabel", ""))),
+			_normalized_public_bubble_line(
+				String(item.get("activeActionLabel", item.get("label", "")))
+			),
+		],
 	]
 
 
@@ -1121,21 +1171,103 @@ func _semantic_thought_pages(item: Dictionary) -> Array[String]:
 
 
 func _split_thought_pages(value: String) -> Array[String]:
-	var normalized := _normalized_bubble_line(value)
+	return _split_balanced_display_pages(
+		_normalized_public_bubble_line(value),
+		float(SEMANTIC_THOUGHT_PAGE_MAX_UNITS),
+	)
+
+
+func _semantic_action_pages(item: Dictionary) -> Array[String]:
+	return _split_balanced_display_pages(
+		_normalized_public_bubble_line(
+			String(item.get("activeActionLabel", item.get("label", "")))
+		),
+		float(SEMANTIC_ACTION_PAGE_MAX_UNITS),
+	)
+
+
+func _split_balanced_display_pages(
+	value: String,
+	max_units: float,
+) -> Array[String]:
 	var pages: Array[String] = []
-	if normalized.is_empty():
-		return pages
-	var page_start := 0
-	var units := 0.0
-	for index: int in normalized.length():
-		var char_units := 1.0 if normalized.unicode_at(index) > 0x2E7F else 0.5
-		if index > page_start and units + char_units > SEMANTIC_THOUGHT_PAGE_MAX_UNITS:
-			pages.append(normalized.substr(page_start, index - page_start).strip_edges())
-			page_start = index
-			units = 0.0
-		units += char_units
-	pages.append(normalized.substr(page_start).strip_edges())
+	var remaining := value.strip_edges()
+	while _display_units(remaining) > max_units:
+		var remaining_units := _display_units(remaining)
+		var remaining_pages := int(ceil(remaining_units / max_units))
+		var target_units := remaining_units / float(remaining_pages)
+		var split_at := _balanced_display_split_index(
+			remaining,
+			target_units,
+			max_units,
+		)
+		var page := remaining.left(split_at).strip_edges()
+		if page.is_empty():
+			break
+		pages.append(page)
+		remaining = remaining.substr(split_at).strip_edges()
+	if not remaining.is_empty():
+		pages.append(remaining)
 	return pages
+
+
+func _balanced_two_line_text(value: String, line_max_units: float) -> String:
+	var normalized := value.strip_edges()
+	var total_units := _display_units(normalized)
+	if normalized.is_empty() or total_units <= line_max_units:
+		return normalized
+	var split_at := _balanced_display_split_index(
+		normalized,
+		total_units / 2.0,
+		line_max_units,
+	)
+	if split_at <= 0 or split_at >= normalized.length():
+		return normalized
+	return "%s\n%s" % [
+		normalized.left(split_at).strip_edges(),
+		normalized.substr(split_at).strip_edges(),
+	]
+
+
+func _balanced_display_split_index(
+	value: String,
+	target_units: float,
+	max_units: float,
+) -> int:
+	const NATURAL_BREAKS := "。！？!?；;，,、：: "
+	var minimum_units := maxf(2.0, target_units * 0.6)
+	var units := 0.0
+	var best_index := -1
+	var best_score := INF
+	var fallback_index := 1
+	var fallback_distance := INF
+	for index: int in value.length():
+		var next_units := units + _character_display_units(value, index)
+		if next_units > max_units:
+			break
+		units = next_units
+		var distance := absf(units - target_units)
+		if distance <= fallback_distance:
+			fallback_distance = distance
+			fallback_index = index + 1
+		var character := value.substr(index, 1)
+		if units < minimum_units or not NATURAL_BREAKS.contains(character):
+			continue
+		if (
+			_display_units(value) > max_units
+			and _display_units(value.substr(index + 1)) < minimum_units
+		):
+			continue
+		var priority_bonus := (
+			3.0
+			if "。！？!?；;".contains(character)
+			else (1.5 if "，,、：:".contains(character) else 0.5)
+		)
+		var score := distance - priority_bonus
+		if score < best_score:
+			best_score = score
+			best_index = index + 1
+	return best_index if best_index >= 0 else fallback_index
 
 
 func _compact_public_thought(value: String) -> String:
@@ -1168,11 +1300,7 @@ func _single_bubble_line(value: String, max_length: int) -> String:
 
 
 func _normalized_bubble_line(value: String) -> String:
-	var normalized := value.strip_edges()
-	for separator: String in ["\r", "\n", "\t"]:
-		normalized = normalized.replace(separator, " ")
-	while normalized.contains("  "):
-		normalized = normalized.replace("  ", " ")
+	var normalized := _normalized_public_bubble_line(value)
 	while normalized.ends_with("…"):
 		normalized = normalized.left(normalized.length() - 1).strip_edges()
 	while normalized.ends_with("..."):
@@ -1180,15 +1308,46 @@ func _normalized_bubble_line(value: String) -> String:
 	return normalized
 
 
+func _normalized_public_bubble_line(value: String) -> String:
+	var normalized := value.strip_edges()
+	for separator: String in ["\r", "\n", "\t"]:
+		normalized = normalized.replace(separator, " ")
+	while normalized.contains("  "):
+		normalized = normalized.replace("  ", " ")
+	return normalized
+
+
 # 中英混排下按字符数截断会偏差很大：拉丁字符按半个汉字宽度计。
 func _trim_by_display_width(value: String, max_cjk_units: float) -> String:
+	if _display_units(value) <= max_cjk_units:
+		return value
 	var units := 0.0
 	for index: int in value.length():
-		var char_units := 1.0 if value.unicode_at(index) > 0x2E7F else 0.5
-		if units + char_units > max_cjk_units - 1.0 and index < value.length() - 1:
+		var char_units := _character_display_units(value, index)
+		if units + char_units > max_cjk_units - 1.0:
 			return value.substr(0, index).strip_edges() + "…"
 		units += char_units
 	return value
+
+
+func _display_units(value: String) -> float:
+	var units := 0.0
+	for index: int in value.length():
+		units += _character_display_units(value, index)
+	return units
+
+
+func _character_display_units(value: String, index: int) -> float:
+	var character := value.substr(index, 1)
+	return maxf(
+		0.5,
+		FONT.get_string_size(
+			character,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			THOUGHT_FONT_SIZE,
+		).x / float(THOUGHT_FONT_SIZE),
+	)
 
 
 func _configure_slot_action(index: int, item: Dictionary) -> void:
