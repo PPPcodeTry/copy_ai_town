@@ -78,6 +78,9 @@ const RESIDENT_WARDROBE_CATALOG_PATH := (
 const CONVERSATION_BUBBLE_PLAYBACK := preload(
 	"res://world/presentation/ui/TownConversationBubblePlayback.gd"
 )
+const HUD_TEXT_FONT := preload(
+	"res://assets/fonts/zheng_ge_dian_hei_16/ZhengGeDianHei-16.ttf"
+)
 
 var _runtime: Node
 var _runtime_head_anchor_call := Callable()
@@ -2995,17 +2998,50 @@ func _hud_public_thought_text(value: String) -> String:
 		normalized = normalized.replace(separator, " ")
 	while normalized.contains("  "):
 		normalized = normalized.replace("  ", " ")
-	const MAX_BUBBLE_TEXT_LENGTH := 18
-	if normalized.length() <= MAX_BUBBLE_TEXT_LENGTH:
+	const MAX_BUBBLE_DISPLAY_UNITS := 18.0
+	const ELLIPSIS_DISPLAY_UNITS := 1.0
+	if _hud_text_display_units(normalized) <= MAX_BUBBLE_DISPLAY_UNITS:
 		return normalized
-	for separator: String in ["。", "！", "？", "；"]:
-		var separator_index := normalized.find(separator)
-		if (
-			separator_index >= 3
-			and separator_index < MAX_BUBBLE_TEXT_LENGTH
-		):
-			return normalized.left(separator_index + 1)
-	return normalized.left(MAX_BUBBLE_TEXT_LENGTH - 1) + "…"
+	var content_limit := MAX_BUBBLE_DISPLAY_UNITS - ELLIPSIS_DISPLAY_UNITS
+	var split_at := _hud_prefix_length_for_display_units(
+		normalized,
+		content_limit,
+	)
+	var prefix := normalized.left(split_at).strip_edges()
+	return prefix if prefix.ends_with("…") else prefix + "…"
+
+
+func _hud_prefix_length_for_display_units(
+	value: String,
+	max_units: float,
+) -> int:
+	var units := 0.0
+	for index: int in value.length():
+		var next_units := units + _hud_character_display_units(value, index)
+		if next_units > max_units:
+			return index
+		units = next_units
+	return value.length()
+
+
+func _hud_text_display_units(value: String) -> float:
+	var units := 0.0
+	for index: int in value.length():
+		units += _hud_character_display_units(value, index)
+	return units
+
+
+func _hud_character_display_units(value: String, index: int) -> float:
+	var character := value.substr(index, 1)
+	return maxf(
+		0.5,
+		HUD_TEXT_FONT.get_string_size(
+			character,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1.0,
+			20,
+		).x / 20.0,
+	)
 
 
 func _hud_public_thought_before(left: Dictionary, right: Dictionary) -> bool:

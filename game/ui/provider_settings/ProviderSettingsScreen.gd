@@ -31,6 +31,9 @@ const CONNECTION_NAME_INPUT_TEXTURE := preload(
 	"res://assets/ui/common/formal_dialog_v1/runtime/"
 	+ "formal_dialog_connection_name_input_v2_1024x192.png"
 )
+const CONNECTION_MESSAGE_FONT := preload(
+	"res://assets/fonts/zheng_ge_dian_hei_16/ZhengGeDianHei-16.ttf"
+)
 
 const SCOPE := &"provider_settings"
 const MAP_TEXTURE_PATH := "res://world/maps/town/assets/town.png"
@@ -664,6 +667,7 @@ func runtime_gate_snapshot() -> Dictionary:
 		text_slots.append({
 			"id": str(label.get_meta("gate_id", label.name)),
 			"text": label.text,
+			"fullText": str(label.get_meta("full_text", label.text)),
 			"rect": _rect_to_array(
 				Rect2(label.global_position, label.size)
 			),
@@ -681,6 +685,9 @@ func runtime_gate_snapshot() -> Dictionary:
 				== TextServer.OVERRUN_TRIM_ELLIPSIS
 			),
 			"maxLines": label.max_lines_visible,
+			"lineCount": label.get_line_count(),
+			"visibleLineCount": label.get_visible_line_count(),
+			"clipText": label.clip_text,
 			"ownerRect": _gate_owner_rect(label),
 			"paperRect": _gate_paper_rect(label),
 		})
@@ -2523,8 +2530,12 @@ func _build_status_section(provider: Dictionary) -> Control:
 		"connection_status_message"
 	)
 	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	message.max_lines_visible = 2
-	message.custom_minimum_size.y = _message_slot_height()
+	message.max_lines_visible = -1
+	message.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	message.clip_text = false
+	message.tooltip_text = message.text
+	message.custom_minimum_size.y = _connection_message_height(message)
+	message.set_meta("full_text", message.text)
 	status_column.add_child(message)
 	_check_button = _button(
 		"检查中…"
@@ -3302,6 +3313,31 @@ func _message_slot_height() -> float:
 			return 72
 		_:
 			return 60
+
+
+func _connection_message_height(label: Label) -> float:
+	var value := label.text
+	var font_size := maxi(1, _body_font_size())
+	var display_units := 0.0
+	for index: int in value.length():
+		var character := value.substr(index, 1)
+		display_units += maxf(
+			0.5,
+			CONNECTION_MESSAGE_FONT.get_string_size(
+				character,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1.0,
+				font_size,
+			).x / float(font_size),
+		)
+	var units_per_line := (
+		42.0
+		if _layout_profile == "desktop_wide"
+		else (30.0 if _layout_profile == "desktop_compact" else 20.0)
+	)
+	var line_count := maxi(1, int(ceil(display_units / units_per_line)))
+	var line_height := float(_body_font_size() + 10)
+	return maxf(_message_slot_height(), line_count * line_height)
 
 
 func _model_card_height() -> float:
