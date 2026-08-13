@@ -6,6 +6,19 @@ const RESIDENT_PLACE_CHANGE_SIGNAL_BUDGET_PER_ADVANCE := 1
 const PERCEPTION_MAX_DEFERRED_ADVANCES := 12
 
 
+static func should_defer_agent_dispatch(world_advance: Dictionary) -> bool:
+	return (
+		int(world_advance.get("minutesAdvanced", 0)) > 0
+		or int(
+			world_advance.get("deferredPresentationRefreshesProcessed", 0)
+		) > 0
+		or int(
+			world_advance.get("deferredPlaceChangeSignalsProcessed", 0)
+		) > 0
+		or bool(world_advance.get("deferredPerceptionProcessed", false))
+	)
+
+
 static func reset(world) -> void:
 	world._deferred_resident_state_refreshes.clear()
 	world._deferred_resident_state_refresh_keys.clear()

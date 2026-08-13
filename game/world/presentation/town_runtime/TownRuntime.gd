@@ -14,6 +14,9 @@ const RESULT_SHAPES := preload(
 const WORLD_DATA_PATH := "res://world/data/town/town_world.json"
 const OPENING := preload("res://world/runtime/TownWorldOpeningConfig.gd")
 const WORLD := preload("res://world/runtime/TownWorldRuntime.gd")
+const FRAME_BUDGET_RUNTIME := preload(
+	"res://world/runtime/presentation/TownWorldFrameBudgetRuntime.gd"
+)
 const RESIDENT_PRESENTATION := preload(
 	"res://world/presentation/residents/ResidentCharacterPresentation.gd"
 )
@@ -73,6 +76,8 @@ const RESIDENT_ACTION_MENU_EXTENTS := Vector4(196.0, 341.0, 196.0, 14.0)
 const REQUIRED_AGENT_GATEWAY_METHODS: Array[String] = [
 	"bind_world",
 	"pump",
+	"pump_frame_budgeted",
+	"prioritize_next_conversation_turn",
 	"get_connected_resident_names",
 	"get_errors",
 ]
@@ -285,14 +290,17 @@ func _process(delta: float) -> void:
 	phase_started_usec = (
 		Time.get_ticks_usec() if _frame_profile_enabled else 0
 	)
-	_world.advance(delta)
+	var world_advance := _world.advance(delta) as Dictionary
 	if _frame_profile_enabled:
 		profile["worldUsec"] = (
 			Time.get_ticks_usec() - phase_started_usec
 		)
 		phase_started_usec = Time.get_ticks_usec()
-	_pump_agent_gateway_for_frame()
+	_pump_agent_gateway_for_frame(world_advance)
 	if _frame_profile_enabled:
+		profile["agentDeferredCount"] = 1 if FRAME_BUDGET_RUNTIME.should_defer_agent_dispatch(
+			world_advance,
+		) else 0
 		profile["agentUsec"] = (
 			Time.get_ticks_usec() - phase_started_usec
 		)
@@ -1578,6 +1586,7 @@ func player_start_conversation(target_name: String, say: String, narration: Stri
 	_show_player_command_feedback(result)
 	if result.get("ok") == true and _agent_gateway != null:
 		_hold_agent_dispatch_for_conversation_first_frame()
+		_agent_gateway.prioritize_next_conversation_turn()
 	return result
 
 
@@ -1614,6 +1623,7 @@ func player_reply_conversation_with_photos(
 	_show_player_command_feedback(result)
 	if result.get("ok") == true and _agent_gateway != null:
 		_hold_agent_dispatch_for_conversation_first_frame()
+		_agent_gateway.prioritize_next_conversation_turn()
 	return result
 
 
@@ -1633,8 +1643,12 @@ func _hold_agent_dispatch_for_conversation_first_frame() -> void:
 	)
 
 
-func _pump_agent_gateway_for_frame() -> void:
+func _pump_agent_gateway_for_frame(world_advance: Dictionary = {}) -> void:
 	if _agent_gateway == null:
+		return
+	# 分钟结算、居民表现刷新、地点通知和感知刷新都可能在同一帧聚集大量
+	# 主线程工作；把 Agent 的准备和派发留到下一帧，避免两段重活叠加。
+	if FRAME_BUDGET_RUNTIME.should_defer_agent_dispatch(world_advance):
 		return
 	if _agent_dispatch_not_before_drawn_frame >= 0:
 		if DisplayServer.get_name() == "headless":
@@ -1651,7 +1665,7 @@ func _pump_agent_gateway_for_frame() -> void:
 		_agent_dispatch_hold_process_turns = 0
 		_agent_dispatch_not_before_drawn_frame = -1
 		_agent_dispatch_first_draw_deadline_msec = 0
-	_agent_gateway.pump(AGENT_DISPATCH_BUDGET_PER_FRAME,)
+	_agent_gateway.pump_frame_budgeted(AGENT_DISPATCH_BUDGET_PER_FRAME,)
 
 
 func player_end_conversation(conversation_id: String, narration: String) -> Dictionary:
@@ -1848,7 +1862,7 @@ func _start_world() -> void:
 		_fail_start("Agent Gateway 初始化失败：%s" % "; ".join(gateway_result.get("errors", [])))
 		return
 	if _agent_gateway != null:
-		_agent_gateway.pump(AGENT_DISPATCH_BUDGET_PER_FRAME,)
+		_agent_gateway.pump_frame_budgeted(AGENT_DISPATCH_BUDGET_PER_FRAME,)
 	_ui_adapter = UI_ADAPTER.new()
 	_ui_adapter.name = "TownUiAdapter"
 	add_child(_ui_adapter)

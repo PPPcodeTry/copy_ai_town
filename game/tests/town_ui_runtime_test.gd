@@ -1285,6 +1285,10 @@ class AgentGatewayPumpSpy:
 	extends Node
 	var pump_limits: Array[int] = []
 
+	func pump_frame_budgeted(max_requests := 1) -> int:
+		pump_limits.append(max_requests)
+		return 1
+
 	func pump(max_requests := -1) -> int:
 		pump_limits.append(max_requests)
 		return 1

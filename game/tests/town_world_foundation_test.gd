@@ -2967,6 +2967,9 @@ func _scenario_staggered_arrival() -> void:
 
 	var expected_arrival_count := 0
 	var first_arrival_checked := false
+	var first_arrival_resident_id := ""
+	var first_arrival_absolute_minute := -1
+	var first_arrival_bridge_released := false
 	while (
 		_absolute_minute(world.call("get_time"))
 		< scheduled_minutes[-1]
@@ -2999,6 +3002,10 @@ func _scenario_staggered_arrival() -> void:
 		)
 		if expected_arrival_count == 1 and not first_arrival_checked:
 			first_arrival_checked = true
+			first_arrival_resident_id = String(
+				present_states[0].get("residentId", "")
+			)
+			first_arrival_absolute_minute = current_absolute
 			var arrival_resident := (
 				(world.call("residents") as Dictionary).get(
 					String(present_states[0].get("residentId", "")),
@@ -3048,6 +3055,27 @@ func _scenario_staggered_arrival() -> void:
 				true,
 				"the arrival decision bridge remains saveable",
 			)
+		if (
+			first_arrival_checked
+			and not first_arrival_bridge_released
+			and current_absolute >= first_arrival_absolute_minute + 1
+		):
+			var first_arrival_after_bridge := (
+				(world.call("residents") as Dictionary).get(
+					first_arrival_resident_id,
+					{},
+				) as Dictionary
+			)
+			_expect(
+				(first_arrival_after_bridge.get("currentAction", {}) as Dictionary).is_empty(),
+				"the arrival bridge ends after its one-minute entry walk instead of adding a second idle minute",
+			)
+			_expect_equal(
+				first_arrival_after_bridge.get("decisionPending"),
+				true,
+				"ending the arrival bridge keeps the pending Agent decision alive",
+			)
+			first_arrival_bridge_released = true
 	_expect_equal(
 		_present_states(
 			world.call("get_all_resident_states") as Array,

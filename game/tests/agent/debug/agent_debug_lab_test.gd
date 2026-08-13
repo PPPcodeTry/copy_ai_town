@@ -71,6 +71,32 @@ func _initialize() -> void:
 	call_deferred("_run")
 
 
+func _wait_for_avatar_conversation_turn(
+	session: Node,
+	resident_name: String,
+) -> bool:
+	var adapter := session.call("conversation_adapter") as Node
+	for _frame_index in 120:
+		var view_model := adapter.call("get_view_model", "conversation") as Dictionary
+		var data := view_model.get("data", {}) as Dictionary
+		var messages := data.get("messages", []) as Array
+		var waiting_for := data.get("waitingFor", []) as Array
+		var player_name := ""
+		if not messages.is_empty() and messages[0] is Dictionary:
+			player_name = String((messages[0] as Dictionary).get("speaker", ""))
+		if (
+			messages.size() >= 2
+			and messages.back() is Dictionary
+			and String((messages.back() as Dictionary).get("speaker", "")) == resident_name
+			and not bool(data.get("conversationEnded", false))
+			and not player_name.is_empty()
+			and waiting_for.has(player_name)
+		):
+			return true
+		await process_frame
+	return false
+
+
 func _run() -> void:
 	var live_session := HealthGateSession.new()
 	root.add_child(live_session)
@@ -112,6 +138,7 @@ func _run() -> void:
 	var residents := snapshot.get("residents", []) as Array
 	if not residents.is_empty():
 		var resident_id := String((residents[0] as Dictionary).get("residentId", ""))
+		var resident_name := String((residents[0] as Dictionary).get("residentName", ""))
 		var debug := session.call("resident_debug_snapshot", resident_id) as Dictionary
 		_expect(not (debug.get("initialization", {}) as Dictionary).is_empty(), "可查看 World 初始化资料")
 		_expect(debug.get("memory") is Dictionary, "可查看正式 Memory System 快照")
@@ -122,34 +149,35 @@ func _run() -> void:
 			"今天过得怎么样？",
 		) as Dictionary
 		_expect_ok(conversation, "人工测试由旅行者化身通过正式对话命令发起")
-		for _frame in 120:
-			if int(session.call("pending_decision_count")) == 0:
-				break
-			await process_frame
+		_expect(
+			await _wait_for_avatar_conversation_turn(session, resident_name),
+			"同居民首轮等待正式 Agent 回复并轮到化身回应",
+		)
 		var reply := session.call(
 			"begin_avatar_conversation",
 			resident_id,
 			"那你接下来有什么计划？",
 		) as Dictionary
 		_expect_ok(reply, "同居民下一轮等待正式 Agent 回复后继续")
-		for _frame in 120:
-			if int(session.call("pending_decision_count")) == 0:
-				break
-			await process_frame
+		_expect(
+			await _wait_for_avatar_conversation_turn(session, resident_name),
+			"同居民第二轮等待正式 Agent 回复并轮到化身回应",
+		)
 		if residents.size() > 1:
 			var another_id := String(
 				(residents[1] as Dictionary).get("residentId", ""),
 			)
+			var another_name := String((residents[1] as Dictionary).get("residentName", ""))
 			var switched := session.call(
 				"begin_avatar_conversation",
 				another_id,
 				"也来听听你的想法。",
 			) as Dictionary
 			_expect_ok(switched, "切换居民时通过正式命令收束上一段对话")
-			for _frame in 120:
-				if int(session.call("pending_decision_count")) == 0:
-					break
-				await process_frame
+			_expect(
+				await _wait_for_avatar_conversation_turn(session, another_name),
+				"切换居民后等待正式 Agent 回复并轮到化身回应",
+			)
 	snapshot = session.call("snapshot") as Dictionary
 	_expect(
 		int(snapshot.get("traceCount", 0)) > 0,
