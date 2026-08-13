@@ -10,6 +10,7 @@ python3 "$guards_dir/zero_reference_scan.py" --check || status=1
 python3 "$guards_dir/required_tests_check.py" || status=1
 python3 "$guards_dir/preload_resource_check.py" || status=1
 python3 "$guards_dir/cross_platform_text_check.py" || status=1
+python3 "$guards_dir/foreground_shader_check.py" || status=1
 python3 "$guards_dir/../sync_readme_updates.py" --check || status=1
 python3 -m unittest discover -s "$guards_dir/../release" -p 'test_*.py' || status=1
 python3 "$guards_dir/../release/release_tool.py" source-check \
