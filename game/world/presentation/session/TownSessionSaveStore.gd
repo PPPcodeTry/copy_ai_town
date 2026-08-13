@@ -112,6 +112,9 @@ func begin_slot_transaction(slot_id_value: Variant) -> Dictionary:
 	if slot_check.get("ok") != true:
 		return slot_check
 	var slot_id := String(slot_check.get("slotId", ""))
+	var legacy_state := check_legacy_slot_ephemeral_state(slot_id)
+	if legacy_state.get("ok") != true:
+		return legacy_state
 	var archive_claim_path := _slot_archive_claim_path(slot_id)
 	var archive_claim_state := _recoverable_claim_activity(archive_claim_path)
 	if archive_claim_state.get("ok") != true:
@@ -184,6 +187,9 @@ func begin_slot_archive(slot_id_value: Variant) -> Dictionary:
 	if slot_check.get("ok") != true:
 		return slot_check
 	var slot_id := String(slot_check.get("slotId", ""))
+	var legacy_state := check_legacy_slot_ephemeral_state(slot_id)
+	if legacy_state.get("ok") != true:
+		return legacy_state
 	var claim_path := _slot_archive_claim_path(slot_id)
 	var create_error := DirAccess.make_dir_recursive_absolute(
 		_absolute(_slot_lease_root(slot_id)),
@@ -325,6 +331,11 @@ func reserve_revision(
 	if context_check.get("ok") != true:
 		return context_check
 	var normalized := context_check.get("context", {}) as Dictionary
+	var legacy_state := check_legacy_slot_ephemeral_state(
+		String(normalized.get("slot_id", "")),
+	)
+	if legacy_state.get("ok") != true:
+		return legacy_state
 	var allocation_root := _join(
 		_slot_root(String(normalized.get("slot_id", ""))),
 		"allocations",
@@ -382,6 +393,59 @@ func reserve_revision(
 			"context": context,
 		}
 	return _failure("SESSION_SAVE_REVISION_EXHAUSTED", false)
+
+
+func check_legacy_slot_ephemeral_state(slot_id_value: Variant) -> Dictionary:
+	var slot_check := _validated_slot_id(slot_id_value)
+	if slot_check.get("ok") != true:
+		return slot_check
+	var slot_id := String(slot_check.get("slotId", ""))
+	var legacy_root := _legacy_slot_lease_root(slot_id)
+	if legacy_root == _slot_lease_root(slot_id):
+		return _success()
+	if not DirAccess.dir_exists_absolute(_absolute(legacy_root)):
+		var absent := _success()
+		absent["legacyState"] = "absent"
+		return absent
+
+	var archive_claim := _check_legacy_claim_activity(
+		legacy_root,
+		SLOT_ARCHIVE_CLAIM,
+	)
+	if archive_claim.get("ok") != true:
+		return archive_claim
+	if archive_claim.get("active") == true:
+		return _failure("SESSION_SAVE_SLOT_BUSY", true)
+
+	var transaction_root := _join(legacy_root, SLOT_TRANSACTION_ROOT)
+	if DirAccess.dir_exists_absolute(_absolute(transaction_root)):
+		var transactions := DirAccess.open(transaction_root)
+		if transactions == null:
+			return _failure("SESSION_SAVE_STORE_READ_FAILED", true)
+		transactions.include_hidden = true
+		var transaction_directories := transactions.get_directories()
+		transactions = null
+		var transaction_claims: Array[String] = []
+		for directory_name: String in transaction_directories:
+			var claim_name := directory_name
+			if directory_name.contains(".claim.candidate-"):
+				claim_name = directory_name.get_slice(".candidate-", 0)
+			if not claim_name.ends_with(".claim"):
+				continue
+			if not transaction_claims.has(claim_name):
+				transaction_claims.append(claim_name)
+		for claim_name: String in transaction_claims:
+			var claim_result := _check_legacy_claim_activity(
+				transaction_root,
+				claim_name,
+			)
+			if claim_result.get("ok") != true:
+				return claim_result
+			if claim_result.get("active") == true:
+				return _failure("SESSION_SAVE_SLOT_BUSY", true)
+	var checked := _success()
+	checked["legacyState"] = "observed"
+	return checked
 
 
 func write_world_candidate(
@@ -1163,6 +1227,12 @@ func _slot_lease_root(slot_id: String) -> String:
 	)
 
 
+func _legacy_slot_lease_root(slot_id: String) -> String:
+	# beta.2 之前直接把 slot_id 放进锁目录。只访问由校验过的 slot_id
+	# 拼出的这一个目录，不会递归扫存档根，也不会触碰 slots 下的正式数据。
+	return _join(_root, "%s/%s" % [SLOT_LEASE_ROOT, slot_id])
+
+
 func _slot_archive_claim_path(slot_id: String) -> String:
 	return _join(_slot_lease_root(slot_id), SLOT_ARCHIVE_CLAIM)
 
@@ -1173,6 +1243,45 @@ func _slot_archive_pending_path(slot_id: String) -> String:
 
 func _slot_transaction_root(slot_id: String) -> String:
 	return _join(_slot_lease_root(slot_id), SLOT_TRANSACTION_ROOT)
+
+
+func _check_legacy_claim_activity(
+	parent_path: String,
+	claim_name: String,
+) -> Dictionary:
+	var claim_path := _join(parent_path, claim_name)
+	var active := false
+	if DirAccess.dir_exists_absolute(_absolute(claim_path)):
+		var loaded := _read_owned_claim_owner(claim_path)
+		if loaded.get("ok") == true:
+			active = _ephemeral_claim_owner_is_alive(
+				loaded.get("claimOwner", {}) as Dictionary,
+			)
+
+	var parent := DirAccess.open(parent_path)
+	if parent == null:
+		var absent := _success()
+		absent["active"] = active
+		return absent
+	parent.include_hidden = true
+	var candidate_prefix := "%s.candidate-" % claim_name
+	var candidate_directories := parent.get_directories()
+	parent = null
+	for directory_name: String in candidate_directories:
+		if not directory_name.begins_with(candidate_prefix):
+			continue
+		var candidate_path := _join(parent_path, directory_name)
+		var candidate_owner := _read_owned_claim_owner(
+			candidate_path,
+			claim_path,
+		)
+		if candidate_owner.get("ok") == true and _ephemeral_claim_owner_is_alive(
+			candidate_owner.get("claimOwner", {}) as Dictionary,
+		):
+			active = true
+	var checked := _success()
+	checked["active"] = active
+	return checked
 
 
 func _revision_root(context: Dictionary) -> String:
