@@ -105,17 +105,31 @@ static func activate_entry_continuity(
 		(resident.get("socialState", {}) as Dictionary).get("home", ""),
 	).strip_edges()
 	if not home.is_empty():
-		var route := ROUTE_QUERY.find_route_from_state(
-			world.world_data(),
-			{
-				"position": resident.get("position", Vector2.ZERO),
-				"spaceId": resident.get("spaceId", ""),
-				"regionId": resident.get("regionId", ""),
-				"currentPlace": resident.get("currentPlace", ""),
-			},
-			home,
-			resident.get("routeConnector", []) as Array,
-		) as Dictionary
+		var entry_state := {
+			"position": resident.get("position", Vector2.ZERO),
+			"spaceId": resident.get("spaceId", ""),
+			"regionId": resident.get("regionId", ""),
+			"placeName": resident.get("currentPlace", ""),
+		}
+		# 入口落点预热阶段已经为可达性检查算过这条路线。抵达发生在
+		# 分钟结算热路径里，直接复用完整路线，避免同一个居民在启动期
+		# 和抵达帧各跑一次路网搜索。
+		var route := _cached_home_route(resident, entry_state)
+		if (
+			(
+				route.is_empty()
+				and not _arrival_home_route_cache.has(
+					_home_route_cache_key(resident, entry_state),
+				)
+			)
+			or not (resident.get("routeConnector", []) as Array).is_empty()
+		):
+			route = ROUTE_QUERY.find_route_from_state(
+				world.world_data(),
+				entry_state,
+				home,
+				resident.get("routeConnector", []) as Array,
+			) as Dictionary
 		var step_path := _first_route_step_path(route)
 		if step_path.size() >= 2:
 			action["idlePathPoints"] = step_path
@@ -283,25 +297,52 @@ static func _can_reach_home(
 	).strip_edges()
 	if home.is_empty():
 		return true
-	var position := entry_state.get("position", Vector2.ZERO) as Vector2
-	var cache_key := "%s|%s|%s|%.3f|%.3f" % [
-		home,
-		String(entry_state.get("spaceId", "")),
-		String(entry_state.get("regionId", "")),
-		position.x,
-		position.y,
-	]
+	var cache_key := _home_route_cache_key(resident, entry_state)
 	if _arrival_home_route_cache.has(cache_key):
-		return bool(_arrival_home_route_cache[cache_key])
-	var reachable := not ROUTE_QUERY.find_route_from_state(
+		var cached: Variant = _arrival_home_route_cache[cache_key]
+		if cached is Dictionary:
+			return bool((cached as Dictionary).get("reachable", false))
+		return bool(cached)
+	var route := ROUTE_QUERY.find_route_from_state(
 		world.world_data(),
 		{
-			"position": position,
+			"position": entry_state.get("position", Vector2.ZERO),
 			"spaceId": entry_state.get("spaceId", ""),
 			"regionId": entry_state.get("regionId", ""),
 			"currentPlace": entry_state.get("placeName", ""),
 		},
 		home,
-	).is_empty()
-	_arrival_home_route_cache[cache_key] = reachable
+	) as Dictionary
+	var reachable := not route.is_empty()
+	_arrival_home_route_cache[cache_key] = {
+		"reachable": reachable,
+		"route": route.duplicate(true),
+	}
 	return reachable
+
+
+static func _home_route_cache_key(
+	resident: Dictionary,
+	entry_state: Dictionary,
+) -> String:
+	var position := entry_state.get("position", Vector2.ZERO) as Vector2
+	return "%s|%s|%s|%.3f|%.3f" % [
+		String((resident.get("socialState", {}) as Dictionary).get("home", "")),
+		String(entry_state.get("spaceId", "")),
+		String(entry_state.get("regionId", "")),
+		position.x,
+		position.y,
+	]
+
+
+static func _cached_home_route(
+	resident: Dictionary,
+	entry_state: Dictionary,
+) -> Dictionary:
+	var cache_key := _home_route_cache_key(resident, entry_state)
+	if not _arrival_home_route_cache.has(cache_key):
+		return {}
+	var cached: Variant = _arrival_home_route_cache[cache_key]
+	if not cached is Dictionary or not (cached as Dictionary).has("route"):
+		return {}
+	return ((cached as Dictionary).get("route", {}) as Dictionary).duplicate(true)

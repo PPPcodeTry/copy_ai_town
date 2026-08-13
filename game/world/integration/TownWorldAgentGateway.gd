@@ -107,6 +107,7 @@ var _error_sequence := 0
 var _last_submissions: Dictionary = {}
 var _inflight: Dictionary = {}
 var _agent_preparation_queue: Array[String] = []
+var _conversation_priority_requested := false
 var _decision_attempts: Dictionary = {}
 var _inner_observation_inflight: Dictionary = {}
 var _death_story_inflight: Dictionary = {}
@@ -125,22 +126,20 @@ var _background_departure_messages: Array[Dictionary] = []
 
 
 func _ready() -> void:
-	# TownRuntime can enqueue the first request while adding this Gateway during
-	# its own startup. Do not disable processing after that queue already exists.
-	set_process(
-		not _inner_observation_inflight.is_empty()
-		or not _agent_preparation_queue.is_empty()
-	)
+	_update_async_process_state()
 
 
 func _process(_delta: float) -> void:
-	var processed_inner_observation := _advance_inner_observation_requests()
-	if not processed_inner_observation:
-		_advance_agent_preparation()
+	_advance_inner_observation_requests()
 	_advance_death_story_requests()
+	_update_async_process_state()
+
+
+func _update_async_process_state() -> void:
+	# 居民决策准备/派发由 TownRuntime 的逐帧预算显式推进；这里仅保留
+	# 不属于世界热路径的异步页面读取和死亡故事请求。
 	set_process(
 		not _inner_observation_inflight.is_empty()
-		or not _agent_preparation_queue.is_empty()
 		or not _death_story_inflight.is_empty()
 	)
 
@@ -387,6 +386,7 @@ func configure_session(
 		)
 	_inflight.clear()
 	_agent_preparation_queue.clear()
+	_conversation_priority_requested = false
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -564,7 +564,10 @@ func bind_world(world: RefCounted) -> Dictionary:
 	}
 
 
-func pump(max_requests := -1) -> int:
+func pump(
+	max_requests := -1,
+	allow_preparation_admission := false,
+) -> int:
 	if not _frame_probe_checked:
 		_frame_probe_checked = true
 		if OS.get_environment("AI_TOWN_UI_FRAME_PROBE") == "1":
@@ -576,7 +579,11 @@ func pump(max_requests := -1) -> int:
 	# two stages form a bounded pipeline instead of leaving an idle frame between
 	# every resident. Pending work otherwise stays in the World queue, where a new
 	# player conversation can still be prioritized.
-	if is_inside_tree() and not _agent_preparation_queue.is_empty():
+	if (
+		is_inside_tree()
+		and not allow_preparation_admission
+		and not _agent_preparation_queue.is_empty()
+	):
 		var front_decision_id := String(_agent_preparation_queue.front())
 		var front_preparation := (
 			_inflight.get(front_decision_id, {}) as Dictionary
@@ -649,6 +656,43 @@ func pump(max_requests := -1) -> int:
 		if last_index >= 0:
 			_pump_cursor = (last_index + 1) % _connected_resident_ids.size()
 	return requests.size()
+
+
+func prioritize_next_conversation_turn() -> void:
+	# TownRuntime calls this only after the World accepted a player conversation
+	# command. It avoids peeking into World state while keeping that request ahead
+	# of ordinary preparation already waiting in the bounded Gateway queue.
+	_conversation_priority_requested = true
+
+
+func pump_frame_budgeted(max_requests := 1) -> int:
+	# 生产运行时每帧最多消费一个 Agent 工作单元：先完成队列头的刷新或派发，
+	# 队列为空时才从 World 接纳一个新请求。这样准备和派发不会在 Gateway
+	# 自己的 _process 中绕过 TownRuntime 的世界重活错峰。
+	if not is_inside_tree():
+		return pump(max_requests)
+	if max_requests <= 0:
+		return 0
+	if (
+		not _agent_preparation_queue.is_empty()
+		and _conversation_priority_requested
+	):
+		var priority_admitted := pump(1, true)
+		if priority_admitted > 0:
+			_conversation_priority_requested = false
+			return priority_admitted
+	while not _agent_preparation_queue.is_empty():
+		var queue_size_before := _agent_preparation_queue.size()
+		if _advance_agent_preparation():
+			return 1
+		# 未到 readyAfterProcessFrame 时必须把预算留到未来帧；只有清理了
+		# 失效队列项才继续尝试接纳新请求。
+		if _agent_preparation_queue.size() == queue_size_before:
+			return 0
+	var admitted := pump(1)
+	if admitted > 0:
+		_conversation_priority_requested = false
+	return admitted
 
 
 # 排查计时(A1 探针门控):pump 分段耗时按渲染帧编号累计。
@@ -1102,10 +1146,7 @@ func cancel_resident_inner_observation(request_id: String) -> bool:
 	if normalized_request_id.is_empty():
 		return false
 	var erased := _inner_observation_inflight.erase(normalized_request_id)
-	set_process(
-		not _inner_observation_inflight.is_empty()
-		or not _agent_preparation_queue.is_empty()
-	)
+	_update_async_process_state()
 	return erased
 
 
@@ -1722,6 +1763,7 @@ func close_session() -> Dictionary:
 	_generation += 1
 	_inflight.clear()
 	_agent_preparation_queue.clear()
+	_conversation_priority_requested = false
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -1748,6 +1790,7 @@ func discard_unpublished_new_game(
 	_generation += 1
 	_inflight.clear()
 	_agent_preparation_queue.clear()
+	_conversation_priority_requested = false
 	_decision_attempts.clear()
 	_inner_observation_inflight.clear()
 	_death_story_inflight.clear()
@@ -2084,8 +2127,11 @@ func _queue_agent_preparation(request: Dictionary) -> void:
 		"startedAtMsec": Time.get_ticks_msec(),
 	}
 	if not _agent_preparation_queue.has(decision_id):
-		_agent_preparation_queue.append(decision_id)
-	set_process(true)
+		if _wake_is_avatar_conversation_turn(wake):
+			_agent_preparation_queue.push_front(decision_id)
+		else:
+			_agent_preparation_queue.append(decision_id)
+	_update_async_process_state()
 
 
 func _advance_agent_preparation() -> bool:

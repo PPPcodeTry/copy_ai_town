@@ -367,6 +367,21 @@ class FakeProviderService:
 
 	func get_latest_diagnostic(_resident_id: String) -> Dictionary:
 		return {}
+
+
+class FrameBudgetGatewaySpy:
+	extends Node
+	var budget_calls: Array[int] = []
+
+	func pump_frame_budgeted(max_requests := 1) -> int:
+		budget_calls.append(max_requests)
+		return 0
+
+	func pump(max_requests := -1) -> int:
+		budget_calls.append(max_requests)
+		return 0
+
+
 class FailFirstModelProvider:
 	extends RefCounted
 
@@ -414,6 +429,9 @@ const AGENT_SYSTEM := preload("res://agent/AgentSystem.gd")
 const FAKE_MODEL := preload("res://agent/model/FakeModelProvider.gd")
 const GATEWAY_AGENT_LONG_RUN := preload("res://world/integration/TownWorldAgentGateway.gd")
 const WORLD_RUNTIME := preload("res://world/runtime/TownWorldRuntime.gd")
+const FRAME_BUDGET_RUNTIME := preload(
+	"res://world/runtime/presentation/TownWorldFrameBudgetRuntime.gd"
+)
 const RESIDENT_STATE_PROJECTION := preload(
 	"res://world/runtime/presentation/TownResidentStateProjection.gd"
 )
@@ -465,6 +483,7 @@ func _scenario_agent_gateway_continuity() -> void:
 	_test_inner_observation_accepts_newer_read_only_world_revision()
 	_test_memory_intervention_uses_world_time_and_agent_contract()
 	_test_gateway_process_pipeline_splits_refresh_and_dispatch()
+	_test_world_heavy_frame_defers_agent_budget()
 	_test_replacement_request_retires_old_gateway_slot()
 	_test_full_queue_only_dispatches_request_that_frees_slot()
 	_test_unconsumed_submission_rolls_back_without_social_side_effect()
@@ -562,9 +581,9 @@ func _test_gateway_process_pipeline_splits_refresh_and_dispatch() -> void:
 	get_root().add_child(gateway)
 
 	_expect_equal(
-		gateway.call("pump", 1),
+		gateway.call("pump_frame_budgeted", 1),
 		1,
-		"the production pump admits one selected request",
+		"the frame budget admits one selected request",
 	)
 	_expect_equal(
 		agent.requested_resident_ids.size(),
@@ -581,16 +600,22 @@ func _test_gateway_process_pipeline_splits_refresh_and_dispatch() -> void:
 		1,
 		"debug pending count includes work prepared for the next frame",
 	)
+	gateway.call("_process", 0.0)
+	_expect_equal(
+		agent.requested_resident_ids.size(),
+		0,
+		"Gateway _process cannot bypass the TownRuntime Agent frame budget",
+	)
 	_expect_equal(
 		gateway.call("pump", 0),
 		0,
-		"the pump does not admit more work before refresh completes",
+		"the admission pump does not bypass a queued refresh stage",
 	)
 	_make_agent_preparation_ready(gateway, "decision-frame-budgeted")
 	_expect_equal(
-		gateway.call("_advance_agent_preparation"),
-		true,
-		"the next process step refreshes the selected request",
+		gateway.call("pump_frame_budgeted", 1),
+		1,
+		"the next frame budget refreshes the selected request",
 	)
 	_expect_equal(
 		agent.requested_resident_ids.size(),
@@ -611,9 +636,9 @@ func _test_gateway_process_pipeline_splits_refresh_and_dispatch() -> void:
 	)
 	_make_agent_preparation_ready(gateway, "decision-frame-budgeted")
 	_expect_equal(
-		gateway.call("_advance_agent_preparation"),
-		true,
-		"the following process step dispatches the refreshed request",
+		gateway.call("pump_frame_budgeted", 1),
+		1,
+		"the following frame budget dispatches the refreshed request",
 	)
 	_expect_equal(
 		agent.requested_resident_ids,
@@ -629,6 +654,40 @@ func _test_gateway_process_pipeline_splits_refresh_and_dispatch() -> void:
 		gateway.call("get_debug_pending_count"),
 		1,
 		"dispatched work remains pending while its model call is inflight",
+	)
+	gateway.free()
+
+
+func _test_world_heavy_frame_defers_agent_budget() -> void:
+	var gateway := FrameBudgetGatewaySpy.new()
+	var heavy_frame := {"minutesAdvanced": 1}
+	_expect_equal(
+		gateway.budget_calls,
+		[],
+		"a minute settlement frame starts without Agent preparation or dispatch",
+	)
+	_expect(
+		FRAME_BUDGET_RUNTIME.should_defer_agent_dispatch(heavy_frame),
+		"the production frame classifier marks minute settlement as heavy",
+	)
+	if not FRAME_BUDGET_RUNTIME.should_defer_agent_dispatch(heavy_frame):
+		gateway.pump_frame_budgeted(1)
+	_expect_equal(
+		gateway.budget_calls,
+		[],
+		"the heavy frame leaves the Gateway budget untouched",
+	)
+	var light_frame := {}
+	_expect(
+		not FRAME_BUDGET_RUNTIME.should_defer_agent_dispatch(light_frame),
+		"the following frame is eligible for Agent work",
+	)
+	if not FRAME_BUDGET_RUNTIME.should_defer_agent_dispatch(light_frame):
+		gateway.pump_frame_budgeted(1)
+	_expect_equal(
+		gateway.budget_calls,
+		[1],
+		"the Agent queue resumes with one unit on the following light frame",
 	)
 	gateway.free()
 
