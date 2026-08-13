@@ -233,7 +233,7 @@ func _test_legacy_slot_ephemeral_migration(suffix: String) -> void:
 		store.call("configure_test_root", test_root) as Dictionary,
 		"旧版锁迁移测试目录可配置",
 	)
-	var slot_id := "legacy-slot-%s" % "l".repeat(120)
+	var slot_id := "legacy-slot-%s" % "l".repeat(116)
 	var slot_root := String(store.call("_slot_root", slot_id))
 	var published_file := "%s/published/world_snapshot.json" % slot_root
 	_expect(
@@ -619,6 +619,12 @@ func _expect_ok(result: Dictionary, message: String) -> void:
 		bool(result.get("ok", false)),
 		"%s（%s）" % [message, result.get("errorCode", "")],
 	)
+
+
+func _expect_equal(actual: Variant, expected: Variant, message: String) -> void:
+	_checks += 1
+	if actual != expected:
+		_failures.append("%s: expected %s, got %s" % [message, str(expected), str(actual)])
 
 
 func _expect(condition: bool, message: String) -> void:
