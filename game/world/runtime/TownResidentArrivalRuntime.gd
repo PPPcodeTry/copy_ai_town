@@ -7,6 +7,7 @@ const CHARACTER_MOVEMENT_QUERY := preload(
 )
 const ROUTE_QUERY := preload("res://world/data/town/TownWorldRouteQuery.gd")
 const SOUTH_ENTRY_PLACE := "南入口"
+const ENTRY_CONTINUITY_DURATION_MINUTES := 1
 const ENTRY_CONTINUITY_LINES: Array[String] = [
 	"刚到镇上，先慢慢往里走几步看看四周",
 	"沿着入口往里走，先熟悉一下周围",
@@ -98,7 +99,9 @@ static func activate_entry_continuity(
 		"type": "待着",
 		"line": line,
 		"startedAbsoluteMinute": absolute_minute,
-		"completeAbsoluteMinute": absolute_minute + 2,
+		"completeAbsoluteMinute": (
+			absolute_minute + ENTRY_CONTINUITY_DURATION_MINUTES
+		),
 		"decisionBridge": true,
 	}
 	var home := String(
