@@ -79,6 +79,7 @@ const MOBILE_CONTROL_SOURCE_RECTS := {
 	"time_speed_3": Rect2(1568, 621, 68, 68),
 	"avatar_toggle": Rect2(775, 831, 126, 96),
 }
+const MOBILE_LEFT_TOUCH_PADDING := 10.0
 const MOBILE_LEFT_CONTROL_IDS := [
 	"nav_residents",
 	"nav_places",
@@ -773,7 +774,7 @@ func _apply_layout() -> void:
 func _apply_resident_directory_layout() -> void:
 	if not is_instance_valid(_resident_directory):
 		return
-	var safe := _layout.get("safeRect", Rect2(Vector2.ZERO, size)) as Rect2
+	var safe := _drawer_safe_rect()
 	var nav_rect := _layout_target_rect("nav_residents")
 	var breakpoint_id := StringName(_layout.get("breakpoint", &""))
 	var drawer_height: float
@@ -812,7 +813,7 @@ func _apply_resident_directory_layout() -> void:
 func _apply_place_directory_layout() -> void:
 	if not is_instance_valid(_place_directory):
 		return
-	var safe := _layout.get("safeRect", Rect2(Vector2.ZERO, size)) as Rect2
+	var safe := _drawer_safe_rect()
 	var nav_rect := _layout_target_rect("nav_places")
 	var breakpoint_id := StringName(_layout.get("breakpoint", &""))
 	var drawer_height: float
@@ -848,6 +849,14 @@ func _apply_place_directory_layout() -> void:
 	_place_directory.size = Vector2(drawer_width, drawer_height).round()
 
 
+func _drawer_safe_rect() -> Rect2:
+	# The painted mobile HUD intentionally uses the physical viewport origin,
+	# while semantic drawers must stay inside the actual display safe area.
+	if MOBILE_UI_PROFILE.is_mobile_runtime():
+		return MOBILE_UI_PROFILE.safe_rect(size, safe_insets)
+	return _layout.get("safeRect", Rect2(Vector2.ZERO, size)) as Rect2
+
+
 func _apply_runtime_skin_layout() -> void:
 	if not is_instance_valid(_skin_root):
 		return
@@ -860,7 +869,10 @@ func _apply_runtime_skin_layout() -> void:
 		# Assemble the phone HUD from independent source regions. Only the empty
 		# top and bottom frame bands stretch; rails, time/weather and avatar art
 		# retain uniform scale.
-		var safe := _layout.get("safeRect", Rect2(Vector2.ZERO, size)) as Rect2
+		# Rails and their hit targets share the physical viewport origin. Safe
+		# insets are reserved for drawers and semantic overlays; applying them to
+		# the painted rail moves the artwork away from the edge on cutout devices.
+		var safe := Rect2(Vector2.ZERO, size)
 		var mobile_scale := safe.size.y / HUD_REFERENCE_SIZE.y
 		outer.visible = false
 		_layout_mobile_hud_piece(
@@ -943,40 +955,50 @@ func _mobile_hud_control_rect(id: String, fallback: Rect2) -> Rect2:
 		anchor = &"right"
 	elif id == "avatar_toggle":
 		anchor = &"center_bottom"
-	return _mobile_hud_reference_rect(
+	var rect := _mobile_hud_reference_rect(
 		MOBILE_CONTROL_SOURCE_RECTS[id] as Rect2,
 		anchor,
 	)
+	if id in MOBILE_LEFT_CONTROL_IDS:
+		# 左侧导轨的画面资产保持原尺寸，触控命中框向导轨内外扩展。
+		# 这样不会拉伸图标，也不会要求玩家精确点在小图标像素上。
+		var padding := MOBILE_LEFT_TOUCH_PADDING * size.y / HUD_REFERENCE_SIZE.y
+		rect.position.x = maxf(0.0, rect.position.x - padding)
+		rect.size.x = minf(
+			MOBILE_LEFT_RAIL_RECT.size.x * size.y / HUD_REFERENCE_SIZE.y,
+			rect.size.x + padding,
+		)
+		rect.position.y = maxf(0.0, rect.position.y - padding)
+		rect.size.y = rect.size.y + padding * 2.0
+	return rect
 
 
 func _mobile_hud_reference_rect(
 	source_rect: Rect2,
 	anchor: StringName,
 ) -> Rect2:
-	var safe := MOBILE_UI_PROFILE.safe_rect(size, safe_insets)
-	var mobile_scale := safe.size.y / HUD_REFERENCE_SIZE.y
+	# The painted mobile HUD is already laid out against the full viewport. Safe
+	# insets are used by drawers and semantic overlays, but applying them here a
+	# second time shifts the actual button hit targets away from the artwork.
+	var mobile_scale := size.y / HUD_REFERENCE_SIZE.y
 	var display_size := source_rect.size * mobile_scale
-	var display_position := safe.position + source_rect.position * mobile_scale
+	var display_position := source_rect.position * mobile_scale
 	match anchor:
 		&"right":
-			display_position.x = safe.end.x - (
+			display_position.x = size.x - (
 				HUD_REFERENCE_SIZE.x - source_rect.end.x
 			) * mobile_scale - display_size.x
 		&"center":
 			var center_offset := (
 				source_rect.get_center().x - HUD_REFERENCE_SIZE.x * 0.5
 			) * mobile_scale
-			display_position.x = (
-				safe.get_center().x + center_offset - display_size.x * 0.5
-			)
+			display_position.x = size.x * 0.5 + center_offset - display_size.x * 0.5
 		&"center_bottom":
 			var center_offset := (
 				source_rect.get_center().x - HUD_REFERENCE_SIZE.x * 0.5
 			) * mobile_scale
-			display_position.x = (
-				safe.get_center().x + center_offset - display_size.x * 0.5
-			)
-			display_position.y = safe.end.y - (
+			display_position.x = size.x * 0.5 + center_offset - display_size.x * 0.5
+			display_position.y = size.y - (
 				HUD_REFERENCE_SIZE.y - source_rect.end.y
 			) * mobile_scale - display_size.y
 		_:
