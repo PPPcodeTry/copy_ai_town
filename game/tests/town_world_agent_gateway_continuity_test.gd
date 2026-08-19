@@ -460,6 +460,7 @@ func _initialize() -> void:
 	_test_immediate_agent_rejection_cannot_loop_forever()
 	_test_recovered_admission_rejection_is_not_final()
 	_test_provider_failure_stays_final_when_continuity_keeps_life_moving()
+	_test_thinking_only_provider_failures_are_retried()
 	_test_provider_diagnostic_keeps_safe_code_only()
 	_test_failed_decision_uses_available_world_prop()
 	_test_failed_decision_uses_available_world_activity()
@@ -1305,6 +1306,26 @@ func _test_provider_failure_stays_final_when_continuity_keeps_life_moving() -> v
 	gateway.free()
 
 
+func _test_thinking_only_provider_failures_are_retried() -> void:
+	var gateway: Node = GATEWAY.new()
+	var ordinary_life_wake := {"events": []}
+	for error_type: String in [
+		"reasoning_only_response",
+		"thinking_only_content",
+	]:
+		_expect(
+			gateway.call(
+				"_decision_result_should_retry",
+				1,
+				{"error_type": error_type, "retryable": false},
+				ordinary_life_wake,
+			),
+			"%s retries an ordinary resident decision instead of falling back immediately"
+			% error_type,
+		)
+	gateway.free()
+
+
 func _test_provider_diagnostic_keeps_safe_code_only() -> void:
 	var service: RefCounted = PROVIDER_SERVICE.new()
 	var diagnostic := service.call("_public_diagnostic", {
@@ -1314,7 +1335,14 @@ func _test_provider_diagnostic_keeps_safe_code_only() -> void:
 		"provider_error_code": "insufficient_balance",
 		"provider_error_message": "secret account detail",
 		"raw_response": {"api_key": "must-not-leak"},
-		"request": {"prompt": "private OC"},
+		"request": {
+			"prompt": "private OC",
+			"url": "https://model.example/v1/chat/completions?api_key=secret",
+		},
+		"content_present": true,
+		"reasoning_present": true,
+		"content_length": 32,
+		"request_url": "https://model.example/v1/chat/completions",
 		"retryable": false,
 	}) as Dictionary
 	_expect_equal(
@@ -1325,6 +1353,11 @@ func _test_provider_diagnostic_keeps_safe_code_only() -> void:
 	_expect(not diagnostic.has("provider_error_message"), "provider message is not exposed")
 	_expect(not diagnostic.has("raw_response"), "raw provider response is not exposed")
 	_expect(not diagnostic.has("request"), "private prompt is not exposed")
+	_expect_equal(
+		diagnostic.get("request_url"),
+		"https://model.example/v1/chat/completions?<已隐藏参数>",
+		"request URL is exposed without query credentials",
+	)
 
 
 func _test_failed_decision_uses_available_world_prop() -> void:
