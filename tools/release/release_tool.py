@@ -21,7 +21,7 @@ VERSION_PATTERN = re.compile(
     r"(?P<patch>0|[1-9]\d*)"
     r"(?:-(?P<channel>alpha|beta|rc)\.(?P<number>[1-9]\d*))?$"
 )
-PLATFORMS = ("windows", "macos")
+PLATFORMS = ("windows", "macos", "android")
 
 
 class ReleaseError(RuntimeError):
@@ -53,6 +53,17 @@ class ReleaseVersion:
     @property
     def short_version(self) -> str:
         return f"{self.major}.{self.minor}.{self.patch}"
+
+    @property
+    def android_version_code(self) -> int:
+        """Return a monotonically sortable Android version code."""
+        channel_revision = self.prerelease_number if self.is_prerelease else 99
+        return (
+            self.major * 1_000_000
+            + self.minor * 10_000
+            + self.patch * 100
+            + channel_revision
+        )
 
 
 def parse_version(raw: str) -> ReleaseVersion:
@@ -100,6 +111,7 @@ def _replace_key_in_section(
     section: str,
     key: str,
     value: str,
+    quoted: bool = True,
 ) -> str:
     section_start = text.find(f"[{section}]")
     if section_start < 0:
@@ -107,7 +119,7 @@ def _replace_key_in_section(
     next_section = text.find("\n[", section_start + len(section) + 2)
     section_end = len(text) if next_section < 0 else next_section + 1
     block = text[section_start:section_end]
-    line = f'{key}="{value}"'
+    line = f'{key}="{value}"' if quoted else f"{key}={value}"
     pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
     if pattern.search(block):
         block = pattern.sub(line, block, count=1)
@@ -141,6 +153,7 @@ def _preset_index(text: str, preset_name: str) -> str:
 def inject_native_versions(presets_file: Path, version: ReleaseVersion) -> None:
     text = presets_file.read_text(encoding="utf-8")
     windows_index = _preset_index(text, "Windows Desktop")
+    android_index = _preset_index(text, "Android")
     macos_index = _preset_index(text, "macOS")
     for key in ("application/file_version", "application/product_version"):
         text = _replace_key_in_section(
@@ -160,6 +173,19 @@ def inject_native_versions(presets_file: Path, version: ReleaseVersion) -> None:
         f"preset.{macos_index}.options",
         "application/version",
         version.native_version,
+    )
+    text = _replace_key_in_section(
+        text,
+        f"preset.{android_index}.options",
+        "version/code",
+        str(version.android_version_code),
+        quoted=False,
+    )
+    text = _replace_key_in_section(
+        text,
+        f"preset.{android_index}.options",
+        "version/name",
+        version.text,
     )
     presets_file.write_text(text, encoding="utf-8")
 
@@ -198,7 +224,12 @@ def prepare(repo_root: Path, commit: str, build_date: str | None = None) -> dict
 
 
 def _archive_root(version: ReleaseVersion, platform: str) -> str:
-    suffix = "windows-x86_64" if platform == "windows" else "macos-universal"
+    suffixes = {
+        "windows": "windows-x86_64",
+        "macos": "macos-universal",
+        "android": "android-arm64",
+    }
+    suffix = suffixes[platform]
     return f"my-ai-town-{version.tag}-{suffix}"
 
 
@@ -249,12 +280,16 @@ def package_release(
                 raise ReleaseError("Windows 导出目录为空。")
             for path in files:
                 archive.write(path, f"{root}/{path.relative_to(input_path).as_posix()}")
-        else:
+        elif platform == "macos":
             if not input_path.is_file():
                 raise ReleaseError(f"macOS 导出压缩包不存在：{input_path}")
             with zipfile.ZipFile(input_path) as source:
                 for entry in source.infolist():
                     _copy_zip_entry(source, archive, entry, root)
+        else:
+            if not input_path.is_file() or input_path.suffix.lower() != ".apk":
+                raise ReleaseError(f"Android APK 不存在：{input_path}")
+            archive.write(input_path, f"{root}/{input_path.name}")
         archive.write(changelog, f"{root}/更新日志.md")
         archive.write(build_info_file, f"{root}/build-info.json")
     verify_archive(output_path, platform, version.text)
@@ -284,13 +319,19 @@ def verify_archive(archive_path: Path, platform: str, expected_version: str) -> 
             )
             if not has_executable or not has_pck:
                 raise ReleaseError("Windows 发行包必须同时包含 .exe 和 .pck。")
-        else:
+        elif platform == "macos":
             has_app_binary = any(
                 name.startswith(f"{root}/") and ".app/Contents/MacOS/" in name
                 for name in names
             )
             if not has_app_binary:
                 raise ReleaseError("macOS 发行包缺少 .app/Contents/MacOS 下的程序。")
+        else:
+            if not any(
+                name.startswith(f"{root}/") and name.lower().endswith(".apk")
+                for name in names
+            ):
+                raise ReleaseError("Android 发行包缺少 APK。")
         info = json.loads(archive.read(f"{root}/build-info.json"))
         valid_commit = re.fullmatch(r"[0-9a-f]{7,40}", str(info.get("commit", "")))
         if (
@@ -340,6 +381,7 @@ def generate_release_notes(repo_root: Path, output_path: Path) -> None:
         "## 下载说明\n\n"
         f"- {release_type}\n"
         "- macOS 版本暂未进行 Apple 公证，首次打开时可能需要在系统设置中确认。\n"
+        "- Android 版本适用于 arm64 设备，压缩包内包含 APK。\n"
         "- 可使用 `SHA256SUMS` 核对下载文件是否完整。\n"
     )
     output_path.write_text(notes, encoding="utf-8")
@@ -353,6 +395,7 @@ def _write_github_output(path: Path, version: ReleaseVersion) -> None:
         "prerelease": str(version.is_prerelease).lower(),
         "windows_asset": f"my-ai-town-{version.tag}-windows-x86_64.zip",
         "macos_asset": f"my-ai-town-{version.tag}-macos-universal.zip",
+        "android_asset": f"my-ai-town-{version.tag}-android-arm64.zip",
     }
     with path.open("a", encoding="utf-8", newline="\n") as output:
         for key, value in values.items():

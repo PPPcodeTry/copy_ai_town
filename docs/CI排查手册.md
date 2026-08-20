@@ -15,7 +15,7 @@
 
 1. 防复发检查：检查文件行数、动态调用、零引用候选和正式测试清单。
 2. 正式测试：导入 Godot 项目，运行 Agent 离线测试、正式故事测试和独立正式入口测试，最后确认测试没有修改源码目录。
-3. 草稿发行：只允许从最新 `main` 手动运行；完整复用前两组检查后，正式导出 Windows 与 macOS，验证下载包内容，最后建立尚未公开的 GitHub Draft Release。
+3. 草稿发行：只允许从最新 `main` 手动运行；完整复用前两组检查后，正式导出 Windows、macOS 与 Android，验证下载包内容，最后建立尚未公开的 GitHub Draft Release。
 
 最近一次失败并不是 GitHub 环境不稳定，而是同一批提交中同时存在两个问题：
 
@@ -117,8 +117,8 @@ git status --porcelain
 - 对应的 `v<版本号>` 标签和 GitHub Release 尚不存在，避免覆盖旧版本。
 - `更新日志.md` 已涵盖这批玩家可见变化，README 的最近更新摘要已经同步。
 - `python3 -m unittest discover -s tools/release -p 'test_*.py'` 与 `tools/guards/run_guards.sh` 均通过。
-- Windows 导出任务运行在 Linux 构建机，macOS 导出任务运行在 macOS 构建机；不要把需要 Apple 签名工具的 macOS 导出移到 Linux。
-- 工作流完成后先下载 Windows 与 macOS 包人工试玩，确认包内有游戏、`更新日志.md` 和 `build-info.json`，再把 Draft Release 对外发布。
+- Windows 与 Android 导出任务运行在 Linux 构建机，macOS 导出任务运行在 macOS 构建机；不要把需要 Apple 签名工具的 macOS 导出移到 Linux。
+- 工作流完成后先下载 Windows、macOS 与 Android 包人工试玩，确认包内有游戏、`更新日志.md` 和 `build-info.json`，再把 Draft Release 对外发布。
 
 发行工作流只在一次性构建副本中写入 Godot 与系统文件版本，不把发行版本写回开发源码。不要手动修改 `game/project.godot` 的版本字段来替代 `VERSION`。
 
@@ -321,7 +321,7 @@ CI 最后会检查 `git status --porcelain`。常见来源：
 
 ### 导出成功，但玩家下载包校验失败
 
-Windows 包必须同时包含 `.exe` 与 `.pck`，macOS 包必须包含 `.app/Contents/MacOS` 下的程序；两个包的顶层目录都必须有 `更新日志.md` 和与 `VERSION` 一致的 `build-info.json`。
+Windows 包必须同时包含 `.exe` 与 `.pck`，macOS 包必须包含 `.app/Contents/MacOS` 下的程序，Android 包必须包含 arm64 `.apk`；三个包的顶层目录都必须有 `更新日志.md` 和与 `VERSION` 一致的 `build-info.json`。
 
 先从日志第一条 `RELEASE_ERROR` 检查导出路径、预设名称与构建信息，不要绕过 `release_tool.py verify` 直接上传。若调整包结构，必须同时补充发行工具测试，确保 macOS 程序权限等压缩包属性不会丢失。
 
@@ -333,7 +333,7 @@ Windows 包必须同时包含 `.exe` 与 `.pck`，macOS 包必须包含 `.app/Co
 
 处理方式：让 macOS 构建项使用 GitHub 的 macOS 构建机，并下载 Godot 的 macOS universal 编辑器；导出模板安装到 macOS 的 Godot 用户目录。Windows 构建项继续使用 Linux 构建机，不要关闭签名检查来绕过失败。
 
-最终验证：远端工作流中 Windows 与 macOS 构建项分别完成正式导出和包内容复查，随后才允许建立包含两个平台资源的 Draft Release。
+最终验证：远端工作流中 Windows、macOS 与 Android 构建项分别完成正式导出和包内容复查，随后才允许建立包含三个平台资源的 Draft Release。
 
 ### 正式测试断言读取了错误的数据层
 
@@ -502,7 +502,7 @@ gh run view <运行编号> --log-failed \
 - [ ] provider 测试退出时没有资源泄漏；同步 transport 已确认不会残留请求状态或 watchdog。
 - [ ] 正式 Godot 回归默认使用 `AI_TOWN_PROVIDER_TEST_NO_NETWORK=1`；联网 Provider 验证单独运行并显式授权。
 - [ ] CI 工作流依赖步骤先检查 `zsh`、`rg` 和 `unzip`，只有缺少工具时才执行带超时的 APT 安装。
-- [ ] 发行工作流改动确认 Windows 使用 Linux 构建机、macOS 使用 macOS 构建机。
+- [ ] 发行工作流改动确认 Windows 与 Android 使用 Linux 构建机、macOS 使用 macOS 构建机。
 - [ ] 测试后 `git status --porcelain` 没有意外变化。
 - [ ] 玩家可见改动已经写入根目录 `更新日志.md`，并已同步 README 的最新更新摘要。
 - [ ] 提交后在干净临时工作区复查一次，再推送。
