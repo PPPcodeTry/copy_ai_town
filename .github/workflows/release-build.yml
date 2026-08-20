@@ -141,6 +141,41 @@ jobs:
       - name: Add Godot to PATH
         run: echo "$HOME/godot-bin" >> "$GITHUB_PATH"
 
+      - name: 配置 Android 发布签名
+        if: matrix.platform == 'android'
+        env:
+          ANDROID_RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
+          ANDROID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          ANDROID_RELEASE_KEYSTORE_ALIAS: ${{ secrets.ANDROID_RELEASE_KEYSTORE_ALIAS }}
+        run: |
+          set -euo pipefail
+          keystore_path="$RUNNER_TEMP/my-ai-town-release.keystore"
+
+          if [ -n "$ANDROID_RELEASE_KEYSTORE_B64" ]; then
+            : "${ANDROID_RELEASE_KEYSTORE_PASSWORD:?已配置 Android keystore 时必须同时配置 ANDROID_RELEASE_KEYSTORE_PASSWORD}"
+            : "${ANDROID_RELEASE_KEYSTORE_ALIAS:?已配置 Android keystore 时必须同时配置 ANDROID_RELEASE_KEYSTORE_ALIAS}"
+            printf '%s' "$ANDROID_RELEASE_KEYSTORE_B64" | base64 --decode > "$keystore_path"
+            keystore_password="$ANDROID_RELEASE_KEYSTORE_PASSWORD"
+            keystore_alias="$ANDROID_RELEASE_KEYSTORE_ALIAS"
+          else
+            echo "::warning::未配置持久 Android 发布密钥，本次使用仅适合测试/内测的临时密钥；正式连续升级前请配置 ANDROID_RELEASE_KEYSTORE_B64、ANDROID_RELEASE_KEYSTORE_PASSWORD 和 ANDROID_RELEASE_KEYSTORE_ALIAS。"
+            keystore_password="$(openssl rand -hex 24)"
+            keystore_alias="my-ai-town-release"
+            keytool -genkeypair -noprompt \
+              -keystore "$keystore_path" \
+              -storepass "$keystore_password" \
+              -keypass "$keystore_password" \
+              -alias "$keystore_alias" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=My AI Town, OU=Release, O=mewamew, L=Shanghai, ST=Shanghai, C=CN"
+          fi
+
+          {
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$keystore_path"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$keystore_alias"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$keystore_password"
+          } >> "$GITHUB_ENV"
+
       - name: 在一次性构建副本写入版本
         env:
           RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}

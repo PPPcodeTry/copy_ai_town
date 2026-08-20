@@ -119,6 +119,7 @@ git status --porcelain
 - `python3 -m unittest discover -s tools/release -p 'test_*.py'` 与 `tools/guards/run_guards.sh` 均通过。
 - Windows 与 Android 导出任务运行在 Linux 构建机，macOS 导出任务运行在 macOS 构建机；不要把需要 Apple 签名工具的 macOS 导出移到 Linux。
 - 工作流完成后先下载 Windows、macOS 与 Android 包人工试玩，确认包内有游戏、`更新日志.md` 和 `build-info.json`，再把 Draft Release 对外发布。
+- Android 连续发行前应在仓库 Actions secrets 配置持久签名密钥；未配置时工作流只会生成临时密钥，适合本次测试/内测安装，不适合覆盖安装后续版本。
 
 发行工作流只在一次性构建副本中写入 Godot 与系统文件版本，不把发行版本写回开发源码。不要手动修改 `game/project.godot` 的版本字段来替代 `VERSION`。
 
@@ -160,6 +161,16 @@ rmdir "$check_root"
 处理方法：工作流先检查 `zsh`、`rg` 和 `unzip`，runner 已预装时跳过包管理器；确实缺少工具时才执行安装，并为 APT 请求、锁等待和整个更新/安装步骤设置有限重试与超时。不要只重复运行同一个卡住的工作流，也不要把依赖镜像问题误判成 Godot 回归。
 
 最终验证：本地仍需运行 `tools/guards/run_guards.sh`、Godot 无头导入和正式测试；远端应确认依赖步骤能在有限时间内结束，然后才判断正式套件结果。
+
+### 2026-08-20：Android 正式导出提示 `Could not find release keystore`
+
+表现：Windows 与 macOS 构建成功，Android 构建在 `Signing release APK` 阶段输出 `Could not find release keystore, unable to export`，随后报告 `Project export for preset "Android" failed`。这不是脚本导入或 Android 架构配置错误，APK 已经完成资源组装，只是在签名步骤被 Godot 拒绝。
+
+直接原因：Android 导出预设启用了 `package/signed=true`，但 GitHub runner 是一次性环境，默认没有开发机上的 release keystore；仅安装 Godot、导出模板和 Android SDK 不会自动提供项目的发布签名。
+
+处理方法：发行工作流在 Android 构建任务中优先读取 `ANDROID_RELEASE_KEYSTORE_B64`、`ANDROID_RELEASE_KEYSTORE_PASSWORD` 和 `ANDROID_RELEASE_KEYSTORE_ALIAS` 三个 Actions secret，写入 runner 临时目录，并通过 `GODOT_ANDROID_KEYSTORE_RELEASE_*` 环境变量交给 Godot。测试/内测阶段如果尚未配置持久密钥，工作流会生成随机临时 RSA 密钥让 APK 可以安装，同时明确给出警告；配置持久密钥后，后续版本才能覆盖安装并保持 Android 更新链。
+
+最终验证：Android 导出日志应出现 `Signing release APK` 后正常完成，不能出现 `Could not find release keystore`；`release_tool.py verify` 还必须确认压缩包中存在 `.apk`、`更新日志.md` 和 `build-info.json`。发布前先检查 Actions secret 是否已经替换临时签名方案。
 
 ### Godot 导入：`Preload file ... does not exist`
 
