@@ -29,6 +29,7 @@ class ReleaseToolTest(unittest.TestCase):
         self.assertEqual(beta.tag, "v0.1.0-beta.1")
         self.assertEqual(beta.native_version, "0.1.0.1")
         self.assertEqual(beta.short_version, "0.1.0")
+        self.assertEqual(beta.android_version_code, 10001)
         self.assertTrue(beta.is_prerelease)
         stable = release_tool.parse_version("1.2.3")
         self.assertEqual(stable.native_version, "1.2.3.0")
@@ -59,7 +60,9 @@ class ReleaseToolTest(unittest.TestCase):
                 'application/file_version="1.0.0.0"\n'
                 'application/product_version="1.0.0.0"\n\n'
                 '[preset.9]\nname="macOS"\n\n[preset.9.options]\n'
-                'application/short_version="1.0.0"\napplication/version="1.0.0"\n',
+                'application/short_version="1.0.0"\napplication/version="1.0.0"\n\n'
+                '[preset.11]\nname="Android"\n\n[preset.11.options]\n'
+                'version/code=1\nversion/name="1.0.0"\n',
                 encoding="utf-8",
             )
             info = release_tool.prepare(root, "abcdef1234567", "2026-08-11T00:00:00+00:00")
@@ -71,6 +74,8 @@ class ReleaseToolTest(unittest.TestCase):
             self.assertIn('application/file_version="0.1.0.1"', presets)
             self.assertIn('application/short_version="0.1.0"', presets)
             self.assertIn('application/version="0.1.0.1"', presets)
+            self.assertIn("version/code=10001", presets)
+            self.assertIn('version/name="0.1.0-beta.1"', presets)
             self.assertEqual(info["tag"], "v0.1.0-beta.1")
             self.assertEqual(
                 json.loads((game / "build_info.json").read_text(encoding="utf-8"))["commit"],
@@ -145,6 +150,20 @@ class ReleaseToolTest(unittest.TestCase):
                     if ".app/Contents/MacOS/" in entry.filename
                 )
             self.assertEqual((copied.external_attr >> 16) & 0o777, 0o755)
+
+    def test_android_package_contains_apk_and_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_temp:
+            root = self._release_root(raw_temp)
+            apk = root / "my-ai-town-android.apk"
+            apk.write_bytes(b"apk")
+            output = root / "dist/android.zip"
+            release_tool.package_release(root, "android", apk, output)
+            release_tool.verify_archive(output, "android", "0.1.0-beta.1")
+            with zipfile.ZipFile(output) as archive:
+                names = archive.namelist()
+            self.assertTrue(any(name.endswith(".apk") for name in names))
+            self.assertTrue(any(name.endswith("/更新日志.md") for name in names))
+            self.assertTrue(any(name.endswith("/build-info.json") for name in names))
 
     def test_verify_rejects_incomplete_package(self) -> None:
         with tempfile.TemporaryDirectory() as raw_temp:

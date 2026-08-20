@@ -25,6 +25,7 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
       windows_asset: ${{ steps.version.outputs.windows_asset }}
       macos_asset: ${{ steps.version.outputs.macos_asset }}
+      android_asset: ${{ steps.version.outputs.android_asset }}
       commit: ${{ steps.commit.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +92,10 @@ jobs:
             label: macOS universal
             preset: macOS
             runner: macos-latest
+          - platform: android
+            label: Android arm64
+            preset: Android
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -157,10 +162,13 @@ jobs:
           PRESET: ${{ matrix.preset }}
         run: |
           set -o pipefail
-          mkdir -p build/windows build/raw dist
+          mkdir -p build/windows build/android build/raw dist
           if [ "$PLATFORM" = "windows" ]; then
             godot --headless --path game --export-release "$PRESET" \
               "$GITHUB_WORKSPACE/build/windows/my-ai-town.exe" 2>&1 | tee /tmp/godot-export.log
+          elif [ "$PLATFORM" = "android" ]; then
+            godot --headless --path game --export-release "$PRESET" \
+              "$GITHUB_WORKSPACE/build/android/my-ai-town-android.apk" 2>&1 | tee /tmp/godot-export.log
           else
             godot --headless --path game --export-release "$PRESET" \
               "$GITHUB_WORKSPACE/build/raw/my-ai-town-macos.zip" 2>&1 | tee /tmp/godot-export.log
@@ -177,10 +185,14 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           WINDOWS_ASSET: ${{ needs.validate.outputs.windows_asset }}
           MACOS_ASSET: ${{ needs.validate.outputs.macos_asset }}
+          ANDROID_ASSET: ${{ needs.validate.outputs.android_asset }}
         run: |
           if [ "$PLATFORM" = "windows" ]; then
             input="$GITHUB_WORKSPACE/build/windows"
             asset="$WINDOWS_ASSET"
+          elif [ "$PLATFORM" = "android" ]; then
+            input="$GITHUB_WORKSPACE/build/android/my-ai-town-android.apk"
+            asset="$ANDROID_ASSET"
           else
             input="$GITHUB_WORKSPACE/build/raw/my-ai-town-macos.zip"
             asset="$MACOS_ASSET"
