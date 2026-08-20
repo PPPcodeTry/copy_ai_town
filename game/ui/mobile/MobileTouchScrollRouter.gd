@@ -136,6 +136,7 @@ func _scroll_by_finger_delta(delta: Vector2) -> void:
 func _find_scroll_target(position: Vector2) -> Dictionary:
 	if not is_inside_tree():
 		return {}
+	var fallback_target := _find_scroll_target_in_tree(position)
 	# Use Godot's GUI hit result whenever available. It respects CanvasLayer,
 	# z-order, clipping and overlays, while a scene-tree scan does not.
 	var hovered := get_viewport().gui_get_hovered_control()
@@ -160,7 +161,14 @@ func _find_scroll_target(position: Vector2) -> Dictionary:
 						"horizontal": horizontal,
 					}
 			current = current.get_parent()
+		# A valid GUI hit without a scroll ancestor belongs to an overlay or
+		# another non-scrollable control. Respect that hit result instead of
+		# scrolling a page underneath the overlay.
 		return {}
+	return fallback_target
+
+
+func _find_scroll_target_in_tree(position: Vector2) -> Dictionary:
 	var candidates: Array[Dictionary] = []
 	_collect_scroll_targets(get_tree().root, position, candidates, 0)
 	if candidates.is_empty():
