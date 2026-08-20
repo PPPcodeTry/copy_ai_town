@@ -170,6 +170,7 @@ jobs:
               -dname "CN=My AI Town, OU=Release, O=mewamew, L=Shanghai, ST=Shanghai, C=CN"
           fi
 
+          echo "::add-mask::$keystore_password"
           {
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$keystore_path"
             echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$keystore_alias"

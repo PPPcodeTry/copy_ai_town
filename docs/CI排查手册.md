@@ -168,7 +168,7 @@ rmdir "$check_root"
 
 直接原因：Android 导出预设启用了 `package/signed=true`，但 GitHub runner 是一次性环境，默认没有开发机上的 release keystore；仅安装 Godot、导出模板和 Android SDK 不会自动提供项目的发布签名。
 
-处理方法：发行工作流在 Android 构建任务中优先读取 `ANDROID_RELEASE_KEYSTORE_B64`、`ANDROID_RELEASE_KEYSTORE_PASSWORD` 和 `ANDROID_RELEASE_KEYSTORE_ALIAS` 三个 Actions secret，写入 runner 临时目录，并通过 `GODOT_ANDROID_KEYSTORE_RELEASE_*` 环境变量交给 Godot。测试/内测阶段如果尚未配置持久密钥，工作流会生成随机临时 RSA 密钥让 APK 可以安装，同时明确给出警告；配置持久密钥后，后续版本才能覆盖安装并保持 Android 更新链。
+处理方法：发行工作流在 Android 构建任务中优先读取 `ANDROID_RELEASE_KEYSTORE_B64`、`ANDROID_RELEASE_KEYSTORE_PASSWORD` 和 `ANDROID_RELEASE_KEYSTORE_ALIAS` 三个 Actions secret，写入 runner 临时目录，并通过 `GODOT_ANDROID_KEYSTORE_RELEASE_*` 环境变量交给 Godot。测试/内测阶段如果尚未配置持久密钥，工作流会生成随机临时 RSA 密钥让 APK 可以安装，同时明确给出警告；配置持久密钥后，后续版本才能覆盖安装并保持 Android 更新链。无论使用哪种密钥，写入 `GITHUB_ENV` 前都必须调用 Actions 的 `add-mask` 保护密码，不能让步骤环境摘要泄露签名凭据。
 
 最终验证：Android 导出日志应出现 `Signing release APK` 后正常完成，不能出现 `Could not find release keystore`；`release_tool.py verify` 还必须确认压缩包中存在 `.apk`、`更新日志.md` 和 `build-info.json`。发布前先检查 Actions secret 是否已经替换临时签名方案。
 
