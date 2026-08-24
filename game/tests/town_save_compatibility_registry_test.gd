@@ -3,6 +3,12 @@ extends SceneTree
 const REGISTRY := preload(
 	"res://world/presentation/session/TownSaveCompatibilityRegistry.gd"
 )
+const SCHEMA_REGISTRY := preload(
+	"res://world/presentation/session/TownSaveSchemaRegistry.gd"
+)
+const RESTORE_LAYOUT := preload(
+	"res://world/runtime/persistence/TownWorldRestoreLayout.gd"
+)
 
 var _failures: Array[String] = []
 var _checks := 0
@@ -17,6 +23,7 @@ func _run() -> void:
 	_test_release_detection_uses_contract_evidence()
 	_test_release_detection_distinguishes_failure_types()
 	_test_migration_path_is_ordered_and_explicit()
+	_test_place_service_owner_backfill_is_safe_and_idempotent()
 	_finish()
 
 
@@ -307,11 +314,107 @@ func _test_migration_path_is_ordered_and_explicit() -> void:
 
 	var current := REGISTRY.migration_path("beta6")
 	_expect_equal(current.get("edges"), [], "当前版本不产生迁移步骤")
+	_expect_equal(
+		current.get("currentMigrationIds"),
+		[SCHEMA_REGISTRY.PLACE_SERVICE_OWNER_BACKFILL_MIGRATION_ID],
+		"当前版本也登记按内容判断的幂等迁移",
+	)
 	var missing := REGISTRY.migration_path("beta0")
 	_expect_equal(
 		(missing.get("error", {}) as Dictionary).get("code"),
 		"SAVE_MIGRATION_PATH_MISSING",
 		"迁移链缺失有独立错误码",
+	)
+
+
+func _test_place_service_owner_backfill_is_safe_and_idempotent() -> void:
+	var legacy := {
+		"图书馆": {
+			"pressure_id": "service-pressure:图书馆",
+			"place_id": "图书馆",
+			"owner_id": "",
+			"open": false,
+			"service_occupation_id": "occupation_librarian",
+			"service_capacity": 1,
+			"helper_activity_id": "activity_library_staff_checkout",
+			"request_activity_ids": ["activity_library_checkout"],
+			"pending_request_ids": [],
+			"source_revision": 0,
+			"expires_at": -1,
+			"updated_at": -1,
+		},
+	}
+	var current := legacy.duplicate(true)
+	(current.get("图书馆") as Dictionary)["owner_id"] = "resident_librarian"
+	(current.get("图书馆") as Dictionary)["open"] = true
+	var migrated := SCHEMA_REGISTRY.migrate_place_service_owners(
+		legacy,
+		current,
+	)
+	_expect_equal(migrated.get("ok"), true, "旧地点服务协调者可安全补齐")
+	_expect_equal(
+		migrated.get("applied"),
+		[SCHEMA_REGISTRY.PLACE_SERVICE_OWNER_BACKFILL_MIGRATION_ID],
+		"协调者补齐返回稳定迁移 ID",
+	)
+	var migrated_library := (
+		(migrated.get("state", {}) as Dictionary).get("图书馆") as Dictionary
+	)
+	_expect_equal(
+		migrated_library.get("owner_id"),
+		"resident_librarian",
+		"旧存档采用当前派生协调者",
+	)
+	_expect_equal(migrated_library.get("open"), true, "未改动的旧默认状态随协调者恢复营业")
+	_expect_equal(
+		SCHEMA_REGISTRY.migrate_place_service_owners(
+			migrated.get("state"),
+			current,
+		).get("applied"),
+		[],
+		"协调者补齐可重复执行",
+	)
+
+	var player_changed := legacy.duplicate(true)
+	var changed_library := player_changed.get("图书馆") as Dictionary
+	changed_library["source_revision"] = 1
+	changed_library["updated_at"] = 20
+	var preserved := SCHEMA_REGISTRY.migrate_place_service_owners(
+		player_changed,
+		current,
+	)
+	var preserved_library := (
+		(preserved.get("state", {}) as Dictionary).get("图书馆") as Dictionary
+	)
+	_expect_equal(
+		preserved_library.get("owner_id"),
+		"resident_librarian",
+		"玩家改过状态后仍补齐派生协调者",
+	)
+	_expect_equal(
+		preserved_library.get("open"),
+		false,
+		"玩家改过的营业状态不被默认值覆盖",
+	)
+
+	var damaged := legacy.duplicate(true)
+	(damaged.get("图书馆") as Dictionary)["service_capacity"] = 99
+	_expect_equal(
+		SCHEMA_REGISTRY.migrate_place_service_owners(damaged, current).get("applied"),
+		[],
+		"配置不一致的存档不会冒充安全迁移",
+	)
+	var damaged_migration := SCHEMA_REGISTRY.migrate_place_service_owners(
+		damaged,
+		current,
+	)
+	_expect_equal(
+		RESTORE_LAYOUT.prepare_place_service_states(
+			damaged_migration.get("state"),
+			current,
+		).get("ok"),
+		false,
+		"配置不一致的存档仍会被严格恢复拒绝",
 	)
 
 

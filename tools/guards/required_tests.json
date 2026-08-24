@@ -45,7 +45,7 @@
   },
   {
     "id": "res://tests/town_save_compatibility_registry_test.gd",
-    "min_checks": 39
+    "min_checks": 49
   },
   {
     "id": "res://tests/windows_directory_cleanup_test.gd",

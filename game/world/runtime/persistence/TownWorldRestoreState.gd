@@ -706,8 +706,34 @@ static func prepare_full(
 		{},
 		true,
 	)
+	var place_service_migration := (
+		SAVE_SCHEMA_REGISTRY.migrate_place_service_owners(
+			prepared.get("placeServiceStates"),
+			place_service_defaults,
+		) as Dictionary
+	)
+	if place_service_migration.get("ok") != true:
+		return {
+			"ok": false,
+			"errors": ["地点服务旧版本迁移失败"],
+		}
+	var applied_migrations := (
+		migration.get("applied", []) as Array
+	).duplicate()
+	for migration_id_value: Variant in place_service_migration.get(
+		"applied",
+		[],
+	) as Array:
+		var migration_id := String(migration_id_value)
+		if not migration_id.is_empty() and not applied_migrations.has(migration_id):
+			applied_migrations.append(migration_id)
+	migration["applied"] = applied_migrations
+	migration["migrationVersion"] = maxi(
+		int(migration.get("migrationVersion", 0)),
+		int(place_service_migration.get("migrationVersion", 0)),
+	)
 	var place_service_restore := RESTORE_LAYOUT.prepare_place_service_states(
-		prepared.get("placeServiceStates"),
+		place_service_migration.get("state"),
 		place_service_defaults,
 	) as Dictionary
 	if place_service_restore.get("ok") != true:

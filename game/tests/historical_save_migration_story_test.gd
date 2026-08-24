@@ -34,6 +34,9 @@ const EMPTY_SLOT_ID := "historical-empty-slot"
 const SESSION_ID := "roundtrip-session-beta2"
 const FIRST_REVISION := 1
 const ACTIVITY_MIGRATION_ID := "2026-08-12-public-dining-day-routine"
+const PLACE_SERVICE_OWNER_MIGRATION_ID := (
+	"2026-08-24-place-service-owner-backfill"
+)
 
 var _failures: Array[String] = []
 var _checks := 0
@@ -90,10 +93,17 @@ func _run() -> void:
 		(first_restore.get("commitReceipt", {}) as Dictionary)
 		.get("migrationReceipt", {}) as Dictionary
 	)
-	_expect_equal(
-		first_migration.get("applied"),
-		[ACTIVITY_MIGRATION_ID],
+	_expect(
+		(first_migration.get("applied", []) as Array).has(
+			ACTIVITY_MIGRATION_ID,
+		),
 		"首次恢复明确报告 beta2 活动迁移",
+	)
+	_expect(
+		(first_migration.get("applied", []) as Array).has(
+			PLACE_SERVICE_OWNER_MIGRATION_ID,
+		),
+		"首次恢复明确报告地点服务协调者迁移",
 	)
 	var first_world: RefCounted = first.get("world")
 	var before_time := first_world.call("get_time") as Dictionary

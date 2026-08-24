@@ -78,6 +78,14 @@ const BETA1_TO_BETA6_VERSION_COMBINATION := {
 	"residentMemory": 6,
 	"worldData": 4,
 }
+# 尚未形成新发行版、且旧存档无法靠版本字段区分时，恢复链按内容守卫执行这些迁移。
+const CURRENT_MIGRATIONS := [
+	{
+		"id": SAVE_SCHEMA_REGISTRY.PLACE_SERVICE_OWNER_BACKFILL_MIGRATION_ID,
+		"module": "world_snapshot",
+		"reason": "地点服务协调者的默认派生规则变化；仅在静态配置完全一致时补齐。",
+	},
+]
 const RELEASES := [
 	{
 		"id": "beta1",
@@ -445,6 +453,7 @@ static func migration_path(
 		"from": from_release,
 		"to": resolved_to_release,
 		"edges": edges,
+		"currentMigrationIds": _current_migration_ids(),
 		"error": {},
 	}
 
@@ -526,6 +535,21 @@ static func validate_registry() -> Array[String]:
 			var module_id := String(module_id_value)
 			if not module_ids.has(module_id):
 				errors.append("migration edge references unknown module: %s" % module_id)
+	var current_migration_ids := {}
+	for migration_value: Variant in CURRENT_MIGRATIONS:
+		if not migration_value is Dictionary:
+			errors.append("current migration descriptor must be a dictionary")
+			continue
+		var current_migration := migration_value as Dictionary
+		var migration_id := String(current_migration.get("id", ""))
+		if migration_id.is_empty() or current_migration_ids.has(migration_id):
+			errors.append("current migration id is missing or duplicated: %s" % migration_id)
+		else:
+			current_migration_ids[migration_id] = true
+		if not module_ids.has(String(current_migration.get("module", ""))):
+			errors.append("current migration references unknown module: %s" % migration_id)
+		if String(current_migration.get("reason", "")).is_empty():
+			errors.append("current migration reason is required: %s" % migration_id)
 	return errors
 
 
@@ -540,6 +564,13 @@ static func _current_release() -> String:
 	if RELEASES.is_empty():
 		return ""
 	return String((RELEASES.back() as Dictionary).get("id", ""))
+
+
+static func _current_migration_ids() -> Array[String]:
+	var migration_ids: Array[String] = []
+	for migration_value: Variant in CURRENT_MIGRATIONS:
+		migration_ids.append(String((migration_value as Dictionary).get("id", "")))
+	return migration_ids
 
 
 static func _migration_edges() -> Array[Dictionary]:
