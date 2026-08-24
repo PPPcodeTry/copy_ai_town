@@ -54,9 +54,18 @@ func _run() -> void:
 	var test_root := "user://tests/town_session_saves/roundtrip_%s" % identity
 	var world_data := _read_json("res://world/data/town/town_world.json")
 	var selection_vm := INTERNAL_CATALOG.build_view_model("fake", "fake")
+	var selection_data := selection_vm.get("data", {}) as Dictionary
+	selection_data["selected_resident_ids"] = (
+		selection_data.get("recommended_resident_ids", []) as Array
+	).slice(0, 5)
+	INTERNAL_CATALOG.update_confirmation_payload(
+		selection_data,
+		"fake",
+		"fake",
+		2,
+	)
 	var draft := (
-		(selection_vm.get("data", {}) as Dictionary)
-		.get("confirmation_payload", {}) as Dictionary
+		selection_data.get("confirmation_payload", {}) as Dictionary
 	).duplicate(true)
 	var catalog := INTERNAL_CATALOG.build_catalog(world_data, selection_vm)
 	var compiled := COMPILER.compile(draft, world_data, catalog) as Dictionary
@@ -66,6 +75,7 @@ func _run() -> void:
 		return
 	var bindings := compiled.get("residentBindings", []) as Array[Dictionary]
 	var identities := _identities(bindings)
+	_expect_equal(identities.size(), 5, "少人口闭环只包含五位居民")
 	var request_host := Node.new()
 	request_host.name = "SaveContinueRoundtripRequestHost"
 	root.add_child(request_host)
@@ -251,6 +261,11 @@ func _run() -> void:
 	_expect_equal(restored.get("context"), context, "恢复回执对应所选存档修订")
 	_expect_equal(restored_world.call("get_time"), saved_time, "恢复后世界时间与保存时一致")
 	_expect_equal(
+		(restored_world.call("get_resident_ids") as Array).size(),
+		5,
+		"恢复后仍是原有五位居民",
+	)
+	_expect_equal(
 		restore_gateway.call("get_agent_save_context"),
 		context,
 		"恢复后居民存档上下文与世界修订一致",
@@ -269,12 +284,37 @@ func _run() -> void:
 		"town",
 		"恢复完成后正式小镇保持可见室外视图",
 	)
+	# 正式存档继续沿用清单中的稳定会话配置；restorePending 等字段只属于
+	# 本次进场运行上下文，不能写回持久化配置。
+	var resaved_session_config := session_config.duplicate(true)
+	var resaved := restore_coordinator.call("save", {
+		"slotId": slot_id,
+		"sessionId": session_id,
+		"residentIdentities": identities.duplicate(true),
+		"sessionConfig": resaved_session_config,
+		"savedAt": Time.get_datetime_string_from_system(false, false),
+		"residentMessages": [],
+	}) as Dictionary
+	_expect_ok(resaved, "五人存档恢复后可以再次成对保存")
+	_expect_equal(
+		(resaved.get("context", {}) as Dictionary).get("save_revision"),
+		2,
+		"恢复后的再次保存发布第二个修订",
+	)
+	_expect_equal(
+		(restored_world.call("get_resident_ids") as Array).size(),
+		5,
+		"再次保存不会补出未选择的居民",
+	)
 
 	var cleanup_agent := restored_agent
+	var cleanup_context := (
+		resaved.get("context", context) as Dictionary
+	).duplicate(true)
 	restored_runtime.queue_free()
 	await _wait_frames(4)
 	_expect_ok(
-		cleanup_agent.call("delete_game", context) as Dictionary,
+		cleanup_agent.call("delete_game", cleanup_context) as Dictionary,
 		"闭环测试居民存档可清理",
 	)
 	_expect_ok(store.call("cleanup_test_root") as Dictionary, "闭环测试世界存档可清理")

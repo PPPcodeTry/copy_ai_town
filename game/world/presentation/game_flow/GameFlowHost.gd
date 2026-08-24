@@ -393,7 +393,7 @@ func _poll_resident_replacement() -> void:
 	if current_minute < 0 or current_minute == _replacement_last_checked_minute:
 		return
 	_replacement_last_checked_minute = current_minute
-	if RESIDENT_REPLACEMENT.living_resident_count(world) >= 15:
+	if not RESIDENT_REPLACEMENT.replacement_needed(world):
 		return
 	var death_events := world.get_public_death_events() as Array
 	for death_event_value: Variant in death_events:
@@ -603,7 +603,7 @@ func _build_replacement_candidate(
 		"说话简洁，熟悉之后会偶尔开玩笑",
 	)
 	template["attributes"] = attributes
-	# World 的十五个住宅席位与 residentId 一一对应。新居民接替死亡
+	# World 的本局住宅席位与 residentId 一一对应。新居民接替死亡
 	# 居民的席位，保留内部稳定 ID，但姓名、人设、记忆和 Agent 运行时
 	# 都会换成新居民，死亡记录仍留在公共世界日志中。
 	var resident_id := deceased_id

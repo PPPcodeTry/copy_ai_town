@@ -13,6 +13,9 @@ const POPULATION_RULES := preload("res://world/runtime/TownPopulationRules.gd")
 const MODEL_ASSIGNMENT_SERVICE := preload(
 	"res://ui/resident_model_assignment/runtime/ResidentModelAssignmentService.gd"
 )
+const RESIDENT_EDITOR_SERVICE := preload(
+	"res://world/presentation/session/TownResidentEditorService.gd"
+)
 const CUSTOM_POOL := preload(
 	"res://world/presentation/session/TownCustomResidentCandidatePool.gd"
 )
@@ -1250,6 +1253,24 @@ func _verify_variable_population_openings(
 			configured.get("residentCount"),
 			resident_count,
 			"model assignment reports the actual resident count",
+		)
+		var resident_editor := RESIDENT_EDITOR_SERVICE.new()
+		var editor_configured := resident_editor.configure(
+			formal_catalog,
+			world_data,
+			draft,
+		) as Dictionary
+		_expect_ok(
+			editor_configured,
+			"resident editor uses the actual %d-resident draft" % resident_count,
+		)
+		_expect_equal(
+			(
+				(resident_editor.get_view_model().get("data", {}) as Dictionary)
+				.get("slotCount")
+			),
+			resident_count,
+			"resident editor reports the actual resident count",
 		)
 		var identities: Array[Dictionary] = []
 		for binding_value: Variant in compiled.get("residentBindings", []) as Array:

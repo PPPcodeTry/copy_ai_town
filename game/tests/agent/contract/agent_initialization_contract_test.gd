@@ -27,6 +27,41 @@ func _initialize() -> void:
 		[],
 		"铺面可以不绑定固定居民负责人",
 	)
+	var homes := valid.duplicate(true)
+	(homes.get("places", []) as Array).append_array([{
+		"name": "林岚家",
+		"type": "住家",
+		"owner": "林岚",
+		"owner_resident_id": "resident-lin-lan",
+		"summary": "林岚已经入住的住宅",
+	}, {
+		"name": "空置住宅",
+		"type": "住家",
+		"owner": null,
+		"owner_resident_id": null,
+		"summary": "本局暂时无人入住的住宅",
+	}])
+	_expect_equal(
+		AgentContractScript.validate_initialization(homes),
+		[],
+		"居民初始化允许住宅保持空置",
+	)
+	var incomplete_home_owner := homes.duplicate(true)
+	var incomplete_home := (
+		(incomplete_home_owner.get("places", []) as Array)[-1]
+		as Dictionary
+	)
+	incomplete_home["owner"] = "幽灵居民"
+	_expect_error_contains(
+		{
+			"ok": false,
+			"errors": AgentContractScript.validate_initialization(
+				incomplete_home_owner,
+			),
+		},
+		"住家主人姓名与居民 ID 必须同时为空或同时存在",
+		"空置住宅不能只残留主人姓名",
+	)
 	var cases: Array[Dictionary] = [
 		{"id": "not_object", "value": [], "error": "初始化资料必须是对象"},
 		{"id": "unknown_field", "value": _with_field(valid, "unknown", true), "error": "initialization.unknown"},
