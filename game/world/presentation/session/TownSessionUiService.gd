@@ -17,6 +17,9 @@ const COORDINATOR := preload(
 const MANIFEST := preload(
 	"res://world/presentation/session/TownSessionSaveManifest.gd"
 )
+const RECOVERY_PLANNER := preload(
+	"res://world/presentation/session/TownSaveRecoveryPlanner.gd"
+)
 
 const FORMAL_WORLD_REQUIRED := "SESSION_SAVE_FORMAL_WORLD_REQUIRED"
 const SERVICE_NOT_CONFIGURED := "SESSION_SAVE_SERVICE_NOT_CONFIGURED"
@@ -265,6 +268,75 @@ func create_save(payload: Dictionary = {}) -> Dictionary:
 			else payload.get("residentMessages")
 		),
 	}) as Dictionary
+	_last_result = result.duplicate(true)
+	return result
+
+
+func execute_recovery_plan(
+	plan: Dictionary,
+	confirmation: Dictionary,
+	payload: Dictionary = {},
+) -> Dictionary:
+	var active_context := (
+		_agent.get_save_context() as Dictionary
+		if _agent != null and _agent.has_method("get_save_context")
+		else {}
+	)
+	var source_revision := int(plan.get("sourceSaveRevision", -1))
+	var damaged_revision := int(plan.get("damagedSaveRevision", -1))
+	var slot_id := String(plan.get("slotId", ""))
+	var session_id := String(plan.get("sourceSessionId", ""))
+	var expected_plan_id := RECOVERY_PLANNER.plan_id(
+		slot_id,
+		source_revision,
+		damaged_revision,
+	)
+	if (
+		int(plan.get("version", 0)) != RECOVERY_PLANNER.PLAN_VERSION
+		or String(plan.get("planId", "")) != expected_plan_id
+		or String(plan.get("action", ""))
+		!= RECOVERY_PLANNER.REPUBLISH_ACTION
+		or not bool(plan.get("confirmationRequired", false))
+		or confirmation != {
+			"confirmed": true,
+			"planId": expected_plan_id,
+		}
+		or slot_id != _session_slot_id()
+		or session_id != _session_id()
+		or source_revision < 1
+		or damaged_revision <= source_revision
+		or String(active_context.get("slot_id", "")) != slot_id
+		or String(active_context.get("session_id", "")) != session_id
+		or int(active_context.get("save_revision", -1)) != source_revision
+	):
+		_last_result = _failure("SESSION_SAVE_RECOVERY_PLAN_INVALID", false)
+		return _last_result.duplicate(true)
+	var published := create_save(payload)
+	if not bool(published.get("ok", false)):
+		return published
+	var published_context := published.get("context", {}) as Dictionary
+	var published_revision := int(
+		published_context.get("save_revision", -1),
+	)
+	if (
+		String(published_context.get("slot_id", "")) != slot_id
+		or String(published_context.get("session_id", "")) != session_id
+		or published_revision <= damaged_revision
+	):
+		_last_result = _failure(
+			"SESSION_SAVE_RECOVERY_PUBLICATION_INVALID",
+			false,
+		)
+		return _last_result.duplicate(true)
+	_session_config["saveRevision"] = published_revision
+	var result := published.duplicate(true)
+	result["repairReceipt"] = {
+		"planId": String(plan.get("planId", "")),
+		"action": String(plan.get("action", "")),
+		"sourceSaveRevision": source_revision,
+		"damagedSaveRevision": damaged_revision,
+		"publishedSaveRevision": published_revision,
+	}
 	_last_result = result.duplicate(true)
 	return result
 

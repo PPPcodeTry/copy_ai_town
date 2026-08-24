@@ -5074,6 +5074,7 @@ func _start_formal_continue(
 			else "continue",
 		)
 		return
+	discovery["recoveryConfirmed"] = bool(recovery_confirmed)
 	var route_kind := route_kind_override.strip_edges()
 	if not route_kind in ["continue", "load_game"]:
 		route_kind = (
@@ -5341,6 +5342,66 @@ func _on_formal_continue_provider_health_completed(
 			_discard_pending_runtime()
 			_publish_startup_result(completion)
 			return
+	var recovery_plan := (
+		discovery.get("recoveryPlan", {}) as Dictionary
+	).duplicate(true)
+	if not recovery_plan.is_empty():
+		if not bool(discovery.get("recoveryConfirmed", false)):
+			_discard_pending_runtime()
+			_publish_startup_result(
+				_failure("SESSION_SAVE_RECOVERY_CONFIRMATION_REQUIRED", false),
+			)
+			return
+		_advance_town_entry_loading(0.94, "正在发布修复后的完整存档…")
+		var repaired := restore_service.execute_recovery_plan(
+			recovery_plan,
+			{
+				"confirmed": true,
+				"planId": String(recovery_plan.get("planId", "")),
+			},
+			{
+				"residentMessages": (
+					discovery.get("residentMessages", []) as Array
+				).duplicate(true),
+			},
+		) as Dictionary
+		if not bool(repaired.get("ok", false)):
+			_discard_pending_runtime()
+			_publish_startup_result(repaired)
+			return
+		restored["restoredContext"] = (
+			restored.get("context", {}) as Dictionary
+		).duplicate(true)
+		restored["context"] = (
+			repaired.get("context", {}) as Dictionary
+		).duplicate(true)
+		restored["repairReceipt"] = (
+			repaired.get("repairReceipt", {}) as Dictionary
+		).duplicate(true)
+		var repaired_context := repaired.get("context", {}) as Dictionary
+		var verified := _discover_startup_slot(slot_id)
+		var verified_summary := verified.get("summary", {}) as Dictionary
+		if (
+			not bool(verified.get("ok", false))
+			or String(verified.get("slotState", "")) != "healthy"
+			or int(verified_summary.get("saveRevision", -1))
+			!= int(repaired_context.get("save_revision", -1))
+		):
+			_discard_pending_runtime()
+			_publish_startup_result(
+				_failure("SESSION_SAVE_RECOVERY_VERIFICATION_FAILED", false),
+			)
+			return
+		var runtime_revision_update := runtime.record_published_save(
+			repaired_context,
+		) as Dictionary
+		if not bool(runtime_revision_update.get("ok", false)):
+			_discard_pending_runtime()
+			_publish_startup_result(runtime_revision_update)
+			return
+		(restored["repairReceipt"] as Dictionary)["verification"] = (
+			"world_agent_pair_verified"
+		)
 	restored_session_config["restorePending"] = false
 	restored_session_config["saveRevision"] = int(
 		(restored.get("context", {}) as Dictionary).get(
@@ -6856,6 +6917,12 @@ func _catalog_slot_discovery(slot: Dictionary, include_config: bool) -> Dictiona
 		"agentIntegrity": String(
 			slot.get("agentIntegrity", "manifest_committed_unverified"),
 		),
+		"recoveryPlan": (
+			slot.get("recoveryPlan", {}) as Dictionary
+		).duplicate(true),
+		"residentMessages": (
+			slot.get("residentMessages", []) as Array
+		).duplicate(true),
 	}
 	if include_config:
 		result["sessionConfig"] = (

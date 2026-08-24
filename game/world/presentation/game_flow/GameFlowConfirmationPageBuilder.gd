@@ -217,19 +217,19 @@ static func continue_recovery(
 					"kicker": "存档处理确认",
 					"title": "使用最近完整存档？",
 					"body": (
-						"最新的 %s 已损坏。继续将使用最近完整的 "
-						+ "World + Agent 配对 revision %d。"
+						"最新的 %s 已损坏。将恢复最近完整的 "
+						+ "World + Agent 配对 revision %d，并发布新的完整修订。"
 					) % [damage_label, save_revision],
 					"consequence": (
-						"确认后会回退确已保存的游戏进度；损坏版本不会被静默覆盖。"
+						"确认后会回退确已保存的游戏进度；原存档和损坏证据都会保留。"
 						if progress_rollback
 						else (
-							"确认后将忽略损坏版本，恢复可验证的完整存档；"
-							+ "损坏版本不会被静默覆盖。"
+							"确认后将修复为可验证的完整存档；"
+							+ "原存档和损坏证据都会保留。"
 						)
 					),
 					"cancel": "返回",
-					"retryRestore": "使用最近完整存档",
+					"retryRestore": "修复并继续",
 					"confirmOverwrite": "",
 				},
 			},

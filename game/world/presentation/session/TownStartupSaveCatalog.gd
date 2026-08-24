@@ -5,6 +5,9 @@ extends RefCounted
 const SESSION_SAVE_MANIFEST := preload(
 	"res://world/presentation/session/TownSessionSaveManifest.gd"
 )
+const RECOVERY_PLANNER := preload(
+	"res://world/presentation/session/TownSaveRecoveryPlanner.gd"
+)
 const DEFAULT_PROFILE_PATH := "user://town_startup_profile.json"
 const TEST_PROFILE_ROOT := "user://tests/town_startup_profile"
 const PROFILE_SCHEMA := "town-startup-profile"
@@ -681,58 +684,65 @@ func _inspect_slot(definition: Dictionary) -> Dictionary:
 		if not manifest.is_empty()
 		else []
 	)
+	var slot := {
+		"slotId": slot_id,
+		"displayName": String(definition.get("displayName", "")),
+		"state": state,
+		"recoveryState": recovery_state,
+		"continueAvailable": continue_available,
+		"requiresRecoveryConfirmation": requires_confirmation,
+		"recoveryProgressRollback": recovery_progress_rollback,
+		"errorCode": error_code,
+		"latestEvidenceRevision": latest_evidence_revision,
+		"latestCompleteRevision": latest_complete_revision,
+		"latestIncompleteRevision": latest_incomplete_revision,
+		"summary": summary,
+		"manifest": manifest,
+		"sessionConfig": session_config,
+		"residentMessages": resident_messages,
+		"corruptRevisions": corrupt_revisions,
+		"damageDetails": (
+			_build_damage_details(
+				corrupt_revisions[0],
+				latest_complete,
+				recovery_progress_rollback,
+			)
+			if state == "recoverable" and not corrupt_revisions.is_empty()
+			else {}
+		),
+		"continueNotice": (
+			{
+				"noticeId": "latest_save_incomplete_fallback",
+				"message": "上次保存未完成，已使用最近完整存档",
+				"surface": "toast",
+				"blocking": false,
+			}
+			if (
+				state == "incomplete"
+				and not latest_complete.is_empty()
+				and latest_incomplete_revision > latest_complete_revision
+			)
+			else {}
+		),
+		"saveBlockers": save_blockers,
+		"restoreBlockers": restore_blockers,
+		"agentIntegrity": (
+			"agent_snapshot_verified"
+			if _agent_store != null and not latest_complete.is_empty()
+			else "manifest_committed_unverified"
+			if not latest_complete.is_empty()
+			else "not_applicable"
+		),
+	}
+	var inspection_report := RECOVERY_PLANNER.inspection_report(slot)
+	slot["inspectionReport"] = inspection_report
+	slot["recoveryPlan"] = RECOVERY_PLANNER.recovery_plan(
+		slot,
+		inspection_report,
+	)
 	return {
 		"ok": true,
-		"slot": {
-			"slotId": slot_id,
-			"displayName": String(definition.get("displayName", "")),
-			"state": state,
-			"recoveryState": recovery_state,
-			"continueAvailable": continue_available,
-			"requiresRecoveryConfirmation": requires_confirmation,
-			"recoveryProgressRollback": recovery_progress_rollback,
-			"errorCode": error_code,
-			"latestEvidenceRevision": latest_evidence_revision,
-			"latestCompleteRevision": latest_complete_revision,
-			"latestIncompleteRevision": latest_incomplete_revision,
-			"summary": summary,
-			"manifest": manifest,
-			"sessionConfig": session_config,
-			"residentMessages": resident_messages,
-			"corruptRevisions": corrupt_revisions,
-			"damageDetails": (
-				_build_damage_details(
-					corrupt_revisions[0],
-					latest_complete,
-					recovery_progress_rollback,
-				)
-				if state == "recoverable" and not corrupt_revisions.is_empty()
-				else {}
-			),
-			"continueNotice": (
-				{
-					"noticeId": "latest_save_incomplete_fallback",
-					"message": "上次保存未完成，已使用最近完整存档",
-					"surface": "toast",
-					"blocking": false,
-				}
-				if (
-					state == "incomplete"
-					and not latest_complete.is_empty()
-					and latest_incomplete_revision > latest_complete_revision
-				)
-				else {}
-			),
-			"saveBlockers": save_blockers,
-			"restoreBlockers": restore_blockers,
-			"agentIntegrity": (
-				"agent_snapshot_verified"
-				if _agent_store != null and not latest_complete.is_empty()
-				else "manifest_committed_unverified"
-				if not latest_complete.is_empty()
-				else "not_applicable"
-			),
-		},
+		"slot": slot,
 	}
 
 

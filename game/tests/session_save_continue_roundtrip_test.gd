@@ -28,6 +28,15 @@ const RUNTIME_GATE := preload(
 const COORDINATOR := preload(
 	"res://world/presentation/session/TownSessionSaveCoordinator.gd"
 )
+const SESSION_UI_SERVICE := preload(
+	"res://world/presentation/session/TownSessionUiService.gd"
+)
+const STARTUP_SAVE_CATALOG := preload(
+	"res://world/presentation/session/TownStartupSaveCatalog.gd"
+)
+const AGENT_SAVE_STORE := preload(
+	"res://agent/lifecycle/AgentSaveStore.gd"
+)
 
 var _failures: Array[String] = []
 var _checks := 0
@@ -173,6 +182,35 @@ func _run() -> void:
 		1,
 		"发现入口返回已发布修订而不是临时文件",
 	)
+	var saved_again := save_coordinator.call("save", {
+		"slotId": slot_id,
+		"sessionId": session_id,
+		"residentIdentities": identities.duplicate(true),
+		"sessionConfig": session_config.duplicate(true),
+		"savedAt": Time.get_datetime_string_from_system(false, false),
+		"residentMessages": [],
+	}) as Dictionary
+	_expect_ok(saved_again, "修复故事先发布第二个完整修订")
+	_expect_equal(
+		(saved_again.get("context", {}) as Dictionary).get("save_revision"),
+		2,
+		"修复故事的待损坏修订号为 2",
+	)
+	var damaged_manifest := saved_again.get("manifest", {}) as Dictionary
+	var damaged_world := (
+		(damaged_manifest.get("components", {}) as Dictionary)
+		.get("world", {}) as Dictionary
+	)
+	var damaged_reference := String(damaged_world.get("snapshot_ref", ""))
+	var damaged_path := "%s/%s" % [test_root, damaged_reference]
+	var damaged_file := FileAccess.open(damaged_path, FileAccess.WRITE)
+	_expect(damaged_file != null, "修复故事可构造最新 World 引用损坏")
+	if damaged_file != null:
+		damaged_file.store_string("{}\n")
+		damaged_file = null
+
+	var recovery_case := _inspect_recovery_case(store, slot_id, identity)
+	var recovery_plan := recovery_case.get("plan", {}) as Dictionary
 
 	source_runtime.queue_free()
 	await _wait_frames(4)
@@ -235,22 +273,20 @@ func _run() -> void:
 	)
 	var restored_world: RefCounted = restored_runtime.call("get_world_runtime")
 	var restored_agent: RefCounted = restore_gateway.call("get_agent_save_participant")
-	var restore_gate: RefCounted = RUNTIME_GATE.new()
+	var restore_service: RefCounted = SESSION_UI_SERVICE.new()
 	_expect_ok(
-		restore_gate.call("configure", restored_runtime) as Dictionary,
-		"恢复小镇事务锁可配置",
+		restore_service.call("configure_test_store_root", test_root) as Dictionary,
+		"恢复服务可复用测试存档目录",
 	)
-	var restore_coordinator: RefCounted = COORDINATOR.new()
-	_expect_ok(restore_coordinator.call(
+	_expect_ok(restore_service.call(
 		"configure",
-		store,
+		restored_runtime,
 		restored_world,
 		restored_agent,
-		restore_gate,
-	) as Dictionary, "成对恢复协调器可配置")
-	var restored := restore_coordinator.call(
-		"restore_revision",
-		slot_id,
+		restored_session_config,
+	) as Dictionary, "成对恢复服务可配置")
+	var restored := restore_service.call(
+		"continue_revision",
 		session_id,
 		1,
 		world_data,
@@ -278,6 +314,22 @@ func _run() -> void:
 	_expect_ok(
 		restored_runtime.call("complete_restored_session", context) as Dictionary,
 		"恢复完成状态可提交给小镇运行时",
+	)
+	var repaired_context := _verify_recovery_publication(
+		restore_service,
+		store,
+		recovery_case,
+		damaged_reference,
+		damaged_world,
+	)
+	_expect_ok(
+		restored_runtime.record_published_save(repaired_context),
+		"运行时同步记录修复后发布的新修订",
+	)
+	_expect_equal(
+		(restored_runtime.get("session_config") as Dictionary).get("saveRevision"),
+		3,
+		"进入小镇前运行时上下文已指向修订 3",
 	)
 	_expect_equal(
 		(restored_runtime.call("get_runtime_state") as Dictionary).get("viewMode"),
@@ -320,6 +372,133 @@ func _run() -> void:
 	_expect_ok(store.call("cleanup_test_root") as Dictionary, "闭环测试世界存档可清理")
 	request_host.queue_free()
 	_finish()
+
+
+func _inspect_recovery_case(
+	store: RefCounted,
+	slot_id: String,
+	identity: String,
+) -> Dictionary:
+	var catalog: RefCounted = STARTUP_SAVE_CATALOG.new()
+	var agent_store: RefCounted = AGENT_SAVE_STORE.new()
+	_expect_ok(catalog.call(
+		"configure",
+		store,
+		"user://tests/town_startup_profile/roundtrip_%s.json" % identity,
+		agent_store,
+	) as Dictionary, "修复故事可配置生产只读检查器")
+	var slot_definitions := [
+		{"slotId": slot_id, "displayName": "修复测试"},
+		{"slotId": "empty-%s" % identity, "displayName": "空槽位"},
+	]
+	var inspected := catalog.call("get_catalog", slot_definitions) as Dictionary
+	_expect_ok(inspected, "最新修订损坏时只读检查成功")
+	var slots := inspected.get("slots", []) as Array
+	_expect(not slots.is_empty(), "只读检查返回目标槽位")
+	var slot := slots[0] as Dictionary if not slots.is_empty() else {}
+	_expect_equal(
+		slot.get("state"),
+		"recoverable",
+		"最新损坏且旧完整配对存在时分类为可修复",
+	)
+	_expect_equal(
+		slot.get("inspectionReport"),
+		{
+			"version": 1,
+			"slotId": slot_id,
+			"classification": "older_complete_revision_available",
+			"errorCode": "SESSION_SAVE_REFERENCE_HASH_MISMATCH",
+			"latestEvidenceRevision": 2,
+			"latestCompleteRevision": 1,
+			"repairable": true,
+		},
+		"只读检查报告只保留制定计划所需的证据",
+	)
+	var plan := slot.get("recoveryPlan", {}) as Dictionary
+	_expect_equal(
+		plan.get("action"),
+		"restore_complete_pair_and_publish",
+		"只读检查给出恢复完整配对并发布新修订的计划",
+	)
+	_expect_equal(plan.get("sourceSaveRevision"), 1, "修复计划固定旧完整来源修订")
+	_expect_equal(plan.get("damagedSaveRevision"), 2, "修复计划记录损坏修订证据")
+	return {
+		"catalog": catalog,
+		"slotDefinitions": slot_definitions,
+		"slot": slot,
+		"plan": plan,
+	}
+
+
+func _verify_recovery_publication(
+	service: RefCounted,
+	store: RefCounted,
+	recovery_case: Dictionary,
+	damaged_reference: String,
+	damaged_world: Dictionary,
+) -> Dictionary:
+	var plan := recovery_case.get("plan", {}) as Dictionary
+	_expect(service.has_method("execute_recovery_plan"), "会话服务提供确认后的修复执行入口")
+	var unconfirmed := service.call("execute_recovery_plan", plan, {}) as Dictionary
+	_expect_equal(
+		unconfirmed.get("errorCode"),
+		"SESSION_SAVE_RECOVERY_PLAN_INVALID",
+		"没有对应玩家确认时不执行修复计划",
+	)
+	var confirmation := {
+		"confirmed": true,
+		"planId": String(plan.get("planId", "")),
+	}
+	var slot := recovery_case.get("slot", {}) as Dictionary
+	var repaired := service.call(
+		"execute_recovery_plan",
+		plan,
+		confirmation,
+		{"residentMessages": slot.get("residentMessages", [])},
+	) as Dictionary
+	_expect_ok(repaired, "确认后将恢复状态发布为新的完整修订")
+	var receipt := repaired.get("repairReceipt", {}) as Dictionary
+	_expect_equal(receipt.get("sourceSaveRevision"), 1, "修复回执记录实际恢复来源")
+	_expect_equal(receipt.get("publishedSaveRevision"), 3, "修复不覆盖原档而是发布修订 3")
+	var repeated := service.call(
+		"execute_recovery_plan",
+		plan,
+		confirmation,
+	) as Dictionary
+	_expect_equal(
+		repeated.get("errorCode"),
+		"SESSION_SAVE_RECOVERY_PLAN_INVALID",
+		"同一修复计划不能重复发布新修订",
+	)
+	_expect_equal(
+		(store.call(
+			"read_reference",
+			damaged_reference,
+			String(damaged_world.get("snapshot_sha256", "")),
+		) as Dictionary).get("errorCode"),
+		"SESSION_SAVE_REFERENCE_HASH_MISMATCH",
+		"修复后原损坏证据仍保持不变",
+	)
+	var catalog := recovery_case.get("catalog") as RefCounted
+	var repaired_catalog := catalog.call(
+		"get_catalog",
+		recovery_case.get("slotDefinitions", []),
+	) as Dictionary
+	_expect_ok(repaired_catalog, "修复完成后可重新执行启动检查")
+	var repaired_slots := repaired_catalog.get("slots", []) as Array
+	_expect(not repaired_slots.is_empty(), "修复后启动检查返回目标槽位")
+	var repaired_slot := (
+		repaired_slots[0] as Dictionary
+		if not repaired_slots.is_empty()
+		else {}
+	)
+	_expect_equal(repaired_slot.get("state"), "healthy", "再次启动时新的完整修订成为当前存档")
+	_expect_equal(
+		repaired_slot.get("recoveryPlan"),
+		{},
+		"再次启动不再重复生成同一修复计划",
+	)
+	return (repaired.get("context", {}) as Dictionary).duplicate(true)
 
 
 func _identities(bindings: Array[Dictionary]) -> Array[Dictionary]:
