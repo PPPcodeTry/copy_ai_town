@@ -18,6 +18,8 @@ const NATURAL_LIFE_ACTIVITY_IDS := [
 	"activity_cafe_eat_pastry",
 	"activity_cafe_order",
 	"activity_cafe_rest",
+	"activity_library_read",
+	"activity_library_write",
 	CLINIC_CONTINUITY.SELF_CARE_ACTIVITY_ID,
 	CLINIC_CONTINUITY.WAIT_ACTIVITY_ID,
 	"activity_dining_eat_meal",
@@ -162,6 +164,10 @@ static func _activities_for_destination(
 		world.ACTIVITY_AVAILABILITY_RUNTIME.apply_occupation_service(
 			world,
 			String(resident.get("residentId", "")),
+			option,
+		)
+		world.ACTIVITY_AVAILABILITY_RUNTIME.apply_public_place_continuity(
+			world,
 			option,
 		)
 		world.ACTIVITY_AVAILABILITY_RUNTIME.apply_clinic_continuity(

@@ -11,6 +11,9 @@ const DINING_SERVICE := preload(
 const CLINIC_CONTINUITY := preload(
 	"res://world/runtime/condition/TownClinicContinuityRuntime.gd"
 )
+const PUBLIC_PLACE_CONTINUITY := preload(
+	"res://world/runtime/work/TownPublicPlaceContinuityRuntime.gd"
+)
 const OCCUPATION_SERVICE_ACTIVITY_POLICY := preload(
 	"res://world/runtime/work/TownOccupationServiceActivityPolicy.gd"
 )
@@ -112,6 +115,16 @@ static func apply_clinic_continuity(
 	CLINIC_CONTINUITY.apply_activity_availability(
 		host,
 		resident,
+		option,
+	)
+
+
+static func apply_public_place_continuity(
+	host,
+	option: Dictionary,
+) -> void:
+	PUBLIC_PLACE_CONTINUITY.apply_activity_availability(
+		host,
 		option,
 	)
 

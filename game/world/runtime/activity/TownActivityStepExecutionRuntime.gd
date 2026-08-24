@@ -22,6 +22,9 @@ const DINING_SERVICE := preload(
 const CLINIC_CONTINUITY := preload(
 	"res://world/runtime/condition/TownClinicContinuityRuntime.gd"
 )
+const PUBLIC_PLACE_CONTINUITY := preload(
+	"res://world/runtime/work/TownPublicPlaceContinuityRuntime.gd"
+)
 const SOCIAL_JUDGMENTS := preload(
 	"res://world/runtime/social/TownSocialJudgments.gd"
 )
@@ -220,6 +223,21 @@ static func accept_request(
 		return {"result": host._command_failure(
 			"OCCUPATION_SERVICE_UNSTAFFED",
 			["对应岗位当前无人值守，不能开始这项服务活动"],
+		)}
+	var requested_place_id := String(
+		(step.get("target", {}) as Dictionary).get("placeId", ""),
+	)
+	if (
+		ACTIVITY_EXECUTION_PROJECTION.first_candidate_is_visitor(validated)
+		and PUBLIC_PLACE_CONTINUITY.activity_blocked_when_unstaffed(
+			host,
+			requested_place_id,
+			requested_activity_id,
+		)
+	):
+		return {"result": host._command_failure(
+			"OCCUPATION_SERVICE_UNSTAFFED",
+			["对应岗位当前无人值守，这项活动已经暂停"],
 		)}
 	if validated.get("idempotent") == true:
 		if not bool(host._activity_runtime.execution_source_matches(

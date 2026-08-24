@@ -35,6 +35,9 @@ const ACTIVITY_SOURCE_FINGERPRINT_AFTER_COMMUNAL_SIMPLE_MEAL := (
 const ACTIVITY_SOURCE_FINGERPRINT_AFTER_CLINIC_SELF_CARE := (
 	"75d01b68ad3727ff7327b828ca6c8d13846aac5699228db74cb749251044b479"
 )
+const ACTIVITY_SOURCE_FINGERPRINT_AFTER_UNSTAFFED_PUBLIC_PLACE_ACCESS := (
+	"44815398b66700e89ebd014692af12d17c754bac2746d026f6796b35872b0cfd"
+)
 const ACTIVITY_SAVE_MIGRATIONS := [
 	{
 		"id": "2026-08-10-public-dining-prepare-dough-target",
@@ -118,6 +121,18 @@ const ACTIVITY_SAVE_MIGRATIONS := [
 			ACTIVITY_SOURCE_FINGERPRINT_AFTER_CLINIC_SELF_CARE
 		),
 		# 新增基础自我处理活动位，没有删除或改名既有执行引用。
+		"executionRewrites": [],
+		"placeServiceStateRewrites": [],
+	},
+	{
+		"id": "2026-08-24-unstaffed-public-place-access",
+		"fromSourceFingerprint": (
+			ACTIVITY_SOURCE_FINGERPRINT_AFTER_CLINIC_SELF_CARE
+		),
+		"toSourceFingerprint": (
+			ACTIVITY_SOURCE_FINGERPRINT_AFTER_UNSTAFFED_PUBLIC_PLACE_ACCESS
+		),
+		# 只增加从静态地点配置推导的无人值守访问规则，不改写已保存活动引用。
 		"executionRewrites": [],
 		"placeServiceStateRewrites": [],
 	},

@@ -103,6 +103,10 @@ static func query(
 				normalized_id,
 				option,
 			)
+			world.ACTIVITY_AVAILABILITY_RUNTIME.apply_public_place_continuity(
+				world,
+				option,
+			)
 			world.CLINIC_SERVICE_COORDINATION_RUNTIME.apply_visitor_activity_availability(world,
 				normalized_id,
 				option,

@@ -14,6 +14,9 @@ const DINING_SERVICE := preload(
 const CLINIC_CONTINUITY := preload(
 	"res://world/runtime/condition/TownClinicContinuityRuntime.gd"
 )
+const PUBLIC_PLACE_CONTINUITY := preload(
+	"res://world/runtime/work/TownPublicPlaceContinuityRuntime.gd"
+)
 const OCCUPATION_RESIDENT_CONTEXT_RUNTIME := preload(
 	"res://world/runtime/work/TownOccupationResidentContextRuntime.gd"
 )
@@ -293,6 +296,11 @@ static func closed_for_visitor(
 	if CLINIC_CONTINUITY.can_admit_without_practitioner(
 		host,
 		resident,
+		place_id,
+	):
+		return false
+	if PUBLIC_PLACE_CONTINUITY.can_admit_without_service_staff(
+		host,
 		place_id,
 	):
 		return false
