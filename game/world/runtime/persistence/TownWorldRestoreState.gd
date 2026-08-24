@@ -326,6 +326,12 @@ static func prepare_full(
 			world_data.get("activityIntegrationReceipt", {}) as Dictionary
 		).get("sourceFingerprint", "")
 	)
+	var saved_activity_source_fingerprint := String(
+		(state.get("activityRuntime", {}) as Dictionary).get(
+			"sourceFingerprint",
+			"",
+		)
+	)
 	var migration := SAVE_SCHEMA_REGISTRY.migrate_world_state(
 		state,
 		current_activity_source_fingerprint,
@@ -767,6 +773,13 @@ static func prepare_full(
 	return {
 		"ok": true,
 		"preparedState": prepared,
+		"migrationReceipt": {
+			"module": "world_snapshot",
+			"migrationVersion": int(migration.get("migrationVersion", 0)),
+			"applied": (migration.get("applied", []) as Array).duplicate(),
+			"sourceActivityFingerprint": saved_activity_source_fingerprint,
+			"targetActivityFingerprint": current_activity_source_fingerprint,
+		},
 	}
 
 

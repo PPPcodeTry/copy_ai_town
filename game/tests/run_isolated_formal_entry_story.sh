@@ -3,14 +3,27 @@
 set -euo pipefail
 
 project_root="${0:A:h:h}"
-test_script="res://tests/game_flow_host_formal_entry_test.gd"
-pass_marker="GAME_FLOW_HOST_FORMAL_ENTRY_PASS"
-timeout_seconds="${AI_TOWN_FORMAL_ENTRY_TIMEOUT_SECONDS:-600}"
-qa_name="ai-town-automated-formal-story-$$"
+test_script="${AI_TOWN_ISOLATED_TEST_SCRIPT:-res://tests/game_flow_host_formal_entry_test.gd}"
+pass_marker="${AI_TOWN_ISOLATED_PASS_MARKER:-GAME_FLOW_HOST_FORMAL_ENTRY_PASS}"
+timeout_seconds="${AI_TOWN_ISOLATED_TIMEOUT_SECONDS:-${AI_TOWN_FORMAL_ENTRY_TIMEOUT_SECONDS:-600}}"
+qa_prefix="${AI_TOWN_ISOLATED_QA_PREFIX:-ai-town-automated-formal-story}"
+temp_prefix="${AI_TOWN_ISOLATED_TEMP_PREFIX:-ai-town-formal-story}"
+failure_marker="${AI_TOWN_ISOLATED_FAILURE_MARKER:-ISOLATED_FORMAL_ENTRY_STORY_FAIL}"
+success_marker="${AI_TOWN_ISOLATED_SUCCESS_MARKER:-ISOLATED_FORMAL_ENTRY_STORY_PASS}"
+fixture_root="${AI_TOWN_ISOLATED_FIXTURE_ROOT:-}"
+qa_name="$qa_prefix-$$"
 temp_base="${TMPDIR:-/tmp}"
-temp_root="$(mktemp -d "$temp_base/ai-town-formal-story.XXXXXX")"
-temp_game="$temp_root/game"
-log_path="$temp_root/formal-entry.log"
+if [[
+	"$qa_prefix" == *[^a-z0-9-]*
+	|| "$temp_prefix" == *[^a-z0-9-]*
+]]; then
+	print -u2 "隔离测试目录前缀无效。"
+	exit 2
+fi
+if [[ -n "$fixture_root" && "$fixture_root" != "$project_root/tests/fixtures/"* ]]; then
+	print -u2 "隔离测试样本必须位于 tests/fixtures 下。"
+	exit 2
+fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
 	default_userdata_root="${HOME}/Library/Application Support/Godot/app_userdata"
 else
@@ -18,6 +31,19 @@ else
 fi
 godot_userdata_root="${GODOT_USERDATA_ROOT:-$default_userdata_root}"
 qa_user_root="$godot_userdata_root/$qa_name"
+temp_root="$(mktemp -d "$temp_base/$temp_prefix.XXXXXX")"
+temp_game="$temp_root/game"
+log_path="$temp_root/formal-entry.log"
+
+cleanup() {
+	if [[ "$temp_root" == "$temp_base/$temp_prefix."* ]]; then
+		rm -rf "$temp_root"
+	fi
+	if [[ "$qa_user_root" == "$godot_userdata_root/$qa_prefix-"* ]]; then
+		rm -rf "$qa_user_root"
+	fi
+}
+trap cleanup EXIT
 
 resolve_godot_bin() {
 	if [[ -n "${GODOT_BIN:-}" ]]; then
@@ -48,18 +74,6 @@ if ! godot_bin="$(resolve_godot_bin)"; then
 	exit 2
 fi
 
-cleanup() {
-	if [[ "$temp_root" == "$temp_base"/ai-town-formal-story.* ]]; then
-		rm -rf "$temp_root"
-	fi
-	if [[ "$qa_user_root" == \
-		"$godot_userdata_root/ai-town-automated-formal-story-"* \
-	]]; then
-		rm -rf "$qa_user_root"
-	fi
-}
-trap cleanup EXIT
-
 if [[ ! -x "$godot_bin" ]]; then
 	print -u2 "Godot 4.7.1 executable not found: $godot_bin"
 	exit 2
@@ -80,6 +94,10 @@ fi
 /usr/bin/perl -pi -e \
 	"s/^config\\/name=.*/config\\/name=\"$qa_name\"/" \
 	"$temp_game/project.godot"
+if [[ -n "$fixture_root" ]]; then
+	mkdir -p "$qa_user_root"
+	cp -R "$fixture_root/." "$qa_user_root/"
+fi
 
 import_log_path="$temp_root/editor-import.log"
 set +e
@@ -97,17 +115,17 @@ set -e
 
 if (( import_exit_code != 0 )); then
 	print -u2 \
-		"ISOLATED_FORMAL_ENTRY_STORY_FAIL import_exit=$import_exit_code timeout=${timeout_seconds}s"
+		"$failure_marker import_exit=$import_exit_code timeout=${timeout_seconds}s"
 	tail -n 120 "$import_log_path" >&2
 	exit "$import_exit_code"
 fi
 if rg -q 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$import_log_path"; then
-	print -u2 "ISOLATED_FORMAL_ENTRY_STORY_FAIL import_script_error=true"
+	print -u2 "$failure_marker import_script_error=true"
 	rg -n 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$import_log_path" >&2
 	exit 3
 fi
 if rg -q '^ERROR:' "$import_log_path"; then
-	print -u2 "ISOLATED_FORMAL_ENTRY_STORY_FAIL import_engine_error=true"
+	print -u2 "$failure_marker import_engine_error=true"
 	rg -n '^ERROR:' "$import_log_path" >&2
 	exit 3
 fi
@@ -126,29 +144,30 @@ set -e
 
 if (( exit_code != 0 )); then
 	print -u2 \
-		"ISOLATED_FORMAL_ENTRY_STORY_FAIL exit=$exit_code timeout=${timeout_seconds}s"
+		"$failure_marker exit=$exit_code timeout=${timeout_seconds}s"
 	tail -n 120 "$log_path" >&2
 	exit "$exit_code"
 fi
 if rg -q 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$log_path"; then
-	print -u2 "ISOLATED_FORMAL_ENTRY_STORY_FAIL script_error=true"
+	print -u2 "$failure_marker script_error=true"
 	rg -n 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$log_path" >&2
 	exit 3
 fi
 # 精确允许列表：本故事测试会故意移除 Gateway 验证失败路径，
 # 生产代码经 push_error 打出下面这一条（Godot 4.7 中 push_error
 # 输出即行首 ERROR:）。除这一条外的任何引擎错误仍判失败。
-allowed_error_pattern='^ERROR: Agent Gateway 初始化失败：当前 session 要求正式 Agent Gateway。$'
+allowed_error_pattern="${AI_TOWN_ISOLATED_ALLOWED_ERROR_PATTERN:-^ERROR: Agent Gateway 初始化失败：当前 session 要求正式 Agent Gateway。$}"
 unexpected_engine_errors="$(rg '^ERROR:' "$log_path" | rg -v "$allowed_error_pattern" || true)"
 if [[ -n "$unexpected_engine_errors" ]]; then
-	print -u2 "ISOLATED_FORMAL_ENTRY_STORY_FAIL engine_error=true"
+	print -u2 "$failure_marker engine_error=true"
 	print -r -- "$unexpected_engine_errors" >&2
 	exit 3
 fi
 if ! rg -Fq "$pass_marker" "$log_path"; then
-	print -u2 "ISOLATED_FORMAL_ENTRY_STORY_FAIL missing_pass_marker=true"
+	print -u2 "$failure_marker missing_pass_marker=true"
 	tail -n 120 "$log_path" >&2
 	exit 4
 fi
 
-print "ISOLATED_FORMAL_ENTRY_STORY_PASS"
+rg -F "$pass_marker" "$log_path" | tail -n 1
+print "$success_marker"
