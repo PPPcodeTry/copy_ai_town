@@ -37,6 +37,9 @@ const ACTIVITY_MIGRATION_ID := "2026-08-12-public-dining-day-routine"
 const PLACE_SERVICE_OWNER_MIGRATION_ID := (
 	"2026-08-24-place-service-owner-backfill"
 )
+const AGENT_SHOP_OWNER_MIGRATION_ID := (
+	"2026-08-24-shop-owner-derived-from-occupation"
+)
 
 var _failures: Array[String] = []
 var _checks := 0
@@ -104,6 +107,20 @@ func _run() -> void:
 			PLACE_SERVICE_OWNER_MIGRATION_ID,
 		),
 		"首次恢复明确报告地点服务协调者迁移",
+	)
+	_expect(
+		(first_migration.get("applied", []) as Array).has(
+			AGENT_SHOP_OWNER_MIGRATION_ID,
+		),
+		"首次恢复明确报告 Agent 铺面负责人迁移",
+	)
+	_expect_equal(
+		(
+			(first_migration.get("moduleReceipts", {}) as Dictionary)
+			.get("resident_payload", {}) as Dictionary
+		).get("applied"),
+		[AGENT_SHOP_OWNER_MIGRATION_ID],
+		"Agent 迁移回执保持独立模块和版本",
 	)
 	var first_world: RefCounted = first.get("world")
 	var before_time := first_world.call("get_time") as Dictionary

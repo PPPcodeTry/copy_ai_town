@@ -3,6 +3,9 @@ extends "res://tests/agent/support/AgentTestCase.gd"
 
 const AgentContractScript := preload("res://agent/AgentContract.gd")
 const AgentDebugScenariosScript := preload("res://agent/debug/AgentDebugScenarios.gd")
+const ResidentStateMigrationScript := preload(
+	"res://agent/lifecycle/AgentResidentStateMigration.gd"
+)
 
 
 func _initialize() -> void:
@@ -61,6 +64,41 @@ func _initialize() -> void:
 		},
 		"住家主人姓名与居民 ID 必须同时为空或同时存在",
 		"空置住宅不能只残留主人姓名",
+	)
+	var legacy_state := {"initialization": shop_without_owner.duplicate(true)}
+	var legacy_shop := (
+		(legacy_state.get("initialization") as Dictionary).get("places") as Array
+	).back() as Dictionary
+	legacy_shop["owner"] = "唐小满"
+	legacy_shop["owner_resident_id"] = "resident-tang-xiao-man"
+	var migrated := ResidentStateMigrationScript.migrate(legacy_state)
+	_expect_equal(
+		migrated.get("applied"),
+		[ResidentStateMigrationScript.SHOP_OWNER_DERIVATION_MIGRATION_ID],
+		"旧铺面负责人迁移有稳定编号",
+	)
+	var migrated_initialization := (
+		(migrated.get("state") as Dictionary).get("initialization") as Dictionary
+	)
+	_expect_equal(
+		AgentContractScript.validate_initialization(migrated_initialization),
+		[],
+		"旧铺面负责人迁移后符合当前契约",
+	)
+	_expect_equal(
+		ResidentStateMigrationScript.migrate(migrated.get("state")).get("applied"),
+		[],
+		"旧铺面负责人迁移可重复执行",
+	)
+	var damaged_state := legacy_state.duplicate(true)
+	var damaged_shop := (
+		(damaged_state.get("initialization") as Dictionary).get("places") as Array
+	).back() as Dictionary
+	damaged_shop["owner_resident_id"] = "resident-not-found"
+	_expect_equal(
+		ResidentStateMigrationScript.migrate(damaged_state).get("applied"),
+		[],
+		"虚构的铺面负责人引用不会被迁移掩盖",
 	)
 	var cases: Array[Dictionary] = [
 		{"id": "not_object", "value": [], "error": "初始化资料必须是对象"},

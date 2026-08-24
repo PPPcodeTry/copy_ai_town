@@ -1041,6 +1041,18 @@ func _restore_selected(
 			gate_token,
 		)
 	var resident_ids := resident_ids_value as Array
+	var agent_migration_receipt := {}
+	var agent_migration_receipt_value: Variant = agent_prepare.get(
+		"migration_receipt",
+	)
+	if agent_migration_receipt_value is Dictionary:
+		var candidate_receipt := agent_migration_receipt_value as Dictionary
+		if (
+			String(candidate_receipt.get("module", "")) == "resident_payload"
+			and candidate_receipt.get("migrationVersion") is int
+			and candidate_receipt.get("applied") is Array
+		):
+			agent_migration_receipt = candidate_receipt.duplicate(true)
 	var normalized_agent_ids: Array[String] = []
 	for resident_id_value: Variant in resident_ids:
 		if not resident_id_value is String:
@@ -1257,6 +1269,28 @@ func _restore_selected(
 			gate_token,
 		)
 	var receipt := receipt_value as Dictionary
+	var world_migration_receipt := (
+		receipt.get("migrationReceipt", {}) as Dictionary
+	).duplicate(true)
+	var applied_migrations := (
+		world_migration_receipt.get("applied", []) as Array
+	).duplicate()
+	for migration_id_value: Variant in agent_migration_receipt.get(
+		"applied",
+		[],
+	) as Array:
+		var migration_id := String(migration_id_value)
+		if not migration_id.is_empty() and not applied_migrations.has(migration_id):
+			applied_migrations.append(migration_id)
+	var migration_receipt := world_migration_receipt.duplicate(true)
+	migration_receipt["module"] = "restore"
+	migration_receipt.erase("migrationVersion")
+	migration_receipt["applied"] = applied_migrations
+	migration_receipt["moduleReceipts"] = {
+		"world_snapshot": world_migration_receipt,
+		"resident_payload": agent_migration_receipt,
+	}
+	receipt["migrationReceipt"] = migration_receipt
 	var identity_snapshot_value: Variant = receipt.get("identitySnapshot")
 	var receipt_world_revision: Variant = receipt.get("worldRevision")
 	var receipt_runtime_generation: Variant = receipt.get(

@@ -9,6 +9,9 @@ const SCHEMA_REGISTRY := preload(
 const RESTORE_LAYOUT := preload(
 	"res://world/runtime/persistence/TownWorldRestoreLayout.gd"
 )
+const AGENT_STATE_MIGRATION := preload(
+	"res://agent/lifecycle/AgentResidentStateMigration.gd"
+)
 
 var _failures: Array[String] = []
 var _checks := 0
@@ -316,7 +319,10 @@ func _test_migration_path_is_ordered_and_explicit() -> void:
 	_expect_equal(current.get("edges"), [], "当前版本不产生迁移步骤")
 	_expect_equal(
 		current.get("currentMigrationIds"),
-		[SCHEMA_REGISTRY.PLACE_SERVICE_OWNER_BACKFILL_MIGRATION_ID],
+		[
+			SCHEMA_REGISTRY.PLACE_SERVICE_OWNER_BACKFILL_MIGRATION_ID,
+			AGENT_STATE_MIGRATION.SHOP_OWNER_DERIVATION_MIGRATION_ID,
+		],
 		"当前版本也登记按内容判断的幂等迁移",
 	)
 	var missing := REGISTRY.migration_path("beta0")

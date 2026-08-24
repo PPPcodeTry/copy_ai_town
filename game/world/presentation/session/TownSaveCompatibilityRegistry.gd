@@ -5,6 +5,9 @@ extends RefCounted
 const SAVE_SCHEMA_REGISTRY := preload(
 	"res://world/presentation/session/TownSaveSchemaRegistry.gd"
 )
+const AGENT_STATE_MIGRATION := preload(
+	"res://agent/lifecycle/AgentResidentStateMigration.gd"
+)
 
 const POLICY_REQUIRED := "required"
 const POLICY_BEST_EFFORT := "best_effort"
@@ -84,6 +87,11 @@ const CURRENT_MIGRATIONS := [
 		"id": SAVE_SCHEMA_REGISTRY.PLACE_SERVICE_OWNER_BACKFILL_MIGRATION_ID,
 		"module": "world_snapshot",
 		"reason": "地点服务协调者的默认派生规则变化；仅在静态配置完全一致时补齐。",
+	},
+	{
+		"id": AGENT_STATE_MIGRATION.SHOP_OWNER_DERIVATION_MIGRATION_ID,
+		"module": "resident_payload",
+		"reason": "铺面负责人改由当前职业岗位派生；旧初始化资料移除固定负责人。",
 	},
 ]
 const RELEASES := [
