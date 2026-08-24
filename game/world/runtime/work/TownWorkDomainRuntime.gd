@@ -483,23 +483,11 @@ func onsite_service_wait_minutes(kind: String) -> int:
 	return ACTIVITY_SCALARS.onsite_service_wait_minutes(kind)
 
 
-func occupation_service_kind_is_staffed(
-	kind: String,
-	residents: Dictionary,
-) -> bool:
-	return SERVICE_QUERY.kind_is_staffed(
-		kind,
-		SERVICE_DEFINITION.definition(kind),
-		staffing,
-		residents,
-	)
-
-
 func evaluate_presence_plan(
 	request: Dictionary,
 	requester: Dictionary,
 	absolute_minute: int,
-	residents: Dictionary,
+	service_staffed: bool,
 	clinic_executable: bool,
 	queue_advancing: bool,
 	deadline_applies: bool,
@@ -514,7 +502,7 @@ func evaluate_presence_plan(
 		absolute_minute,
 		mode_resolution,
 		(
-			occupation_service_kind_is_staffed(kind, residents)
+			service_staffed
 			if mode == "onsite_wait"
 			else true
 		),

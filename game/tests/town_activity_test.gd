@@ -3560,6 +3560,7 @@ func _scenario_activity_routine() -> void:
 	_verify_no_cook_communal_meal(data, opening)
 	_verify_no_doctor_clinic_continuity(data, opening)
 	_verify_unstaffed_public_place_continuity(data, opening)
+	_verify_unstaffed_noncritical_services_pause(data, opening)
 	_verify_dining_departure_awareness(data, opening)
 	_verify_meal_sequence(data, opening)
 	_verify_meal_period_boundary_consumption(data, opening)
@@ -4125,6 +4126,46 @@ func _verify_unstaffed_public_place_continuity(
 		"vacant",
 		"辅助整理安排不会让专业服务恢复营业",
 	)
+	var helper_return := world.call(
+		"create_occupation_service_request",
+		{
+			"kind": "library_return",
+			"requesterResidentId": visitor_id,
+			"subjectRef": "helper-capability-return",
+		},
+	) as Dictionary
+	_expect_equal(
+		helper_return.get("ok"),
+		true,
+		"图书馆帮工可以接收明确授权的还书任务",
+	)
+	var helper_loan := world.call(
+		"create_occupation_service_request",
+		{
+			"kind": "library_loan",
+			"requesterResidentId": visitor_id,
+			"itemId": "book_town_history",
+		},
+	) as Dictionary
+	_expect_equal(
+		helper_loan.get("errorCode"),
+		"OCCUPATION_SERVICE_UNSTAFFED",
+		"图书馆帮工不能接收未授权的借阅任务",
+	)
+	world.call("advance", 1.0)
+	var helper_return_state := world.call(
+		"get_occupation_service_request",
+		String(
+			(helper_return.get("request", {}) as Dictionary).get(
+				"requestId",
+				"",
+			),
+		),
+	) as Dictionary
+	_expect(
+		String(helper_return_state.get("state", "")) != "cancelled",
+		"已授权的还书任务进入排队推进后不会被旧岗位空缺判断取消",
+	)
 	var library_options := (
 		(world.call("query_activity_options", visitor_id) as Dictionary).get(
 			"options",
@@ -4257,6 +4298,188 @@ func _verify_unstaffed_public_place_continuity(
 		"有图书管理员时原有借还书服务保持可用",
 	)
 	staffed_world.call("stop")
+
+
+func _verify_unstaffed_noncritical_services_pause(
+	data: Dictionary,
+	opening: Dictionary,
+) -> void:
+	var paused_opening := _opening_without_noncritical_service_workers(opening)
+	var world: RefCounted = WORLD.new()
+	_expect_equal(
+		(world.call("start", data, paused_opening) as Dictionary).get("ok"),
+		true,
+		"非关键岗位空缺时 World 仍能启动",
+	)
+	var vacant_post_ids := (
+		(world.call("get_staffing_snapshot") as Dictionary).get(
+			"vacantPostIds",
+			[],
+		) as Array
+	)
+	for occupation_id: String in [
+		"occupation_cafe_worker",
+		"occupation_craftsperson",
+		"occupation_librarian",
+		"occupation_town_manager",
+		"occupation_grocer",
+		"occupation_flower_vendor",
+		"occupation_musician",
+		"occupation_botanist",
+	]:
+		_expect(
+			vacant_post_ids.has("post:%s" % occupation_id),
+			"非关键服务测试保留真实空缺岗位：%s" % occupation_id,
+		)
+	var service_count_before := (
+		(
+			world.call("get_occupation_service_snapshot") as Dictionary
+		).get("requests", []) as Array
+	).size()
+	var paused_specs: Array[Dictionary] = [
+		{
+			"kind": "cafe_order",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"itemId": "brewed_coffee",
+		},
+		{
+			"kind": "library_loan",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"itemId": "book_town_history",
+		},
+		{
+			"kind": "library_return",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"subjectRef": "loan-without-librarian",
+		},
+		{
+			"kind": "library_assist",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"subjectRef": "请馆员协助查找资料",
+		},
+		{
+			"kind": "repair",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"subjectRef": "需要维修的木凳",
+		},
+		{
+			"kind": "civic_request",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"subjectRef": "日常镇务",
+		},
+		{
+			"kind": "performance",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"subjectRef": "居民邀请的小演出",
+		},
+		{
+			"kind": "grocer_sale",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"itemId": "general_goods",
+		},
+		{
+			"kind": "flower_sale",
+			"requesterResidentId": "resident_tang_xiaoman_01",
+			"itemId": "fresh_flowers",
+		},
+	]
+	for request_spec: Dictionary in paused_specs:
+		for attempt in 2:
+			var rejected := world.call(
+				"create_occupation_service_request",
+				request_spec,
+			) as Dictionary
+			_expect_equal(
+				rejected.get("ok"),
+				false,
+				"无人可执行时不会建立非关键服务请求：%s/%d"
+					% [String(request_spec.get("kind", "")), attempt],
+			)
+			_expect_equal(
+				rejected.get("errorCode"),
+				"OCCUPATION_SERVICE_UNSTAFFED",
+				"非关键服务暂停会返回统一且明确的原因",
+			)
+			_expect_equal(
+				(
+					rejected.get("serviceAvailability", {}) as Dictionary
+				).get("state"),
+				"paused",
+				"非关键服务暂停结果会明确报告暂停状态",
+			)
+	_expect_equal(
+		(
+			(
+				world.call("get_occupation_service_snapshot") as Dictionary
+			).get("requests", []) as Array
+		).size(),
+		service_count_before,
+		"重复提交无人可执行的非关键服务不会留下待办请求",
+	)
+	var research_count_before := (
+		world.call("get_plant_research_projects") as Array
+	).size()
+	for attempt in 2:
+		var research := world.call(
+			"create_plant_research",
+			"resident_tang_xiaoman_01",
+			"检查社区花园的长期变化",
+			"research_question",
+		) as Dictionary
+		_expect_equal(
+			research.get("errorCode"),
+			"OCCUPATION_SERVICE_UNSTAFFED",
+			"植物研究无人可执行时明确暂停：%d" % attempt,
+		)
+	_expect_equal(
+		(world.call("get_plant_research_projects") as Array).size(),
+		research_count_before,
+		"重复提交无人可执行的植物研究不会留下研究项目",
+	)
+	_expect(
+		_move_to_place(world, "唐小满", "镇公所"),
+		"管理者空缺时居民仍能进入镇公所查看可用活动",
+	)
+	var town_hall_options := (
+		(
+			world.call(
+				"query_activity_options",
+				"resident_tang_xiaoman_01",
+			) as Dictionary
+		).get("options", []) as Array
+	)
+	for activity_id: String in [
+		"activity_town_hall_civic_service",
+		"activity_town_hall_fill_form",
+	]:
+		var option := _activity_option(town_hall_options, activity_id)
+		_expect_equal(
+			option.get("available"),
+			false,
+			"无人可执行时居民活动入口会暂停：%s" % activity_id,
+		)
+		_expect_equal(
+			option.get("disabledReason"),
+			"OCCUPATION_SERVICE_UNSTAFFED",
+			"居民活动入口会显示真实的岗位空缺原因：%s" % activity_id,
+		)
+	var direct_civic := world.call(
+		"perform_activity_step",
+		"resident_tang_xiaoman_01",
+		"unstaffed-civic-plan",
+		0,
+		_activity_step(
+			"unstaffed-civic-step",
+			"activity_town_hall_civic_service",
+			"镇公所",
+		),
+	) as Dictionary
+	_expect_equal(
+		direct_civic.get("errorCode"),
+		"OCCUPATION_SERVICE_UNSTAFFED",
+		"直接执行入口不能绕过非关键服务暂停规则",
+	)
+	world.call("stop")
 
 
 func _verify_no_doctor_self_care(
@@ -4581,6 +4804,28 @@ func _opening_without_public_place_staff(opening: Dictionary) -> Dictionary:
 		var social_state := resident.get("socialState", {}) as Dictionary
 		social_state["job"] = "工匠"
 		social_state["workplace"] = "工作坊"
+	return result
+
+
+func _opening_without_noncritical_service_workers(
+	opening: Dictionary,
+) -> Dictionary:
+	var result := opening.duplicate(true)
+	(result.get("environment", {}) as Dictionary)["clock"] = "10:00"
+	for resident_value: Variant in result.get("residents", []) as Array:
+		var resident := resident_value as Dictionary
+		if String(resident.get("residentId", "")) not in [
+			"resident_lin_lan_01",
+			"resident_a_he_01",
+			"resident_su_he_01",
+			"resident_zhao_tang_01",
+			"resident_he_yu_01",
+			"resident_jiang_lin_01",
+		]:
+			continue
+		var social_state := resident.get("socialState", {}) as Dictionary
+		social_state["job"] = "园艺师"
+		social_state["workplace"] = "社区花园"
 	return result
 
 

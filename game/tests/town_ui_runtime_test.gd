@@ -1645,6 +1645,11 @@ func _run_all() -> void:
 	await _scenario_session_production_composition()
 	await _scenario_hud_pause_clock()
 	_scenario_avatar_perception_only_refreshes_avatar_scope()
+	_expect_equal(
+		UiViewModel.player_reason("OCCUPATION_SERVICE_UNSTAFFED"),
+		"对应岗位当前无人可执行，这项服务已经暂停",
+		"职业服务暂停原因会转换成玩家可读反馈",
+	)
 	_finish_suite("TOWN_UI_RUNTIME_PASS")
 
 

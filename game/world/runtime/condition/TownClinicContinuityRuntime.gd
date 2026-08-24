@@ -5,6 +5,12 @@ extends RefCounted
 const CLINIC_COORDINATION := preload(
 	"res://world/runtime/condition/TownClinicServiceCoordinationRuntime.gd"
 )
+const OCCUPATION_SERVICE_DEFINITION := preload(
+	"res://world/runtime/work/TownOccupationServiceDefinition.gd"
+)
+const OCCUPATION_SERVICE_STAFFING_RUNTIME := preload(
+	"res://world/runtime/work/TownOccupationServiceStaffingRuntime.gd"
+)
 const CLINIC_PLACE_ID := "诊所"
 const SELF_CARE_ACTIVITY_ID := "activity_clinic_self_care"
 const WAIT_ACTIVITY_ID := "activity_clinic_wait"
@@ -28,12 +34,13 @@ static func visitor_service_is_staffed(
 ) -> bool:
 	if activity_id in FORMAL_VISITOR_ACTIVITY_IDS:
 		return has_executable_practitioner(host)
-	return (
-		request_spec.is_empty()
-		or host.work_domain.occupation_service_kind_is_staffed(
+	if request_spec.is_empty():
+		return true
+	return OCCUPATION_SERVICE_STAFFING_RUNTIME.service_has_executable_worker(
+		host,
+		OCCUPATION_SERVICE_DEFINITION.definition(
 			String(request_spec.get("kind", "")),
-			host.resident_registry.records,
-		)
+		),
 	)
 
 
