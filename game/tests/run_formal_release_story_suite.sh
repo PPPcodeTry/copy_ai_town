@@ -39,6 +39,7 @@ checks=(
 	"res://tests/town_resident_content_test.gd|TOWN_RESIDENT_CONTENT_PASS|392"
 	"res://tests/town_world_save_test.gd|TOWN_WORLD_SAVE_PASS|177"
 	"res://tests/session_save_continue_roundtrip_test.gd|SESSION_SAVE_CONTINUE_ROUNDTRIP_PASS|28"
+	"res://tests/town_save_archive_inspector_test.gd|TOWN_SAVE_ARCHIVE_INSPECTOR_PASS|265"
 	"res://tests/windows_directory_cleanup_test.gd|WINDOWS_DIRECTORY_CLEANUP_PASS|56"
 	"res://tests/startup_social_feedback_test.gd|STARTUP_SOCIAL_FEEDBACK_PASS|65"
 	"res://ui/startup/tests/StartupTypographyContractTest.gd|STARTUP_TYPOGRAPHY_CONTRACT_PASS|54"
