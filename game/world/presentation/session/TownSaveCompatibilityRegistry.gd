@@ -23,8 +23,6 @@ const ERROR_TYPES := {
 	"unsupported_version": "SAVE_VERSION_NO_LONGER_SUPPORTED",
 	"unknown_combination": "SAVE_VERSION_COMBINATION_UNKNOWN",
 	"migration_path_missing": "SAVE_MIGRATION_PATH_MISSING",
-	"transaction_interrupted": "SAVE_TRANSACTION_INTERRUPTED",
-	"best_effort_module_invalid": "SAVE_BEST_EFFORT_MODULE_INVALID",
 }
 
 const VERSION_RULES := {
@@ -91,13 +89,12 @@ const RELEASES := [
 		"residentPathLayout": "raw",
 		"nextEdge": {
 			"id": "beta1-to-beta2",
-			"kind": "migrate",
-			"modules": ["resident_memory", "provider_config"],
-			"migrationIds": [
-				"beta1-resident-storage-layout",
-				"beta1-provider-insecure-http-consent-default",
-			],
-			"reason": "居民运行时记忆改用哈希路径，Provider 补齐非安全地址授权状态。",
+			"kind": "no_change",
+			"modules": [],
+			"migrationIds": [],
+			"reason": (
+				"正式存档没有变化；运行时记忆工作副本重新生成，Provider 设置按尽力兼容处理。"
+			),
 		},
 	},
 	{
@@ -114,9 +111,10 @@ const RELEASES := [
 			"modules": ["world_snapshot"],
 			"migrationIds": [
 				"2026-08-12-public-dining-day-routine",
-				"traveler-relations-initialize-v1",
 			],
-			"reason": "活动指纹更新，World 增加 travelerRelations 区段。",
+			"reason": (
+				"活动指纹更新；缺少的 travelerRelations 由当前恢复逻辑重建默认状态。"
+			),
 		},
 	},
 	{
@@ -300,9 +298,61 @@ static func detect_release(evidence: Dictionary) -> Dictionary:
 			"version combination is missing",
 		)
 	var versions := versions_value as Dictionary
-	var version_support := classify_versions(versions, true)
-	if version_support.get("ok") != true:
-		return version_support
+	var unknown_versions: Array[String] = []
+	for key_value: Variant in versions:
+		var key := String(key_value)
+		if not VERSION_RULES.has(key):
+			unknown_versions.append(key)
+	unknown_versions.sort()
+	if not unknown_versions.is_empty():
+		return _detection_error(
+			"future_version",
+			STATUS_READ_ONLY,
+			"one or more module versions are not registered",
+			unknown_versions,
+		)
+	var future_versions: Array[String] = []
+	var unsupported_versions: Array[String] = []
+	for key_value: Variant in VERSION_RULES:
+		var key := String(key_value)
+		if not versions.has(key):
+			if not bool((VERSION_RULES.get(key) as Dictionary).get(
+				"requiredForDetection",
+				false,
+			)):
+				continue
+			return _detection_error(
+				"invalid_evidence",
+				STATUS_INVALID,
+				"version is missing: %s" % key,
+			)
+		var version_value: Variant = versions.get(key)
+		if typeof(version_value) != TYPE_INT:
+			return _detection_error(
+				"invalid_evidence",
+				STATUS_INVALID,
+				"version must be an integer: %s" % key,
+			)
+		var rule := VERSION_RULES.get(key, {}) as Dictionary
+		var current := int(rule.get("current", 0))
+		if int(version_value) > current:
+			future_versions.append(key)
+		elif not (rule.get("supported", []) as Array).has(version_value):
+			unsupported_versions.append(key)
+	if not future_versions.is_empty():
+		return _detection_error(
+			"future_version",
+			STATUS_READ_ONLY,
+			"one or more module versions are newer than supported",
+			future_versions,
+		)
+	if not unsupported_versions.is_empty():
+		return _detection_error(
+			"unsupported_version",
+			STATUS_UNSUPPORTED,
+			"one or more module versions are no longer supported",
+			unsupported_versions,
+		)
 	var section_count_value: Variant = evidence.get("worldSectionCount")
 	var fingerprint_value: Variant = evidence.get("activitySourceFingerprint")
 	if (
@@ -359,80 +409,6 @@ static func detect_release(evidence: Dictionary) -> Dictionary:
 		"releaseRange": candidates,
 		"migrationStartRelease": candidates[0],
 		"exact": exact,
-		"readOnly": false,
-		"error": {},
-	}
-
-
-static func classify_versions(
-	versions: Dictionary,
-	require_detection_fields: bool = false,
-) -> Dictionary:
-	var unknown_versions: Array[String] = []
-	for key_value: Variant in versions:
-		var key := String(key_value)
-		if not VERSION_RULES.has(key):
-			unknown_versions.append(key)
-	unknown_versions.sort()
-	if not unknown_versions.is_empty():
-		return _detection_error(
-			"future_version",
-			STATUS_READ_ONLY,
-			"one or more module versions are not registered",
-			unknown_versions,
-		)
-	var future_versions: Array[String] = []
-	var unsupported_versions: Array[String] = []
-	for key_value: Variant in VERSION_RULES:
-		var key := String(key_value)
-		if not versions.has(key):
-			if (
-				require_detection_fields
-				and bool((VERSION_RULES.get(key) as Dictionary).get(
-					"requiredForDetection",
-					false,
-				))
-			):
-				return _detection_error(
-					"invalid_evidence",
-					STATUS_INVALID,
-					"version is missing: %s" % key,
-				)
-			continue
-		var version_value: Variant = versions.get(key)
-		if typeof(version_value) != TYPE_INT:
-			return _detection_error(
-				"invalid_evidence",
-				STATUS_INVALID,
-				"version must be an integer: %s" % key,
-			)
-		var rule := VERSION_RULES.get(key, {}) as Dictionary
-		var current := int(rule.get("current", 0))
-		if int(version_value) > current:
-			future_versions.append(key)
-		elif not (rule.get("supported", []) as Array).has(version_value):
-			unsupported_versions.append(key)
-	if not future_versions.is_empty():
-		return _detection_error(
-			"future_version",
-			STATUS_READ_ONLY,
-			"one or more module versions are newer than supported",
-			future_versions,
-		)
-	if not unsupported_versions.is_empty():
-		return _detection_error(
-			"unsupported_version",
-			STATUS_UNSUPPORTED,
-			"one or more module versions are no longer supported",
-			unsupported_versions,
-		)
-	return {
-		"ok": true,
-		"supportStatus": STATUS_SUPPORTED,
-		"release": "",
-		"releaseRange": [],
-		"migrationStartRelease": "",
-		"exact": false,
 		"readOnly": false,
 		"error": {},
 	}

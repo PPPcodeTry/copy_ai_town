@@ -273,13 +273,18 @@ func _test_migration_path_is_ordered_and_explicit() -> void:
 			"beta4-to-beta5",
 			"beta5-to-beta6",
 		],
-		"跳版本升级逐段执行",
+		"账本返回完整的相邻版本路径",
 	)
 	var edges := full_path.get("edges", []) as Array
 	_expect_equal(
-		((edges[0] as Dictionary).get("modules", []) as Array).has("resident_memory"),
-		true,
-		"beta1 到 beta2 登记居民记忆路径迁移",
+		(edges[0] as Dictionary).get("kind"),
+		"no_change",
+		"beta1 到 beta2 不迁移正式存档",
+	)
+	_expect_equal(
+		(edges[0] as Dictionary).get("migrationIds"),
+		[],
+		"beta1 到 beta2 不登记不存在的迁移函数",
 	)
 	_expect_equal(
 		((edges[1] as Dictionary).get("migrationIds", []) as Array).has(
@@ -287,6 +292,11 @@ func _test_migration_path_is_ordered_and_explicit() -> void:
 		),
 		true,
 		"beta2 到 beta3 登记活动指纹迁移",
+	)
+	_expect_equal(
+		(edges[1] as Dictionary).get("migrationIds"),
+		["2026-08-12-public-dining-day-routine"],
+		"beta2 到 beta3 只登记已有迁移函数",
 	)
 	for edge_value: Variant in edges.slice(2):
 		_expect_equal(

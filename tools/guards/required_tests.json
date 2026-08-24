@@ -44,8 +44,8 @@
     "min_checks": 28
   },
   {
-    "id": "res://tests/town_save_archive_inspector_test.gd",
-    "min_checks": 265
+    "id": "res://tests/town_save_compatibility_registry_test.gd",
+    "min_checks": 39
   },
   {
     "id": "res://tests/windows_directory_cleanup_test.gd",
