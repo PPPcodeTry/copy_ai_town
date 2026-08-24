@@ -11,6 +11,9 @@ const CONSUMED_SERVICE_ITEM_PROJECTION := preload(
 const DINING_SERVICE := preload(
 	"res://world/runtime/work/TownDiningServiceRuntime.gd"
 )
+const CLINIC_CONTINUITY := preload(
+	"res://world/runtime/condition/TownClinicContinuityRuntime.gd"
+)
 const OCCUPATION_RESIDENT_CONTEXT_RUNTIME := preload(
 	"res://world/runtime/work/TownOccupationResidentContextRuntime.gd"
 )
@@ -285,6 +288,12 @@ static func closed_for_visitor(
 			resident,
 			int(host._environment.get_absolute_minute()),
 		)
+	):
+		return false
+	if CLINIC_CONTINUITY.can_admit_without_practitioner(
+		host,
+		resident,
+		place_id,
 	):
 		return false
 	return host._work.place_services.is_closed_for_visitor(resident, place_id)

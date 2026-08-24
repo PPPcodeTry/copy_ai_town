@@ -279,6 +279,32 @@
       "targetType": "prop"
     },
     {
+      "activityId": "activity_clinic_self_care",
+      "facing": "up",
+      "fallback": "reject",
+      "memberAnchors": [
+        {
+          "anchorId": "primary",
+          "memberAnchorId": "member_clinic_self_care_01",
+          "position": [
+            200,
+            104
+          ]
+        }
+      ],
+      "placeName": "诊所",
+      "poseFamily": "service",
+      "role": "visitor",
+      "sceneId": "clinic",
+      "slotId": "slot_clinic_self_care_01",
+      "target": {
+        "actionVerb": "基础处理",
+        "anchorId": "primary",
+        "propName": "诊所药柜"
+      },
+      "targetType": "prop"
+    },
+    {
       "activityId": "activity_clinic_receive_patient",
       "facing": "down",
       "fallback": "reject",

@@ -19,6 +19,9 @@ const ACTIVITY_EXECUTION_PROJECTION := preload(
 const DINING_SERVICE := preload(
 	"res://world/runtime/work/TownDiningServiceRuntime.gd"
 )
+const CLINIC_CONTINUITY := preload(
+	"res://world/runtime/condition/TownClinicContinuityRuntime.gd"
+)
 const SOCIAL_JUDGMENTS := preload(
 	"res://world/runtime/social/TownSocialJudgments.gd"
 )
@@ -205,12 +208,10 @@ static func accept_request(
 		resident_id,
 		requested_activity_id,
 	)
-	var visitor_service_staffed: bool = (
-		visitor_request_spec.is_empty()
-		or host._work.occupation_service_kind_is_staffed(
-			String(visitor_request_spec.get("kind", "")),
-			host.resident_registry.records,
-		)
+	var visitor_service_staffed := CLINIC_CONTINUITY.visitor_service_is_staffed(
+		host,
+		requested_activity_id,
+		visitor_request_spec,
 	)
 	if (
 		ACTIVITY_EXECUTION_PROJECTION.first_candidate_is_visitor(validated)

@@ -277,6 +277,22 @@
       ]
     },
     {
+      "activityId": "activity_clinic_self_care",
+      "durationMinutes": 20.0,
+      "effects": {
+        "energy": 2.0,
+        "stress": -4.0
+      },
+      "interruptible": true,
+      "kind": "need",
+      "label": "基础自我处理",
+      "poseFamily": "service",
+      "tags": [
+        "care.self",
+        "care.visit"
+      ]
+    },
+    {
       "activityId": "activity_clinic_wait",
       "durationMinutes": 30.0,
       "effects": {
@@ -1065,15 +1081,15 @@
     "receiptVersion": 1,
     "scheduleTemplatesResolved": true,
     "sourceDocumentFingerprints": {
-      "activity_definitions.json": "85a307cb04d45ae173b7cae1f419b2c16b5854975a571d96a8d18e7e06328d07",
-      "activity_slots.json": "83a0ac46e0aed7924fd3990bce7549d80f1524f45963eacd8e1781e1ad76ed52",
-      "indoor_prop_authoring.json": "863fb5bbc30a0131fd04da00010b215d905a6d1ee21986a1cfc607eaa8a39ed6",
+      "activity_definitions.json": "11394713d90ceaa7a57868099d8b63307b68f7a89227c070da6b35f8e007fb48",
+      "activity_slots.json": "9ec2e66c45e7bf0d48da4ddaadc4598fa8d2d5d31fc7ef107f2615bc65c5324f",
+      "indoor_prop_authoring.json": "cddf2092f875e4f7012b449785fd1d901e69fc6f2ec129f11bb5b236c8897e73",
       "occupation_catalog.json": "eddae46da2c289df21ee8ec93b1042d36c22db8211a1bc51a0addd3e65c139af",
       "places.json": "17dc9a4fdd84421544713171fd69f394d5f40efd10586bb2de9e3de3c241342e",
-      "props.json": "3c810ed3e77707b32be0b75da1ff7e26ad752db1b33c2a4c7f4e20a0fe702d5b",
+      "props.json": "9834cda492c108bbd7d7e087a1cf2e31449365265ddb66fd435e5b8891c3506f",
       "schedule_templates.json": "c813a58fb45813c52230c398181b2bc2ebd5aa9a1f6b76cb2c5d7c0708c50d63"
     },
-    "sourceFingerprint": "744cc6609bd100be9ead3a35199155e5fe6206f7c34c245e230a9f449bb79b72",
+    "sourceFingerprint": "75d01b68ad3727ff7327b828ca6c8d13846aac5699228db74cb749251044b479",
     "sourceWorldId": "town",
     "staticReferencesValidated": true,
     "status": "formal_executable",
@@ -1547,6 +1563,32 @@
         "actionVerb": "接诊",
         "anchorId": "doctor_consult",
         "propName": "诊所问诊桌医生侧"
+      },
+      "targetType": "prop"
+    },
+    {
+      "activityId": "activity_clinic_self_care",
+      "facing": "up",
+      "fallback": "reject",
+      "memberAnchors": [
+        {
+          "anchorId": "primary",
+          "memberAnchorId": "member_clinic_self_care_01",
+          "position": [
+            200.0,
+            104.0
+          ]
+        }
+      ],
+      "placeName": "诊所",
+      "poseFamily": "service",
+      "role": "visitor",
+      "sceneId": "clinic",
+      "slotId": "slot_clinic_self_care_01",
+      "target": {
+        "actionVerb": "基础处理",
+        "anchorId": "primary",
+        "propName": "诊所药柜"
       },
       "targetType": "prop"
     },
@@ -212837,6 +212879,13 @@
           "durationMinutes": 10.0,
           "effects": {},
           "verb": "取药"
+        },
+        {
+          "durationMinutes": 20.0,
+          "effects": {
+            "累": -1.0
+          },
+          "verb": "基础处理"
         }
       ],
       "interaction": {

@@ -32,6 +32,9 @@ const ACTIVITY_SOURCE_FINGERPRINT_AFTER_PUBLIC_DINING_DAY_REWORK := (
 const ACTIVITY_SOURCE_FINGERPRINT_AFTER_COMMUNAL_SIMPLE_MEAL := (
 	"744cc6609bd100be9ead3a35199155e5fe6206f7c34c245e230a9f449bb79b72"
 )
+const ACTIVITY_SOURCE_FINGERPRINT_AFTER_CLINIC_SELF_CARE := (
+	"75d01b68ad3727ff7327b828ca6c8d13846aac5699228db74cb749251044b479"
+)
 const ACTIVITY_SAVE_MIGRATIONS := [
 	{
 		"id": "2026-08-10-public-dining-prepare-dough-target",
@@ -103,6 +106,18 @@ const ACTIVITY_SAVE_MIGRATIONS := [
 			ACTIVITY_SOURCE_FINGERPRINT_AFTER_COMMUNAL_SIMPLE_MEAL
 		),
 		# 新增自助简餐活动位，没有删除或改名既有执行引用；旧活动可按原进度继续。
+		"executionRewrites": [],
+		"placeServiceStateRewrites": [],
+	},
+	{
+		"id": "2026-08-24-clinic-self-care",
+		"fromSourceFingerprint": (
+			ACTIVITY_SOURCE_FINGERPRINT_AFTER_COMMUNAL_SIMPLE_MEAL
+		),
+		"toSourceFingerprint": (
+			ACTIVITY_SOURCE_FINGERPRINT_AFTER_CLINIC_SELF_CARE
+		),
+		# 新增基础自我处理活动位，没有删除或改名既有执行引用。
 		"executionRewrites": [],
 		"placeServiceStateRewrites": [],
 	},

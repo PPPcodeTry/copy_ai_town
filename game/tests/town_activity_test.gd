@@ -3548,6 +3548,7 @@ func _scenario_activity_routine() -> void:
 	_verify_all_workplaces(data, opening)
 	_verify_dining_prep_schedule()
 	_verify_no_cook_communal_meal(data, opening)
+	_verify_no_doctor_clinic_continuity(data, opening)
 	_verify_dining_departure_awareness(data, opening)
 	_verify_meal_sequence(data, opening)
 	_verify_meal_period_boundary_consumption(data, opening)
@@ -3920,6 +3921,398 @@ func _verify_no_cook_communal_meal(
 		"兼职帮工的备餐会形成真实公共餐食",
 	)
 	restored.call("stop")
+
+
+func _verify_no_doctor_clinic_continuity(
+	data: Dictionary,
+	opening: Dictionary,
+) -> void:
+	var no_doctor_opening := _opening_without_doctor(opening)
+	_verify_no_doctor_self_care(data, no_doctor_opening)
+	_verify_no_doctor_external_aid(data, no_doctor_opening)
+
+
+func _verify_no_doctor_self_care(
+	data: Dictionary,
+	no_doctor_opening: Dictionary,
+) -> void:
+	var world: RefCounted = WORLD.new()
+	_expect_equal(
+		(world.call("start", data, no_doctor_opening) as Dictionary).get("ok"),
+		true,
+		"无医生开局仍能启动 World",
+	)
+	var patient_id := "resident_tang_xiaoman_01"
+	var patient_name := "唐小满"
+	var condition_id := "condition-%s-910001" % patient_id
+	var clinic_state := (
+		(world.get("work_domain") as TownWorkDomainRuntime).place_services
+		as TownPlaceServiceRuntime
+	).state("诊所")
+	_expect_equal(clinic_state.get("open"), false, "无医生时诊所不会伪装成营业")
+	_expect_equal(clinic_state.get("owner_id"), "", "无医生时诊所没有写死的负责人")
+	_expect(
+		(
+			(world.call("get_staffing_snapshot") as Dictionary).get(
+				"vacantPostIds",
+				[],
+			) as Array
+		).has("post:occupation_clinic_practitioner"),
+		"无医生时诊疗岗位会明确保持空缺",
+	)
+	var staffing := (
+		(world.get("work_domain") as TownWorkDomainRuntime).staffing as RefCounted
+	)
+	var now := _activity_world_absolute_minute(world)
+	var helper_arrangement := staffing.call(
+		"create_arrangement",
+		"resident_a_he_01",
+		"occupation_clinic_practitioner",
+		"part_time",
+		now,
+	) as Dictionary
+	_expect_equal(
+		helper_arrangement.get("ok"),
+		true,
+		"无诊疗资格居民可以建立诊所帮工安排",
+	)
+	_expect_equal(
+		(helper_arrangement.get("arrangement", {}) as Dictionary).get(
+			"coversPost",
+		),
+		false,
+		"诊所帮工不会覆盖正式诊疗岗位",
+	)
+	_expect_equal(
+		(helper_arrangement.get("arrangement", {}) as Dictionary).get(
+			"authorizesWork",
+		),
+		false,
+		"诊所帮工不会获得专业诊疗权限",
+	)
+	staffing.call(
+		"rebuild",
+		(world.get("resident_registry") as TownResidentRegistry).records,
+		now,
+	)
+	world.PLACE_SERVICE_COMMAND_RUNTIME.refresh_staffing(world)
+	_inject_activity_test_condition(world, patient_id, condition_id)
+	var patient := (
+		(world.get("resident_registry") as TownResidentRegistry).records.get(
+			patient_id,
+			{},
+		) as Dictionary
+	)
+	var travel_destinations := AGENT_WORLD_QUERY_RUNTIME.travel_destinations(
+		world,
+		patient,
+	) as Array
+	_expect(
+		travel_destinations.has("诊所"),
+		"轻伤居民在没有医生时仍能前往诊所做基础处理",
+	)
+	var life_options := AGENT_WORLD_QUERY_RUNTIME.life_destination_options(
+		world,
+		patient,
+		travel_destinations,
+	) as Array
+	_expect(
+		_activity_life_options_have(
+			life_options,
+			"activity_clinic_self_care",
+		),
+		"轻伤会形成真实的基础自我处理生活路径",
+	)
+	_expect(
+		_move_to_place(world, patient_name, "诊所"),
+		"没有医生时轻伤居民仍能进入诊所",
+	)
+	var options := (
+		(world.call("query_activity_options", patient_id) as Dictionary).get(
+			"options",
+			[],
+		) as Array
+	)
+	_expect_equal(
+		_activity_option(options, "activity_clinic_self_care").get("available"),
+		true,
+		"没有医生时基础自我处理可以真实执行",
+	)
+	_expect_equal(
+		_activity_option(options, "activity_clinic_consult").get("available"),
+		false,
+		"没有医生时不会把正式问诊伪装成可执行活动",
+	)
+	var performed := world.call(
+		"perform_activity_step",
+		patient_id,
+		"clinic-self-care-plan",
+		0,
+		_activity_step(
+			"clinic-self-care-step",
+			"activity_clinic_self_care",
+			"诊所",
+		),
+	) as Dictionary
+	_expect_equal(performed.get("ok"), true, "基础自我处理活动可以开始")
+	_expect(
+		_advance_until_action_clears(world, patient_name, 120),
+		"基础自我处理活动可以完成",
+	)
+	_expect_equal(
+		_activity_test_condition(world, patient_id, condition_id).get("state"),
+		"recovering",
+		"基础自我处理会让轻伤进入恢复阶段",
+	)
+	var recovering_condition := _activity_test_condition(
+		world,
+		patient_id,
+		condition_id,
+	)
+	_expect(
+		int(recovering_condition.get("nextChangeAtMinute", -1))
+		> int(recovering_condition.get("lastChangedAtMinute", -1)),
+		"基础自我处理会安排后续自然恢复时间",
+	)
+	world.call("stop")
+
+
+func _verify_no_doctor_external_aid(
+	data: Dictionary,
+	no_doctor_opening: Dictionary,
+) -> void:
+	var external_opening := no_doctor_opening.duplicate(true)
+	var patient_id := "resident_tang_xiaoman_01"
+	var patient_world_state: Dictionary = {}
+	for resident_value: Variant in external_opening.get("residents", []) as Array:
+		var opening_resident := resident_value as Dictionary
+		if String(opening_resident.get("residentId", "")) == patient_id:
+			patient_world_state = (
+				opening_resident.get("worldState", {}) as Dictionary
+			).duplicate(true)
+			break
+	(external_opening.get("playerAvatar", {}) as Dictionary)["worldState"] = (
+		patient_world_state
+	)
+	(
+		(external_opening.get("playerAvatar", {}) as Dictionary).get(
+			"worldState",
+			{},
+		) as Dictionary
+	).erase("body")
+	var world: RefCounted = WORLD.new()
+	_expect_equal(
+		(world.call("start", data, external_opening) as Dictionary).get("ok"),
+		true,
+		"无医生的重伤回归世界可以启动",
+	)
+	world.call("set_player_avatar_present", true, false)
+	var avatar_id := String(world.call("player_avatar_id"))
+	for attack_index in 2:
+		var request_id := "clinic-external-aid-attack-%d" % attack_index
+		var attack := world.call(
+			"submit_avatar_area_attack",
+			{
+				"requestId": request_id,
+				"attackerId": avatar_id,
+				"attackKind": "unarmed",
+				"sourceKind": "avatar_intent",
+				"sourceRef": request_id,
+			},
+		) as Dictionary
+		_expect_equal(attack.get("ok"), true, "重伤测试攻击进入正式冲突路径")
+		_expect(
+			(attack.get("hitTargetIds", []) as Array).has(patient_id),
+			"重伤测试攻击真实命中目标居民",
+		)
+	var injury := _activity_test_conflict_injury(world, patient_id)
+	_expect_equal(injury.get("severity"), "heavy", "连续受伤会形成真实重伤")
+	_expect_equal(
+		injury.get("treatmentStatus"),
+		"required",
+		"重伤首先进入需要治疗状态",
+	)
+	world.call("advance", 119.0)
+	_expect_equal(
+		(world.call("get_resident_state", patient_id) as Dictionary).get(
+			"isPresent",
+		),
+		true,
+		"重伤等待未到时限前居民仍留在镇内",
+	)
+	world.call("advance", 1.0)
+	var departed_state := world.call("get_resident_state", patient_id) as Dictionary
+	injury = _activity_test_conflict_injury(world, patient_id)
+	_expect_equal(departed_state.get("isPresent"), false, "重伤超时后居民会离镇就医")
+	_expect_equal(
+		(departed_state.get("arrivalState", {}) as Dictionary).get("status"),
+		"pending",
+		"离镇就医会形成可保存的待返回状态",
+	)
+	_expect_equal(
+		injury.get("treatmentStatus"),
+		"in_progress",
+		"镇外医疗会开始真实治疗计时",
+	)
+	_expect_equal(
+		injury.get("treatmentPlaceId"),
+		"镇外医疗援助",
+		"重伤缺少医生时明确转入镇外医疗援助",
+	)
+	var prepared := world.call("prepare_save_candidate") as Dictionary
+	_expect_equal(prepared.get("ok"), true, "居民离镇就医期间可以保存")
+	var restored: RefCounted = WORLD.new()
+	var restore_result := restored.call(
+		"restore_from_snapshot",
+		data,
+		external_opening,
+		prepared.get("snapshot", {}) as Dictionary,
+	) as Dictionary
+	_expect_equal(restore_result.get("ok"), true, "离镇就医存档可以恢复")
+	world.call("stop")
+	if restore_result.get("ok") != true:
+		restored.call("stop")
+		return
+	var restored_state := restored.call("get_resident_state", patient_id) as Dictionary
+	_expect_equal(restored_state.get("isPresent"), false, "读档后居民仍在镇外治疗")
+	injury = _activity_test_conflict_injury(restored, patient_id)
+	_expect_equal(
+		injury.get("treatmentStatus"),
+		"in_progress",
+		"读档不会重置镇外治疗进度",
+	)
+	var scheduled_return := int(
+		(restored_state.get("arrivalState", {}) as Dictionary).get(
+			"scheduledAbsoluteMinute",
+			-1,
+		),
+	)
+	var until_return := scheduled_return - _activity_world_absolute_minute(restored)
+	_expect(until_return > 0, "镇外治疗存档保留有效返回时间")
+	if until_return > 0:
+		restored.call("advance", float(until_return))
+	restored_state = restored.call("get_resident_state", patient_id) as Dictionary
+	injury = _activity_test_conflict_injury(restored, patient_id)
+	_expect_equal(restored_state.get("isPresent"), true, "镇外治疗完成后居民会回到小镇")
+	_expect_equal(
+		(restored_state.get("arrivalState", {}) as Dictionary).get("status"),
+		"arrived",
+		"镇外治疗完成后待返回状态会结算",
+	)
+	_expect_equal(injury.get("severity"), "light", "镇外治疗会把重伤降为轻伤")
+	_expect_equal(
+		injury.get("treatmentStatus"),
+		"completed",
+		"居民返回时镇外治疗已经完成",
+	)
+	restored.call("advance", 180.0)
+	_expect(
+		_activity_test_conflict_injury(restored, patient_id).is_empty(),
+		"返回后的轻伤会继续按原规则完全恢复",
+	)
+	_expect_equal(
+		(
+			(
+				(restored.get("resident_registry") as TownResidentRegistry).records.get(
+					patient_id,
+					{},
+				) as Dictionary
+			).get("attendanceState", {}) as Dictionary
+		).get("status"),
+		"available",
+		"镇外治疗归来后居民会恢复可工作状态",
+	)
+	restored.call("stop")
+
+
+func _opening_without_doctor(opening: Dictionary) -> Dictionary:
+	var result := opening.duplicate(true)
+	(result.get("environment", {}) as Dictionary)["clock"] = "10:00"
+	for resident_value: Variant in result.get("residents", []) as Array:
+		var resident := resident_value as Dictionary
+		if String(resident.get("residentId", "")) not in [
+			"resident_gu_chuan_01",
+			"resident_zhou_ning_01",
+		]:
+			continue
+		var social_state := resident.get("socialState", {}) as Dictionary
+		social_state["job"] = "工匠"
+		social_state["workplace"] = "工作坊"
+	return result
+
+
+func _inject_activity_test_condition(
+	world: RefCounted,
+	resident_id: String,
+	condition_id: String,
+) -> void:
+	var condition_runtime := world.get("_resident_conditions") as RefCounted
+	var condition_residents := condition_runtime.get("_residents") as Dictionary
+	var entry := condition_residents.get(resident_id, {}) as Dictionary
+	(entry.get("conditions", []) as Array).append({
+		"conditionId": condition_id,
+		"kind": "minor_injury",
+		"label": "擦伤已经影响行动",
+		"severity": "noticeable",
+		"sourceKind": "formal_activity",
+		"sourceRef": "no-doctor-clinic-continuity",
+		"startedAtMinute": _activity_world_absolute_minute(world),
+		"lastChangedAtMinute": _activity_world_absolute_minute(world),
+		"state": "active",
+		"nextChangeAtMinute": 999999,
+	})
+
+
+func _activity_test_condition(
+	world: RefCounted,
+	resident_id: String,
+	condition_id: String,
+) -> Dictionary:
+	for condition_value: Variant in (
+		(world.call("get_resident_state", resident_id) as Dictionary).get(
+			"conditions",
+			[],
+		) as Array
+	):
+		var condition := condition_value as Dictionary
+		if String(condition.get("conditionId", "")) == condition_id:
+			return condition
+	return {}
+
+
+func _activity_test_conflict_injury(
+	world: RefCounted,
+	resident_id: String,
+) -> Dictionary:
+	for injury_value: Variant in (
+		(world.call("get_public_conflict_projection") as Dictionary).get(
+			"injuries",
+			[],
+		) as Array
+	):
+		var injury := injury_value as Dictionary
+		if String(injury.get("actorId", "")) == resident_id:
+			return injury
+	return {}
+
+
+func _activity_life_options_have(
+	options: Array,
+	activity_id: String,
+) -> bool:
+	for destination_value: Variant in options:
+		for activity_value: Variant in (
+			(destination_value as Dictionary).get("activities", []) as Array
+		):
+			if String((activity_value as Dictionary).get("activity_id", "")) == activity_id:
+				return true
+	return false
+
+
+func _activity_world_absolute_minute(world: RefCounted) -> int:
+	return int(
+		(world.get("_environment") as RefCounted).call("get_absolute_minute"),
+	)
 
 
 func _verify_dining_prep_schedule() -> void:
@@ -5350,12 +5743,12 @@ func _scenario_activity_catalog_contract() -> void:
 	)
 	_expect_equal(
 		CATALOG.activity_templates(catalog).size(),
-		67,
+		68,
 		"catalog exposes the authored activity definitions",
 	)
 	_expect_equal(
 		CATALOG.slot_templates(catalog).size(),
-		90,
+		91,
 		"catalog exposes the authored prop slots",
 	)
 	_expect_equal(

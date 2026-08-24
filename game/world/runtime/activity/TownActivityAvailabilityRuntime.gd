@@ -8,6 +8,9 @@ const ACTIVITY_SCALARS := preload(
 const DINING_SERVICE := preload(
 	"res://world/runtime/work/TownDiningServiceRuntime.gd"
 )
+const CLINIC_CONTINUITY := preload(
+	"res://world/runtime/condition/TownClinicContinuityRuntime.gd"
+)
 const OCCUPATION_SERVICE_ACTIVITY_POLICY := preload(
 	"res://world/runtime/work/TownOccupationServiceActivityPolicy.gd"
 )
@@ -51,12 +54,10 @@ static func apply_occupation_service(
 			if activity_id == "activity_dining_collect_meal"
 			else ""
 		),
-		(
-			request_spec.is_empty()
-			or host._work.occupation_service_kind_is_staffed(
-				String(request_spec.get("kind", "")),
-				host.resident_registry.records,
-			)
+		CLINIC_CONTINUITY.visitor_service_is_staffed(
+			host,
+			activity_id,
+			request_spec,
 		),
 	)
 
@@ -101,6 +102,18 @@ static func apply_dining_meal_state(
 		return
 	option["available"] = false
 	option["disabledReason"] = "DINING_MEAL_NOT_READY"
+
+
+static func apply_clinic_continuity(
+	host,
+	resident: Dictionary,
+	option: Dictionary,
+) -> void:
+	CLINIC_CONTINUITY.apply_activity_availability(
+		host,
+		resident,
+		option,
+	)
 
 
 static func apply_work_task(

@@ -79,6 +79,11 @@ static func query(
 		for option_value: Variant in result.get("options", []) as Array:
 			var option := option_value as Dictionary
 			world.ACTIVITY_AVAILABILITY_RUNTIME.apply_sleep(resident, option)
+			world.ACTIVITY_AVAILABILITY_RUNTIME.apply_clinic_continuity(
+				world,
+				resident,
+				option,
+			)
 			world.ACTIVITY_AVAILABILITY_RUNTIME.apply_communal_simple_meal(
 				world,
 				resident,
