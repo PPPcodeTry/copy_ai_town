@@ -259,10 +259,32 @@ static func closed_for_visitor(
 	resident: Dictionary,
 	place_id: String,
 ) -> bool:
+	var service_state := host._work.place_services.state(place_id) as Dictionary
+	var service_occupation_id := String(
+		service_state.get("service_occupation_id", ""),
+	)
+	if (
+		not service_occupation_id.is_empty()
+		and OCCUPATION_RESIDENT_CONTEXT_RUNTIME.can_work_occupation(
+			host,
+			String(resident.get("residentId", "")),
+			service_occupation_id,
+		)
+	):
+		return false
 	if DINING_SERVICE.can_admit_without_worker(
 		host,
 		place_id,
 		int(host._environment.get_absolute_minute()),
+	):
+		return false
+	if (
+		place_id == DINING_SERVICE.DINING_HALL_PLACE_ID
+		and DINING_SERVICE.communal_simple_meal_available(
+			host,
+			resident,
+			int(host._environment.get_absolute_minute()),
+		)
 	):
 		return false
 	return host._work.place_services.is_closed_for_visitor(resident, place_id)

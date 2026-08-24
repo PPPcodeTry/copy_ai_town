@@ -214,6 +214,7 @@ static func id_for_activity(
 			host,
 			host.resident_registry.records.get(resident_id, {}) as Dictionary,
 		),
+		int(host._environment.get_absolute_minute()),
 	)
 
 

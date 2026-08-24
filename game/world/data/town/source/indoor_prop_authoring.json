@@ -341,7 +341,7 @@
       "placeName": "公共食堂",
       "regionId": "region_portal_dining_hall_entry",
       "props": [
-        {"name": "公共食堂灶台", "instanceId": "stove_oven_kitchen_west", "assetId": "stove_oven", "anchorId": "use_front", "actions": [{"verb": "做饭", "durationMinutes": 60, "effects": {"累": 1}}, {"verb": "烘烤面包", "durationMinutes": 30, "effects": {"累": 1}}]},
+        {"name": "公共食堂灶台", "instanceId": "stove_oven_kitchen_west", "assetId": "stove_oven", "anchorId": "use_front", "actions": [{"verb": "做饭", "durationMinutes": 60, "effects": {"累": 1}}, {"verb": "做简餐", "durationMinutes": 20, "effects": {"累": 1}}, {"verb": "烘烤面包", "durationMinutes": 30, "effects": {"累": 1}}]},
         {"name": "公共食堂水槽", "instanceId": "sink_cabinet_kitchen_west", "assetId": "sink_cabinet", "anchorId": "use_front", "verb": "洗餐具", "durationMinutes": 30, "effects": {"累": 1}},
         {"name": "公共食堂备餐柜", "instanceId": "pantry_cabinet_kitchen_east", "assetId": "pantry_cabinet", "anchorId": "open_front", "verb": "取餐", "durationMinutes": 5, "effects": {}},
         {"name": "公共食堂递餐口", "instanceId": "pantry_cabinet_kitchen_east", "assetId": "pantry_cabinet", "anchorId": "serve_front", "verb": "递餐", "durationMinutes": 5, "effects": {}},

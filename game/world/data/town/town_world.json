@@ -339,6 +339,23 @@
       ]
     },
     {
+      "activityId": "activity_dining_prepare_simple_meal",
+      "durationMinutes": 20.0,
+      "effects": {
+        "energy": -2.0,
+        "satiety": 24.0
+      },
+      "interruptible": true,
+      "kind": "need",
+      "label": "自行做简餐",
+      "poseFamily": "work",
+      "tags": [
+        "food.prepare",
+        "food.eat",
+        "self_service.meal"
+      ]
+    },
+    {
       "activityId": "activity_dining_return_dishes",
       "durationMinutes": 10.0,
       "effects": {},
@@ -1048,15 +1065,15 @@
     "receiptVersion": 1,
     "scheduleTemplatesResolved": true,
     "sourceDocumentFingerprints": {
-      "activity_definitions.json": "7e214115e4bd332e2be6f441bf026d09a9b5288fdf0a60ad458f4a426efa9d9c",
-      "activity_slots.json": "b1d646753a396c8be1cb505933e6d881100fcb6231ae2dd7f4a3200cdeb53e17",
-      "indoor_prop_authoring.json": "9c636eabef2a7ef1517fb1b024111137ba62f2e076c6c68299addaa315d2e286",
+      "activity_definitions.json": "85a307cb04d45ae173b7cae1f419b2c16b5854975a571d96a8d18e7e06328d07",
+      "activity_slots.json": "83a0ac46e0aed7924fd3990bce7549d80f1524f45963eacd8e1781e1ad76ed52",
+      "indoor_prop_authoring.json": "863fb5bbc30a0131fd04da00010b215d905a6d1ee21986a1cfc607eaa8a39ed6",
       "occupation_catalog.json": "eddae46da2c289df21ee8ec93b1042d36c22db8211a1bc51a0addd3e65c139af",
       "places.json": "17dc9a4fdd84421544713171fd69f394d5f40efd10586bb2de9e3de3c241342e",
-      "props.json": "90ca9c6f5f0fdc14df9eacb33088144cb53273a36661f27d8746b86f3896b934",
+      "props.json": "3c810ed3e77707b32be0b75da1ff7e26ad752db1b33c2a4c7f4e20a0fe702d5b",
       "schedule_templates.json": "c813a58fb45813c52230c398181b2bc2ebd5aa9a1f6b76cb2c5d7c0708c50d63"
     },
-    "sourceFingerprint": "70dcd511461e5266174f3ddb5323d2adf4ecd5caf38cf25d7ba886ead3e3b818",
+    "sourceFingerprint": "744cc6609bd100be9ead3a35199155e5fe6206f7c34c245e230a9f449bb79b72",
     "sourceWorldId": "town",
     "staticReferencesValidated": true,
     "status": "formal_executable",
@@ -1710,6 +1727,32 @@
       "slotId": "slot_dining_prepare_meal_01",
       "target": {
         "actionVerb": "做饭",
+        "anchorId": "use_front",
+        "propName": "公共食堂灶台"
+      },
+      "targetType": "prop"
+    },
+    {
+      "activityId": "activity_dining_prepare_simple_meal",
+      "facing": "up",
+      "fallback": "reject",
+      "memberAnchors": [
+        {
+          "anchorId": "use_front",
+          "memberAnchorId": "member_dining_prepare_simple_meal_01",
+          "position": [
+            360.0,
+            376.0
+          ]
+        }
+      ],
+      "placeName": "公共食堂",
+      "poseFamily": "work",
+      "role": "visitor",
+      "sceneId": "dining_hall",
+      "slotId": "slot_dining_prepare_simple_meal_01",
+      "target": {
+        "actionVerb": "做简餐",
         "anchorId": "use_front",
         "propName": "公共食堂灶台"
       },
@@ -210319,6 +210362,13 @@
             "累": 1.0
           },
           "verb": "做饭"
+        },
+        {
+          "durationMinutes": 20.0,
+          "effects": {
+            "累": 1.0
+          },
+          "verb": "做简餐"
         },
         {
           "durationMinutes": 30.0,

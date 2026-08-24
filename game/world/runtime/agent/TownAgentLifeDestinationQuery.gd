@@ -17,6 +17,7 @@ const NATURAL_LIFE_ACTIVITY_IDS := [
 	"activity_cafe_rest",
 	"activity_dining_eat_meal",
 	"activity_dining_collect_meal",
+	"activity_dining_prepare_simple_meal",
 	"activity_dining_return_dishes",
 	SLEEP_ACTIVITY_ID,
 	"activity_market_buy_general_goods",
@@ -33,12 +34,15 @@ static func options(
 	absolute_minute: int,
 	weather: String,
 	activity_runtime,
+	world,
 ) -> Array[Dictionary]:
 	var resident_id := String(resident.get("residentId", ""))
 	if resident_id.is_empty():
 		return []
 	var activity_state := resident.get("activityState", {}) as Dictionary
-	var meal_needed := int(activity_state.get("satiety", 50)) <= 35
+	var satiety := int(activity_state.get("satiety", 50))
+	var meal_needed := satiety <= 35
+	var critical_meal_needed := satiety <= 20
 	# 平常仍由职业任务优先；精力或饥饿达到阈值时，生活选项不能被工作遮住。
 	if has_work_tasks and not sleep_needed and not meal_needed:
 		return []
@@ -63,11 +67,15 @@ static func options(
 			continue
 		var activities := _activities_for_destination(
 			query.get("options", []) as Array,
+			resident,
 			place_id,
 			home_place,
 			interests,
 			has_work_tasks,
 			sleep_needed,
+			meal_needed,
+			critical_meal_needed,
+			world,
 			activity_runtime,
 		)
 		if activities.is_empty():
@@ -79,6 +87,10 @@ static func options(
 				func(activity: Dictionary) -> bool:
 					return bool(activity.get("interest_match", false)),
 			),
+			"meal_match": activities.any(
+				func(activity: Dictionary) -> bool:
+					return bool(activity.get("meal_match", false)),
+			),
 			"rotation_key": posmod(
 				hash("%s:%d:%s" % [resident_id, day_index, place_id]),
 				2147483647,
@@ -89,23 +101,45 @@ static func options(
 		result.resize(MAX_DESTINATION_OPTIONS)
 	for option: Dictionary in result:
 		option.erase("interest_match")
+		option.erase("meal_match")
 		option.erase("rotation_key")
+		for activity_value: Variant in option.get("activities", []) as Array:
+			(activity_value as Dictionary).erase("meal_match")
 	return result
 
 
 static func _activities_for_destination(
 	options: Array,
+	resident: Dictionary,
 	place_id: String,
 	home_place: String,
 	interests: Variant,
 	has_work_tasks: bool,
 	sleep_needed: bool,
+	meal_needed: bool,
+	critical_meal_needed: bool,
+	world,
 	activity_runtime,
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for option_value: Variant in options:
 		var option := (option_value as Dictionary).duplicate(true)
 		var activity_id := String(option.get("activityId", ""))
+		world.ACTIVITY_AVAILABILITY_RUNTIME.apply_communal_simple_meal(
+			world,
+			resident,
+			option,
+		)
+		world.ACTIVITY_AVAILABILITY_RUNTIME.apply_dining_meal_state(
+			world,
+			option,
+		)
+		world.ACTIVITY_AVAILABILITY_RUNTIME.apply_occupation_service(
+			world,
+			String(resident.get("residentId", "")),
+			option,
+		)
+		var meal_path := _is_meal_path(activity_id)
 		if (
 			not bool(option.get("available", false))
 			or String(option.get("role", "")) == "worker"
@@ -116,7 +150,17 @@ static func _activities_for_destination(
 			place_id != home_place or not sleep_needed
 		):
 			continue
-		if has_work_tasks and not DINING_SERVICE.activity_allowed_during_work(activity_id):
+		if (
+			critical_meal_needed
+			and not meal_path
+			and activity_id != SLEEP_ACTIVITY_ID
+		):
+			continue
+		if (
+			has_work_tasks
+			and not DINING_SERVICE.activity_allowed_during_work(activity_id)
+			and not (meal_needed and meal_path)
+		):
 			continue
 		var matched := INTERESTS.matched_labels_for_activity(
 			interests,
@@ -125,6 +169,7 @@ static func _activities_for_destination(
 		result.append({
 			"activity_id": activity_id,
 			"label": String(option.get("label", "")),
+			"meal_match": meal_needed and meal_path,
 			"interest_match": not matched.is_empty(),
 			"matched_interests": matched,
 		})
@@ -135,6 +180,10 @@ static func _activities_for_destination(
 
 
 static func _activity_precedes(left: Dictionary, right: Dictionary) -> bool:
+	var left_meal := bool(left.get("meal_match", false))
+	var right_meal := bool(right.get("meal_match", false))
+	if left_meal != right_meal:
+		return left_meal
 	var left_match := bool(left.get("interest_match", false))
 	var right_match := bool(right.get("interest_match", false))
 	if left_match != right_match:
@@ -145,6 +194,10 @@ static func _activity_precedes(left: Dictionary, right: Dictionary) -> bool:
 
 
 static func _destination_precedes(left: Dictionary, right: Dictionary) -> bool:
+	var left_meal := bool(left.get("meal_match", false))
+	var right_meal := bool(right.get("meal_match", false))
+	if left_meal != right_meal:
+		return left_meal
 	var left_match := bool(left.get("interest_match", false))
 	var right_match := bool(right.get("interest_match", false))
 	if left_match != right_match:
@@ -156,3 +209,12 @@ static func _destination_precedes(left: Dictionary, right: Dictionary) -> bool:
 	return String(left.get("place_id", "")) < String(
 		right.get("place_id", ""),
 	)
+
+
+static func _is_meal_path(activity_id: String) -> bool:
+	return activity_id in [
+		"activity_cafe_eat_pastry",
+		"activity_dining_collect_meal",
+		"activity_dining_eat_meal",
+		DINING_SERVICE.SIMPLE_MEAL_ACTIVITY_ID,
+	]

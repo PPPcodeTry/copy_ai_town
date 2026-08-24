@@ -22,6 +22,10 @@ const MEAL_MENU_PATH := "res://world/data/town/source/meal_menus.json"
 const BATCH_SIZE := 4
 const DINING_CAPACITY := 4
 const FALLBACK_MEAL_MENU := "家常饭菜"
+const DINING_OCCUPATION_ID := "occupation_dining_operator"
+const DINING_HALL_PLACE_ID := "公共食堂"
+const SIMPLE_MEAL_ACTIVITY_ID := "activity_dining_prepare_simple_meal"
+const HUNGRY_SATIETY_THRESHOLD := 35
 static var _meal_menu_by_period: Dictionary = {}
 static var _meal_menu_loaded := false
 
@@ -231,6 +235,8 @@ static func travel_destination_available(
 ) -> bool:
 	if target_place != CONTENT_CATALOG.PLACE_DINING_HALL:
 		return true
+	if communal_simple_meal_available(world, resident, absolute_minute):
+		return true
 	if _resident_is_dining_worker(resident):
 		return true
 	return String(capacity_status(
@@ -250,6 +256,62 @@ static func can_admit_without_worker(
 		and world.work_domain.meal_service_is_open(absolute_minute)
 		and world.work_domain.meal_period_is_prepared(absolute_minute)
 	)
+
+
+static func communal_simple_meal_available(
+	world,
+	resident: Dictionary,
+	absolute_minute: int,
+) -> bool:
+	if resident.is_empty():
+		return false
+	var satiety := int(
+		(resident.get("activityState", {}) as Dictionary).get("satiety", 50),
+	)
+	return (
+		satiety <= HUNGRY_SATIETY_THRESHOLD
+		and not world.work_domain.meal_period_is_prepared(absolute_minute)
+		and not _available_food_producer_exists(world, absolute_minute)
+	)
+
+
+static func communal_simple_meal_disabled_reason(
+	world,
+	resident: Dictionary,
+	absolute_minute: int,
+) -> String:
+	if int(
+		(resident.get("activityState", {}) as Dictionary).get("satiety", 50),
+	) > HUNGRY_SATIETY_THRESHOLD:
+		return "COMMUNAL_MEAL_NOT_NEEDED"
+	if world.work_domain.meal_period_is_prepared(absolute_minute):
+		return "DINING_MEAL_READY"
+	if _available_food_producer_exists(world, absolute_minute):
+		return "DINING_WORKER_AVAILABLE"
+	return "COMMUNAL_KITCHEN_UNAVAILABLE"
+
+
+static func _available_food_producer_exists(
+	world,
+	absolute_minute: int,
+) -> bool:
+	for resident_id: String in world.resident_registry.order:
+		var resident := world.resident_registry.records.get(resident_id, {}) as Dictionary
+		if not OCCUPATION_RESIDENT_CONTEXT_RUNTIME.available_for_work(world, resident):
+			continue
+		if OCCUPATION_RESIDENT_CONTEXT_RUNTIME.primary_id(
+			world,
+			resident,
+		) == DINING_OCCUPATION_ID:
+			return true
+		if world.work_domain.staffing.active_assignment_allows_capability(
+			resident_id,
+			DINING_OCCUPATION_ID,
+			"food.production",
+			absolute_minute,
+		):
+			return true
+	return false
 
 
 static func prioritize_dining_worker_arrival(
@@ -373,6 +435,7 @@ static func activity_allowed_during_work(activity_id: String) -> bool:
 	return activity_id in [
 		"activity_home_sleep",
 		"activity_dining_collect_meal",
+		SIMPLE_MEAL_ACTIVITY_ID,
 	]
 
 

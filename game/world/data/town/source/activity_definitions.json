@@ -216,6 +216,16 @@
       "poseFamily": "work"
     },
     {
+      "activityId": "activity_dining_prepare_simple_meal",
+      "label": "自行做简餐",
+      "kind": "need",
+      "tags": ["food.prepare", "food.eat", "self_service.meal"],
+      "durationMinutes": 20,
+      "effects": {"energy": -2, "satiety": 24},
+      "interruptible": true,
+      "poseFamily": "work"
+    },
+    {
       "activityId": "activity_dining_serve_meal",
       "label": "把备好的饭菜递给顾客",
       "kind": "work",

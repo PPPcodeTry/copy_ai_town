@@ -19,7 +19,7 @@ const CUSTOM_RESIDENT_LIBRARY_SCHEMA_VERSION := 1
 # 每次发布会改变已保存引用含义的活动/位置/道具/锚点时，必须在下方登记一条
 # 从旧 sourceFingerprint 到下一版本的、可重复执行的字段迁移。旧规则一旦随版本
 # 发布就不能删除，否则跳过多个版本的存档会失去升级路径。
-const ACTIVITY_SAVE_MIGRATION_VERSION := 1
+const ACTIVITY_SAVE_MIGRATION_VERSION := 2
 const ACTIVITY_SOURCE_FINGERPRINT_BEFORE_PUBLIC_DINING_SLOT_REWORK := (
 	"bf870f16f18fde30f8512bdd6c1fbbaa62989f38970af10d1630d4ab87947dff"
 )
@@ -28,6 +28,9 @@ const ACTIVITY_SOURCE_FINGERPRINT_AFTER_PUBLIC_DINING_SLOT_REWORK := (
 )
 const ACTIVITY_SOURCE_FINGERPRINT_AFTER_PUBLIC_DINING_DAY_REWORK := (
 	"70dcd511461e5266174f3ddb5323d2adf4ecd5caf38cf25d7ba886ead3e3b818"
+)
+const ACTIVITY_SOURCE_FINGERPRINT_AFTER_COMMUNAL_SIMPLE_MEAL := (
+	"744cc6609bd100be9ead3a35199155e5fe6206f7c34c245e230a9f449bb79b72"
 )
 const ACTIVITY_SAVE_MIGRATIONS := [
 	{
@@ -88,6 +91,18 @@ const ACTIVITY_SAVE_MIGRATIONS := [
 		# beta.2 之后调整了备餐时长、全天餐次窗口并增加可用活动位。
 		# 已保存的执行引用没有被删除或改名，按原进度继续即可；登记这条
 		# 兼容节点是为了让跨多个发行版跳跃的存档仍能走完整迁移链。
+		"executionRewrites": [],
+		"placeServiceStateRewrites": [],
+	},
+	{
+		"id": "2026-08-24-communal-simple-meal",
+		"fromSourceFingerprint": (
+			ACTIVITY_SOURCE_FINGERPRINT_AFTER_PUBLIC_DINING_DAY_REWORK
+		),
+		"toSourceFingerprint": (
+			ACTIVITY_SOURCE_FINGERPRINT_AFTER_COMMUNAL_SIMPLE_MEAL
+		),
+		# 新增自助简餐活动位，没有删除或改名既有执行引用；旧活动可按原进度继续。
 		"executionRewrites": [],
 		"placeServiceStateRewrites": [],
 	},

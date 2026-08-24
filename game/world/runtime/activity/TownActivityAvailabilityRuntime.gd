@@ -61,6 +61,48 @@ static func apply_occupation_service(
 	)
 
 
+static func apply_communal_simple_meal(
+	host,
+	resident: Dictionary,
+	option: Dictionary,
+) -> void:
+	if String(option.get("activityId", "")) != DINING_SERVICE.SIMPLE_MEAL_ACTIVITY_ID:
+		return
+	var absolute_minute := int(host._environment.get_absolute_minute())
+	var available := DINING_SERVICE.communal_simple_meal_available(
+		host,
+		resident,
+		absolute_minute,
+	)
+	option["available"] = available
+	option["disabledReason"] = (
+		""
+		if available
+		else DINING_SERVICE.communal_simple_meal_disabled_reason(
+			host,
+			resident,
+			absolute_minute,
+		)
+	)
+
+
+static func apply_dining_meal_state(
+	host,
+	option: Dictionary,
+) -> void:
+	if String(option.get("activityId", "")) not in [
+		"activity_dining_eat_meal",
+		"activity_dining_return_dishes",
+	]:
+		return
+	if host.work_domain.meal_period_is_prepared(
+		int(host._environment.get_absolute_minute()),
+	):
+		return
+	option["available"] = false
+	option["disabledReason"] = "DINING_MEAL_NOT_READY"
+
+
 static func apply_work_task(
 	host,
 	resident_id: String,

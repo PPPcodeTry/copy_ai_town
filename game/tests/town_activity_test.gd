@@ -3547,6 +3547,7 @@ func _scenario_activity_routine() -> void:
 	).duplicate(true)
 	_verify_all_workplaces(data, opening)
 	_verify_dining_prep_schedule()
+	_verify_no_cook_communal_meal(data, opening)
 	_verify_dining_departure_awareness(data, opening)
 	_verify_meal_sequence(data, opening)
 	_verify_meal_period_boundary_consumption(data, opening)
@@ -3555,6 +3556,370 @@ func _scenario_activity_routine() -> void:
 	_verify_meal_presentation_progress(data, opening)
 	_verify_active_routine_save_restore(data, opening)
 	return
+
+
+func _verify_no_cook_communal_meal(
+	data: Dictionary,
+	opening: Dictionary,
+) -> void:
+	var no_cook_opening := opening.duplicate(true)
+	(no_cook_opening.get("environment", {}) as Dictionary)["clock"] = "10:00"
+	for value: Variant in no_cook_opening.get("residents", []) as Array:
+		var opening_resident := value as Dictionary
+		if String(opening_resident.get("residentId", "")) != "resident_lu_qing_01":
+			continue
+		var social_state := opening_resident.get("socialState", {}) as Dictionary
+		social_state["job"] = "工匠"
+		social_state["workplace"] = "工作坊"
+		break
+	var world: RefCounted = WORLD.new()
+	_expect_equal(
+		(world.call("start", data, no_cook_opening) as Dictionary).get("ok"),
+		true,
+		"无厨师开局仍能启动 World",
+	)
+	var resident_id := "resident_tang_xiaoman_01"
+	var resident_name := "唐小满"
+	var resident := (
+		((world.get("resident_registry") as TownResidentRegistry).records as Dictionary)
+		.get(resident_id, {}) as Dictionary
+	)
+	var activity_state := (resident.get("activityState", {}) as Dictionary).duplicate(true)
+	activity_state["satiety"] = 20
+	resident["activityState"] = activity_state
+	ACTIVITY_SCALARS.sync_body_from_activity_needs(resident, activity_state)
+	_expect_equal(
+		(
+			(world.call("get_staffing_snapshot") as Dictionary).get("vacantPostIds", [])
+			as Array
+		).has("post:occupation_dining_operator"),
+		true,
+		"无厨师开局明确报告食堂岗位空缺",
+	)
+	_expect_equal(
+		(
+			(world.get("work_domain") as TownWorkDomainRuntime).place_services
+			as TownPlaceServiceRuntime
+		).state("公共食堂").get("open"),
+		false,
+		"食堂没有正式职员时不会伪造负责人和营业状态",
+	)
+	var travel_destinations := AGENT_WORLD_QUERY_RUNTIME.travel_destinations(
+		world,
+		resident,
+	) as Array
+	_expect(
+		travel_destinations.has("公共食堂"),
+		"很饿且没有厨师时，居民仍可前往公共自助厨房",
+	)
+	var life_options := AGENT_WORLD_QUERY_RUNTIME.life_destination_options(
+		world,
+		resident,
+		travel_destinations,
+	) as Array
+	var simple_meal_destination_found := false
+	var unavailable_formal_meal_found := false
+	var ordinary_activity_found := false
+	for destination_value: Variant in life_options:
+		var destination := destination_value as Dictionary
+		for option_value: Variant in destination.get("activities", []) as Array:
+			var activity_id := String(
+				(option_value as Dictionary).get("activity_id", ""),
+			)
+			if activity_id == "activity_dining_prepare_simple_meal":
+				simple_meal_destination_found = true
+			if activity_id in [
+				"activity_dining_collect_meal",
+				"activity_dining_eat_meal",
+			]:
+				unavailable_formal_meal_found = true
+			if activity_id not in [
+				"activity_cafe_eat_pastry",
+				"activity_dining_collect_meal",
+				"activity_dining_eat_meal",
+				"activity_dining_prepare_simple_meal",
+				"activity_home_sleep",
+			]:
+				ordinary_activity_found = true
+	_expect(
+		simple_meal_destination_found,
+		"严重饥饿时会出现可执行的自行做简餐路径",
+	)
+	_expect(
+		not ordinary_activity_found,
+		"严重饥饿时不会继续推荐逛店、休闲或普通工作路径",
+	)
+	_expect(
+		not unavailable_formal_meal_found,
+		"没有备餐时不会把正式取餐或吃饭伪装成可执行食物路径",
+	)
+	_expect(
+		_move_to_place(world, resident_name, "公共食堂"),
+		"没有厨师时，很饿的居民可以进入公共食堂",
+	)
+	var simple_option := _activity_option(
+		(world.call("query_activity_options", resident_id) as Dictionary).get(
+			"options",
+			[],
+		) as Array,
+		"activity_dining_prepare_simple_meal",
+	)
+	_expect_equal(
+		simple_option.get("available"),
+		true,
+		"无厨师且没有备餐时，自行做简餐可以真实执行",
+	)
+	var formal_eat_option := _activity_option(
+		(world.call("query_activity_options", resident_id) as Dictionary).get(
+			"options",
+			[],
+		) as Array,
+		"activity_dining_eat_meal",
+	)
+	_expect_equal(
+		formal_eat_option.get("disabledReason"),
+		"DINING_MEAL_NOT_READY",
+		"自助厨房不会把尚未备好的正式餐食提供给居民",
+	)
+	var satiety_before := int(activity_state.get("satiety", 0))
+	var performed := world.call(
+		"perform_activity_step",
+		resident_id,
+		"communal-simple-meal-plan",
+		0,
+		_activity_step(
+			"communal-simple-meal-step",
+			"activity_dining_prepare_simple_meal",
+			"公共食堂",
+		),
+	) as Dictionary
+	_expect_equal(performed.get("ok"), true, "自行做简餐活动可以开始")
+	world.call("advance", 5.0)
+	var prepared := world.call("prepare_save_candidate") as Dictionary
+	_expect_equal(
+		prepared.get("ok"),
+		true,
+		"自行做简餐执行中可以保存",
+	)
+	var restored: RefCounted = WORLD.new()
+	var restore_result := restored.call(
+		"restore_from_snapshot",
+		data,
+		no_cook_opening,
+		prepared.get("snapshot", {}) as Dictionary,
+	) as Dictionary
+	_expect_equal(
+		restore_result.get("ok"),
+		true,
+		"自行做简餐执行中保存后可以恢复",
+	)
+	world.call("stop")
+	if restore_result.get("ok") != true:
+		restored.call("stop")
+		return
+	_expect(
+		_advance_until_action_clears(restored, resident_name, 120),
+		"恢复后自行做简餐可以继续完成",
+	)
+	var restored_state := restored.call("get_resident_state", resident_id) as Dictionary
+	_expect(
+		int((restored_state.get("activityNeeds", {}) as Dictionary).get("satiety", 0))
+		> satiety_before,
+		"自行做简餐只给执行居民补充真实饱腹度",
+	)
+	var completed_option := _activity_option(
+		(restored.call("query_activity_options", resident_id) as Dictionary).get(
+			"options",
+			[],
+		) as Array,
+		"activity_dining_prepare_simple_meal",
+	)
+	_expect_equal(
+		completed_option.get("disabledReason"),
+		"COMMUNAL_MEAL_NOT_NEEDED",
+		"吃完简餐后不会无条件重复做饭",
+	)
+	var settled_save := restored.call("prepare_save_candidate") as Dictionary
+	_expect_equal(
+		settled_save.get("ok"),
+		true,
+		"自行做简餐结算后可以保存",
+	)
+	var settled_restored: RefCounted = WORLD.new()
+	var settled_restore_result := settled_restored.call(
+		"restore_from_snapshot",
+		data,
+		no_cook_opening,
+		settled_save.get("snapshot", {}) as Dictionary,
+	) as Dictionary
+	_expect_equal(
+		settled_restore_result.get("ok"),
+		true,
+		"已结算的自行做简餐存档可以恢复",
+	)
+	if settled_restore_result.get("ok") == true:
+		var settled_satiety := int(
+			(
+				(settled_restored.call("get_resident_state", resident_id) as Dictionary)
+				.get("activityNeeds", {}) as Dictionary
+			).get("satiety", 0),
+		)
+		settled_restored.call("advance", 1.0)
+		_expect_equal(
+			(
+				(settled_restored.call("get_resident_state", resident_id) as Dictionary)
+				.get("activityNeeds", {}) as Dictionary
+			).get("satiety"),
+			settled_satiety,
+			"已结算的简餐恢复后不会再次增加饱腹度",
+		)
+	settled_restored.call("stop")
+	restored.call("advance", 3.0 * 1440.0)
+	var multi_day_state := restored.call("get_resident_state", resident_id) as Dictionary
+	_expect_equal(
+		(multi_day_state.get("activityNeeds", {}) as Dictionary).get("satiety"),
+		0,
+		"无厨师多日运行时饱腹度仍按原规则下降到下限",
+	)
+	var multi_day_life_options := AGENT_WORLD_QUERY_RUNTIME.life_destination_options(
+		restored,
+		(restored.get("resident_registry") as TownResidentRegistry).records.get(
+			resident_id,
+			{},
+		) as Dictionary,
+	) as Array
+	var multi_day_simple_meal_found := false
+	for destination_value: Variant in multi_day_life_options:
+		for activity_value: Variant in (
+			(destination_value as Dictionary).get("activities", []) as Array
+		):
+			if String((activity_value as Dictionary).get("activity_id", "")) == (
+				"activity_dining_prepare_simple_meal"
+			):
+				multi_day_simple_meal_found = true
+	_expect(
+		multi_day_simple_meal_found,
+		"无厨师运行多日后，居民仍能获得前往食堂自行做简餐的路径",
+	)
+
+	var helper_id := "resident_a_he_01"
+	var now := int(
+		(restored.get("_environment") as RefCounted).call("get_absolute_minute"),
+	)
+	var helper_arrangement := (
+		(restored.get("work_domain") as TownWorkDomainRuntime).staffing as RefCounted
+	).call(
+		"create_arrangement",
+		helper_id,
+		"occupation_dining_operator",
+		"part_time",
+		now,
+	) as Dictionary
+	_expect_equal(
+		helper_arrangement.get("ok"),
+		true,
+		"空缺食堂岗位可以建立真实兼职帮工安排",
+	)
+	var staffing := (
+		(restored.get("work_domain") as TownWorkDomainRuntime).staffing as RefCounted
+	)
+	staffing.call(
+		"rebuild",
+		(restored.get("resident_registry") as TownResidentRegistry).records,
+		now,
+	)
+	restored.PLACE_SERVICE_COMMAND_RUNTIME.refresh_staffing(restored)
+	var dining_post := staffing.call(
+		"post_for_occupation",
+		"occupation_dining_operator",
+	) as Dictionary
+	_expect_equal(
+		dining_post.get("status"),
+		"vacant",
+		"兼职帮工不会冒充食堂正式负责人",
+	)
+	_expect(
+		(dining_post.get("supportingResidentIds", []) as Array).has(helper_id),
+		"兼职帮工会进入食堂的实际支持人员列表",
+	)
+	_expect_equal(
+		restored.OCCUPATION_RESIDENT_CONTEXT_RUNTIME.primary_id(
+			restored,
+			(restored.get("resident_registry") as TownResidentRegistry).records.get(
+				helper_id,
+				{},
+			) as Dictionary,
+		),
+		"occupation_cafe_worker",
+		"兼职帮工保留原来的正式职业",
+	)
+	_expect_equal(
+		(
+			restored.call(
+				"create_work_task",
+				{
+					"taskId": "dining-helper-forbidden-service",
+					"capability": "food.service",
+					"sourceKind": "meal_demand",
+					"sourceRef": "dining-helper-forbidden-service-request",
+					"targets": [{"kind": "prop", "ref": "公共食堂递餐口"}],
+					"requestedResultKind": "meal_handoff",
+					"priority": 90,
+				},
+			) as Dictionary
+		).get("ok"),
+		true,
+		"帮工权限检查会建立一项真实递餐任务",
+	)
+	var helper_tasks := restored.call(
+		"get_work_tasks_for_resident",
+		helper_id,
+	) as Array
+	_expect(
+		not helper_tasks.filter(
+			func(task: Dictionary) -> bool:
+				return String(task.get("capability", "")) == "food.production",
+		).is_empty(),
+		"兼职帮工能够接到真实备餐任务",
+	)
+	_expect(
+		helper_tasks.filter(
+			func(task: Dictionary) -> bool:
+				return String(task.get("capability", "")) == "food.service",
+		).is_empty(),
+		"兼职帮工不会看到未获授权的正式递餐任务",
+	)
+	_expect(
+		_move_to_place(restored, "阿禾", "公共食堂"),
+		"兼职帮工可以进入未营业的食堂执行任务",
+	)
+	var helper_performed := restored.call(
+		"perform_activity_step",
+		helper_id,
+		"dining-helper-meal-plan",
+		0,
+		_activity_step(
+			"dining-helper-meal-step",
+			"activity_dining_prepare_meal",
+			"公共食堂",
+		),
+	) as Dictionary
+	_expect_equal(
+		helper_performed.get("ok"),
+		true,
+		"兼职帮工能够开始正式备餐活动",
+	)
+	_expect(
+		_advance_until_action_clears(restored, "阿禾", 180),
+		"兼职帮工能够完成正式备餐活动",
+	)
+	_expect(
+		(restored.get("work_domain") as TownWorkDomainRuntime).meal_period_is_prepared(
+			int((restored.get("_environment") as RefCounted).call("get_absolute_minute")),
+		),
+		"兼职帮工的备餐会形成真实公共餐食",
+	)
+	restored.call("stop")
 
 
 func _verify_dining_prep_schedule() -> void:
@@ -4985,12 +5350,12 @@ func _scenario_activity_catalog_contract() -> void:
 	)
 	_expect_equal(
 		CATALOG.activity_templates(catalog).size(),
-		66,
+		67,
 		"catalog exposes the authored activity definitions",
 	)
 	_expect_equal(
 		CATALOG.slot_templates(catalog).size(),
-		89,
+		90,
 		"catalog exposes the authored prop slots",
 	)
 	_expect_equal(

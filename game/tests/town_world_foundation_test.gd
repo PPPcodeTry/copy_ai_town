@@ -2951,8 +2951,8 @@ func _validate_agent_projection(data: Dictionary) -> void:
 	) as Array
 	_expect_equal(
 		_verbs_for_prop(dining_props, "公共食堂灶台"),
-		["做饭", "烘烤面包"],
-		"one real stove carries both cooking actions",
+		["做简餐", "做饭", "烘烤面包"],
+		"one real stove carries the authored public and work cooking actions",
 	)
 	_expect_equal(
 		_verbs_for_prop(dining_props, "公共食堂备餐柜"),
