@@ -7,6 +7,7 @@ const INTERESTS := preload(
 	"res://world/data/town/TownInterestCatalog.gd"
 )
 const SOUL_PROFILE := preload("res://agent/soul/AgentSoulProfile.gd")
+const POPULATION_RULES := preload("res://world/runtime/TownPopulationRules.gd")
 const BODY_VALUES := {
 	"困": ["不困", "有点困", "很困"],
 	"饿": ["不饿", "有点饿", "很饿"],
@@ -115,18 +116,23 @@ static func validate(config: Dictionary, world_data: Dictionary) -> Array[String
 	for place_value: Variant in world_data.get("places", []) as Array:
 		if String((place_value as Dictionary).get("type", "")) == "住家":
 			home_count += 1
-	if residents.size() != home_count:
-		errors.append("居民数量必须等于住家槽位数量 %d，实际为 %d" % [home_count, residents.size()])
+	if not POPULATION_RULES.supports_resident_count(residents.size()):
+		errors.append(
+			"居民数量必须在 %d～%d 之间，实际为 %d"
+			% [
+				POPULATION_RULES.MIN_RESIDENT_COUNT,
+				mini(POPULATION_RULES.MAX_RESIDENT_COUNT, home_count),
+				residents.size(),
+			]
+		)
+	elif residents.size() > home_count:
+		errors.append("居民数量不能超过住家槽位数量 %d" % home_count)
 	if config.has("agentSoulProfiles"):
 		_validate_soul_profiles(
 			config.get("agentSoulProfiles"),
 			resident_ids,
 			errors,
 		)
-	for place_name_value: Variant in places:
-		var place_name := String(place_name_value)
-		if String((places[place_name] as Dictionary).get("type", "")) == "住家" and not residents_by_home.has(place_name):
-			errors.append("住家没有对应居民：%s" % place_name)
 	var owners_value: Variant = config.get("ownerAssignments")
 	if not owners_value is Dictionary:
 		errors.append("世界开局配置 ownerAssignments 必须是对象")
@@ -135,6 +141,7 @@ static func validate(config: Dictionary, world_data: Dictionary) -> Array[String
 		places,
 		resident_ids,
 		homes_by_resident_id,
+		residents_by_home,
 		errors,
 	)
 	var avatar_value: Variant = config.get("playerAvatar")
@@ -492,6 +499,7 @@ static func _validate_owners(
 	places: Dictionary,
 	resident_ids: Dictionary,
 	homes_by_resident_id: Dictionary,
+	residents_by_home: Dictionary,
 	errors: Array[String],
 ) -> void:
 	for place_name_value: Variant in owners:
@@ -505,11 +513,14 @@ static func _validate_owners(
 			if owners.has(place_name):
 				errors.append("公共地点不能分配归属人：%s" % place_name)
 			continue
-		if place_type == "住家" and (
+		if place_type == "住家" and residents_by_home.has(place_name) and (
 			not owners.has(place_name)
-			or not resident_ids.has(String(owners.get(place_name, "")))
+			or String(owners.get(place_name, ""))
+			!= String(residents_by_home.get(place_name, ""))
 		):
-			errors.append("住家缺少合法居民归属：%s" % place_name)
+			errors.append("已入住的住家缺少合法居民归属：%s" % place_name)
+		elif place_type == "住家" and not residents_by_home.has(place_name) and owners.has(place_name):
+			errors.append("空置住家不能分配居民归属：%s" % place_name)
 		elif (
 			place_type == "铺面"
 			and owners.has(place_name)

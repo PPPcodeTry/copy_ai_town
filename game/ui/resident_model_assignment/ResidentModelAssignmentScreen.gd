@@ -15,6 +15,7 @@ const UI_SIGNALS := preload(
 	"res://ui/common/AiTownUiSignals.gd"
 )
 const MOBILE_UI_PROFILE := preload("res://ui/mobile/MobileUiProfile.gd")
+const POPULATION_RULES := preload("res://world/runtime/TownPopulationRules.gd")
 const UiViewModel = preload("res://ui/common/AiTownUiViewModel.gd")
 const UiNodeRetirement = preload("res://ui/common/AiTownUiNodeRetirement.gd")
 const PageTheme = preload(
@@ -32,7 +33,7 @@ const MAP_TEXTURE_PATH := (
 	"res://assets/ui/opening_flow/shared/background/opening_flow_town_background_v1.png"
 )
 const TOUCH_TARGET_MIN := 48.0
-const SLOT_COUNT := 15
+const SLOT_COUNT := POPULATION_RULES.DEFAULT_RESIDENT_COUNT
 const PROVIDER_AUTO_REFRESH_INTERVAL_SECONDS := 0.75
 const PROVIDER_AUTO_REFRESH_MAX_ATTEMPTS := 20
 const PROVIDER_AUTO_REFRESH_EXHAUSTED_MESSAGE := "模型连接检查超时，请手动刷新重试。"
@@ -513,9 +514,9 @@ func _build_native_completion_modal() -> void:
 			if single_resident_mode
 			else "居民模型分配已更新，确认后返回模型设置。"
 			if return_to_provider_settings
-			else "15 位居民的模型均已配置完成，可以保存到当前小镇。"
+			else "全部居民的模型均已配置完成，可以保存到当前小镇。"
 			if in_session_mode
-			else "15 位居民的模型均已配置完成，现在可以开始游戏。"
+			else "全部居民的模型均已配置完成，现在可以开始游戏。"
 		),
 		20,
 		PageTheme.INK_MUTED,
@@ -789,7 +790,7 @@ func _build_resident_section() -> void:
 	stack.add_theme_constant_override("separation", 10)
 	_resident_section.add_child(stack)
 	stack.add_child(_section_title(
-		"入镇居民" if single_resident_mode else "居民队列 · 15人",
+		"入镇居民" if single_resident_mode else "居民队列",
 		"ResidentQueueTitle",
 	))
 
@@ -883,7 +884,7 @@ func _build_inspector_section() -> void:
 	_assign_button.pressed.connect(_assign_target)
 	stack.add_child(_assign_button)
 
-	_apply_button = _button("确认 15 人模型分配", 22, "primary", "ApplyDraftButton")
+	_apply_button = _button("确认居民模型分配", 22, "primary", "ApplyDraftButton")
 	_apply_button.custom_minimum_size = Vector2(0, 64)
 	_apply_button.pressed.connect(_open_completion_modal)
 	stack.add_child(_apply_button)
@@ -1244,7 +1245,7 @@ func _render_inspector() -> void:
 		if return_to_provider_settings
 		else "保存模型分配"
 		if in_session_mode
-		else "确认 15 人模型分配"
+		else "确认 %d 人模型分配" % int(_render_data.get("residentCount", SLOT_COUNT))
 	)
 
 
@@ -1450,15 +1451,16 @@ func _open_completion_modal() -> void:
 		action_blocked.emit(String(action.get("intent", "")), reason)
 		return
 	_completion_modal_open = true
+	var resident_count := int(_render_data.get("residentCount", SLOT_COUNT))
 	_set_completion_modal_message(
 		(
 			"这位新居民的模型已经配置完成\n确认后会立即进入小镇。"
 			if single_resident_mode
 			else "居民模型分配已更新\n确认后返回模型设置。"
 			if return_to_provider_settings
-			else "15 位居民的模型均已配置完成\n保存后会立即用于当前小镇。"
+			else "%d 位居民的模型均已配置完成\n保存后会立即用于当前小镇。" % resident_count
 			if in_session_mode
-			else "15 位居民的模型均已配置完成\n现在可以开始游戏。"
+			else "%d 位居民的模型均已配置完成\n现在可以开始游戏。" % resident_count
 		)
 	)
 	_sync_completion_modal_visibility()
@@ -1697,7 +1699,14 @@ func _validate_contract(view_model: Dictionary, data: Dictionary) -> PackedStrin
 		issues.append("capabilityMode 必须为 formal")
 	if String(data.get("source", "")) != "runtime":
 		issues.append("source 必须为 runtime")
-	var expected_count := 1 if single_resident_mode else SLOT_COUNT
+	var expected_count := int(data.get("residentCount", 0))
+	if single_resident_mode:
+		expected_count = 1
+	elif not POPULATION_RULES.supports_resident_count(expected_count):
+		issues.append("residentCount 必须在 %d～%d 之间" % [
+			POPULATION_RULES.MIN_RESIDENT_COUNT,
+			POPULATION_RULES.MAX_RESIDENT_COUNT,
+		])
 	if int(data.get("residentCount", 0)) != expected_count:
 		issues.append("residentCount 必须为 %d" % expected_count)
 	var residents_value: Variant = data.get("residents", [])

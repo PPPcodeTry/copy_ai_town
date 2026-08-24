@@ -14,8 +14,9 @@ const RESULT_SHAPES := preload(
 const UI_VIEW_MODEL := preload(
 	"res://ui/common/AiTownUiViewModel.gd"
 )
+const POPULATION_RULES := preload("res://world/runtime/TownPopulationRules.gd")
 const SCOPE := "resident_model_assignment"
-const SLOT_COUNT := 15
+const SLOT_COUNT := POPULATION_RULES.DEFAULT_RESIDENT_COUNT
 const DRAFT_SCHEMA_VERSION := 1
 const DRAFT_SOURCE_SCOPE := "resident_selection"
 const DRAFT_CONTRACT := preload("res://world/presentation/session/TownNewGameDraft.gd")
@@ -81,7 +82,13 @@ func configure(
 ) -> Dictionary:
 	_reset()
 	_single_resident_mode = bool(context.get("singleResidentMode", false))
-	_slot_count = 1 if _single_resident_mode else SLOT_COUNT
+	var draft_slots_value: Variant = session_draft.get("slots", [])
+	if _single_resident_mode:
+		_slot_count = 1
+	elif draft_slots_value is Array:
+		_slot_count = (draft_slots_value as Array).size()
+	else:
+		_slot_count = 0
 	if _single_resident_mode:
 		for value: Variant in context.get("allowedSpaceIds", []) as Array:
 			var space_id := String(value).strip_edges()
@@ -936,6 +943,11 @@ func _validate_initial_draft(draft: Dictionary) -> Dictionary:
 		return _failure("SESSION_DRAFT_SLOTS_INVALID")
 	if (slots_value as Array).size() != _slot_count:
 		return _failure("SESSION_HOME_SPACE_COUNT_MISMATCH")
+	if (
+		not _single_resident_mode
+		and not POPULATION_RULES.supports_resident_count(_slot_count)
+	):
+		return _failure("SESSION_RESIDENT_COUNT_OUT_OF_RANGE")
 	var seen_residents: Dictionary = {}
 	var seen_spaces: Dictionary = {}
 	for value: Variant in slots_value as Array:
@@ -960,9 +972,6 @@ func _validate_initial_draft(draft: Dictionary) -> Dictionary:
 			return _failure("SESSION_LLM_BINDING_INVALID")
 		seen_residents[resident_id] = true
 		seen_spaces[space_id] = true
-	for expected_space in _expected_home_space_ids():
-		if not seen_spaces.has(expected_space):
-			return _failure("SESSION_HOME_SPACE_MISSING")
 	return {"ok": true, "errorCode": "", "retryable": false}
 
 
@@ -994,10 +1003,7 @@ func _normalize_initial_draft(draft: Dictionary) -> Dictionary:
 func _expected_home_space_ids() -> Array[String]:
 	if _single_resident_mode and not _allowed_space_ids.is_empty():
 		return _allowed_space_ids.duplicate()
-	var result: Array[String] = []
-	for index in range(1, _slot_count + 1):
-		result.append("home_%02d" % index)
-	return result
+	return DRAFT_CONTRACT.home_space_ids()
 
 
 func _finish_operation(request_id: String, intent: String, result: Dictionary) -> Dictionary:
@@ -1085,7 +1091,7 @@ func _error_message(error_code: String) -> String:
 			return "仍有居民未完成有效模型绑定，草稿已保留。"
 		"PROVIDER_HEALTH_UNAVAILABLE", "PROVIDER_HEALTH_QUERY_FAILED", "PROVIDER_HEALTH_SNAPSHOT_INVALID", "PROVIDER_CATALOG_UNAVAILABLE", "PROVIDER_MODEL_CATALOG_INVALID", "PROVIDER_MODEL_CATALOG_DUPLICATED", "PROVIDER_HEALTH_CATALOG_INVALID", "PROVIDER_HEALTH_CATALOG_DUPLICATED", "PROVIDER_FORMAL_RUNTIME_REQUIRED", "LLM_PROVIDER_UNAVAILABLE", "LLM_MODEL_UNAVAILABLE", "LLM_MODEL_UNKNOWN":
 			return "目标 Provider 或模型当前不可用，原绑定与草稿已保留。"
-		"SESSION_DRAFT_SCHEMA_UNSUPPORTED", "SESSION_DRAFT_SOURCE_INVALID", "SESSION_DRAFT_REVISION_INVALID", "SESSION_DRAFT_SLOTS_INVALID", "SESSION_DRAFT_SLOT_INVALID", "SESSION_HOME_SPACE_COUNT_MISMATCH", "SESSION_HOME_SPACE_REQUIRED", "SESSION_HOME_SPACE_UNKNOWN", "SESSION_HOME_SPACE_DUPLICATED", "SESSION_HOME_SPACE_MISSING", "SESSION_RESIDENT_ID_REQUIRED", "SESSION_RESIDENT_ID_UNKNOWN", "SESSION_RESIDENT_ID_DUPLICATED", "SESSION_LLM_BINDING_INVALID":
+		"SESSION_DRAFT_SCHEMA_UNSUPPORTED", "SESSION_DRAFT_SOURCE_INVALID", "SESSION_DRAFT_REVISION_INVALID", "SESSION_DRAFT_SLOTS_INVALID", "SESSION_DRAFT_SLOT_INVALID", "SESSION_RESIDENT_COUNT_OUT_OF_RANGE", "SESSION_HOME_SPACE_COUNT_MISMATCH", "SESSION_HOME_SPACE_REQUIRED", "SESSION_HOME_SPACE_UNKNOWN", "SESSION_HOME_SPACE_DUPLICATED", "SESSION_HOME_SPACE_MISSING", "SESSION_RESIDENT_ID_REQUIRED", "SESSION_RESIDENT_ID_UNKNOWN", "SESSION_RESIDENT_ID_DUPLICATED", "SESSION_LLM_BINDING_INVALID":
 			return "居民选择草稿无效，未进入模型分配；原草稿未被修改。"
 		"RESIDENT_MODEL_ASSIGNMENT_BATCH_EMPTY":
 			return "请先在批量模式选择至少一位居民。"

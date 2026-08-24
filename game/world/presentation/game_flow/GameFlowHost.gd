@@ -4,6 +4,7 @@ extends Node
 const RESULT_SHAPES := preload(
 	"res://world/contract/TownWorldResultShapes.gd"
 )
+const POPULATION_RULES := preload("res://world/runtime/TownPopulationRules.gd")
 const STARTUP_SCENE_PATH := "res://ui/startup/StartupScreen.tscn"
 const LOAD_GAME_SCENE_PATH := "res://ui/startup/StartupLoadGameScreen.tscn"
 const WORLD_INTRO_SCENE_PATH := "res://ui/world_intro/WorldIntroScreen.tscn"
@@ -3016,7 +3017,10 @@ func _on_residents_delete_requested(
 			_failure("RESIDENT_DELETE_SELECTION_EMPTY", false),
 		)
 		return
-	if residents.size() - delete_ids.size() < 15:
+	if (
+		residents.size() - delete_ids.size()
+		< POPULATION_RULES.DEFAULT_RESIDENT_COUNT
+	):
 		_set_resident_selection_delete_failure(
 			_failure("RESIDENT_DELETE_MINIMUM_CANDIDATES_REQUIRED", false),
 		)
@@ -3084,7 +3088,7 @@ func _on_residents_delete_requested(
 		if kept_ids.has(resident_id) and not recommended.has(resident_id):
 			recommended.append(resident_id)
 	for value: Variant in kept_residents:
-		if recommended.size() >= 15:
+		if recommended.size() >= POPULATION_RULES.DEFAULT_RESIDENT_COUNT:
 			break
 		var resident_id := String((value as Dictionary).get("resident_id", ""))
 		if not resident_id.is_empty() and not recommended.has(resident_id):
@@ -3601,8 +3605,8 @@ func _project_resident_model_assignment_catalog(
 	if not slots_value is Array:
 		return _failure("SESSION_DRAFT_SLOTS_INVALID", false)
 	var slots := slots_value as Array
-	if slots.size() != RESIDENT_MODEL_ASSIGNMENT_SERVICE.SLOT_COUNT:
-		return _failure("SESSION_HOME_SPACE_COUNT_MISMATCH", false)
+	if not POPULATION_RULES.supports_resident_count(slots.size()):
+		return _failure("SESSION_RESIDENT_COUNT_OUT_OF_RANGE", false)
 	var selected_residents: Array[Dictionary] = []
 	var selected_ids: Dictionary = {}
 	for slot_value: Variant in slots:
@@ -4473,7 +4477,9 @@ func _on_resident_selection_requested(
 		return
 	var data := _resident_selection_vm.get("data", {}) as Dictionary
 	var selected: Array = (data.get("selected_resident_ids", []) as Array).duplicate()
-	var selection_limit := int(data.get("selection_limit", 15))
+	var selection_limit := int(
+		data.get("selection_limit", POPULATION_RULES.MAX_RESIDENT_COUNT)
+	)
 	if should_select and not selected.has(resident_id) and selected.size() < selection_limit:
 		selected.append(resident_id)
 	elif not should_select:
@@ -4481,6 +4487,8 @@ func _on_resident_selection_requested(
 	data["selected_resident_ids"] = selected
 	data["focused_resident_id"] = resident_id
 	_update_confirmation_payload(data)
+	_resident_selection_vm["operation"] = _idle_operation()
+	_resident_selection_vm["error"] = null
 	_advance_resident_selection_revision()
 
 
@@ -4492,6 +4500,8 @@ func _on_recommended_selection_requested(revision: int) -> void:
 		data.get("recommended_resident_ids", []) as Array
 	).duplicate()
 	_update_confirmation_payload(data)
+	_resident_selection_vm["operation"] = _idle_operation()
+	_resident_selection_vm["error"] = null
 	_advance_resident_selection_revision()
 
 
@@ -4501,6 +4511,8 @@ func _on_selection_clear_requested(revision: int) -> void:
 	var data := _resident_selection_vm.get("data", {}) as Dictionary
 	data["selected_resident_ids"] = []
 	_update_confirmation_payload(data)
+	_resident_selection_vm["operation"] = _idle_operation()
+	_resident_selection_vm["error"] = null
 	_advance_resident_selection_revision()
 
 
@@ -6286,7 +6298,9 @@ func _set_resident_selection_delete_failure(result: Dictionary) -> void:
 func _resident_selection_delete_failure_message(error_code: String) -> String:
 	match error_code:
 		"RESIDENT_DELETE_MINIMUM_CANDIDATES_REQUIRED":
-			return "本局至少需要保留 15 名候选居民。"
+			return "本局至少需要保留 %d 名候选居民。" % (
+				POPULATION_RULES.DEFAULT_RESIDENT_COUNT
+			)
 		"RESIDENT_DELETE_REVISION_STALE", \
 		"CUSTOM_RESIDENT_DELETE_REVISION_STALE", \
 		"CUSTOM_RESIDENT_CANDIDATE_POOL_REVISION_STALE", \

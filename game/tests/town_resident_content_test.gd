@@ -944,18 +944,36 @@ func _verify_validation_failures(catalog: Dictionary) -> void:
 		{},
 		"invalid selection state clears stale confirmation data",
 	)
-	var partial_payload_data := {
-		"selected_resident_ids": ["resident_hanako_01"],
-		"residents": (
-			CATALOG.build_view_model(2).get("data", {}) as Dictionary
-		).get("residents", []),
-		"confirmation_payload": {"stale": true},
-	}
-	CATALOG.update_confirmation_payload(partial_payload_data, 2)
+	var partial_payload_data := (
+		CATALOG.build_view_model("fake", "fake", true, 2).get("data", {})
+		as Dictionary
+	)
+	partial_payload_data["selected_resident_ids"] = [
+		String(
+			(partial_payload_data.get("recommended_resident_ids", []) as Array)[0]
+		),
+	]
+	CATALOG.update_confirmation_payload(
+		partial_payload_data,
+		"fake",
+		"fake",
+		2,
+	)
+	_expect_equal(
+		(
+			(partial_payload_data.get("confirmation_payload", {}) as Dictionary)
+			.get("slots", []) as Array
+		).size(),
+		1,
+		"one selected resident produces one occupied-home draft",
+	)
+	partial_payload_data["selected_resident_ids"] = []
+	partial_payload_data["confirmation_payload"] = {"stale": true}
+	CATALOG.update_confirmation_payload(partial_payload_data, "fake", "fake", 3)
 	_expect_equal(
 		partial_payload_data.get("confirmation_payload"),
 		{},
-		"partial selections never expose a confirmable draft",
+		"zero selected residents never expose a confirmable draft",
 	)
 	var duplicate_selection_data := (
 		CATALOG.build_view_model(3).get("data", {}) as Dictionary
