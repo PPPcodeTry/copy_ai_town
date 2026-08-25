@@ -60,6 +60,16 @@ func _test_formal_generated_assets() -> void:
 			"%s generated occlusion keeps the room canvas" % room_id,
 		)
 		_expect_equal(
+			manifest.get("source_geometry_revision"),
+			geometry.get("source_revision"),
+			"%s generated occlusion keeps the geometry revision" % room_id,
+		)
+		_expect_equal(
+			manifest.get("source_occlusion_revision"),
+			authored.get("source_revision"),
+			"%s generated occlusion keeps the authored revision" % room_id,
+		)
+		_expect_equal(
 			manifest.get("source_geometry_sha256"),
 			FileAccess.get_sha256(geometry_path),
 			"%s generated occlusion matches the geometry digest" % room_id,
@@ -195,15 +205,15 @@ func _test_multi_subject_state_refresh() -> void:
 		_visible_subject_overlays(occlusion).size() >= 2,
 		"two people in one room receive independent foreground slices",
 	)
-	var refresh_count := int(occlusion.get_refresh_count())
+	var stable_overlay_count := _visible_subject_overlays(occlusion).size()
 	_expect(
 		not bool(occlusion.update_for_subjects([first_subject, second_subject])),
 		"an unchanged two-person state skips refresh",
 	)
 	_expect_equal(
-		occlusion.get_refresh_count(),
-		refresh_count,
-		"an unchanged frame performs no repeated polygon calculation",
+		_visible_subject_overlays(occlusion).size(),
+		stable_overlay_count,
+		"an unchanged frame preserves the existing foreground slices",
 	)
 	second_subject.position += Vector2.ONE
 	_expect(
@@ -215,15 +225,15 @@ func _test_multi_subject_state_refresh() -> void:
 		bool(occlusion.update_for_subjects([first_subject, second_subject])),
 		"hiding one subject refreshes wall occlusion once",
 	)
-	refresh_count = int(occlusion.get_refresh_count())
+	stable_overlay_count = _visible_subject_overlays(occlusion).size()
 	_expect(
 		not bool(occlusion.update_for_subjects([first_subject, second_subject])),
 		"a stable one-person state also skips refresh",
 	)
 	_expect_equal(
-		occlusion.get_refresh_count(),
-		refresh_count,
-		"stable visibility does not repeat polygon calculation",
+		_visible_subject_overlays(occlusion).size(),
+		stable_overlay_count,
+		"stable visibility preserves the existing foreground slice",
 	)
 	first_subject.free()
 	second_subject.free()

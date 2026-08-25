@@ -291,12 +291,6 @@ func update_wall_occlusion_subjects(subjects: Array[Node2D]) -> bool:
 	return bool(_wall_occlusion.update_for_subjects(subjects))
 
 
-func get_wall_occlusion_refresh_count() -> int:
-	if not is_instance_valid(_wall_occlusion):
-		return 0
-	return int(_wall_occlusion.get_refresh_count())
-
-
 func get_floor_local_bounds() -> Rect2:
 	if not _geometry_data.is_empty():
 		return ROOM_GEOMETRY.get_floor_local_bounds(_geometry_data)

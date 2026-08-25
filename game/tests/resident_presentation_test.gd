@@ -1532,6 +1532,19 @@ func _test_presentation_registry_and_spaces() -> void:
 	_expect_equal(indoor_result.get("ok"), true, "presentation activates an indoor space")
 	_expect(outdoor_body != null and not outdoor_body.visible, "outdoor resident hides indoors")
 	_expect(indoor_body != null and indoor_body.visible, "matching indoor resident becomes visible")
+	var occlusion_subjects: Array[Node2D] = (
+		presentation.get_active_occlusion_subjects()
+	)
+	_expect_equal(
+		occlusion_subjects.size(),
+		1,
+		"active-space occlusion subjects exclude hidden residents",
+	)
+	_expect_equal(
+		occlusion_subjects[0] if not occlusion_subjects.is_empty() else null,
+		indoor_body,
+		"active-space occlusion subjects come directly from the resident layer",
+	)
 	if indoor_body != null:
 		_expect_equal(
 			indoor_body.position,

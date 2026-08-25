@@ -40,7 +40,6 @@ var _segments: Array[Dictionary] = []
 var _subject_overlays: Dictionary = {}
 var _subject_states: Dictionary = {}
 var _debug_root: Node2D
-var _refresh_count := 0
 
 
 func configure(
@@ -115,10 +114,6 @@ func is_debug_visible() -> bool:
 	return is_instance_valid(_debug_root) and _debug_root.visible
 
 
-func get_refresh_count() -> int:
-	return _refresh_count
-
-
 func update_for_subject(subject_value: Variant) -> bool:
 	return update_for_subjects([subject_value]) if subject_value is Node2D else false
 
@@ -141,7 +136,6 @@ func update_for_subjects(subject_values: Variant) -> bool:
 	if next_states == _subject_states:
 		return false
 	_subject_states = next_states
-	_refresh_count += 1
 	_prune_subject_overlays(subjects)
 	_hide_subject_overlays()
 	var has_subject := not subjects.is_empty()
@@ -249,7 +243,6 @@ func _commit_build(
 	_segments = new_segments
 	_debug_root = new_debug_root
 	_subject_states.clear()
-	_refresh_count = 0
 	name = "WallOcclusion"
 	set_process(false)
 
