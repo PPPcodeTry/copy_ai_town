@@ -199,7 +199,7 @@ Godot 无头导入确认。
 
 处理方法：从 `gh run view <运行编号> --job <job编号> --log-failed` 的第一条 `SCRIPT ERROR:` 或 `Parse Error:` 开始定位，不要从最后的进程退出错误倒推；检查对应函数的缩进和循环边界，必要时把数量上限判断放回实际循环入口，并删除循环外的非法跳出。修复后必须在干净临时工作区执行 Godot 无头导入；没有本机 Godot 时，推送后以远端 `Import project` 作为正式语法验证，不能把 guards 通过当成替代。
 
-最终验证：本次模型绑定自动恢复修复已将候选列表上限判断放入实际循环，并移除循环外的 `break`；本地 guards、README 同步和 11 项 Python 回归均通过，远端新 head 还必须确认 `formal-suite` 的项目导入和后续正式测试全部通过。
+最终验证：本次模型绑定自动恢复修复已将候选列表上限判断放入实际循环，并移除循环外的 `break`；本地 guards、README 同步和 11 项 Python 回归均通过。远端 `formal-validation` 运行 [32826572147](https://github.com/mewamew/my_ai_town/actions/runs/32826572147) 已确认 `Import project`、Agent 离线套件、正式故事套件、独立正式入口和测试后源码清洁检查全部通过。
 
 ### 删除脚本后预加载检查读取不存在文件
 
