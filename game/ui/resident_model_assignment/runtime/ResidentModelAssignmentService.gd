@@ -416,12 +416,35 @@ func _apply_draft() -> Dictionary:
 			"llmBinding": (slot.get("llmBinding", {}) as Dictionary).duplicate(true),
 		})
 	var provider_validation := _provider_service.call("validate_resident_bindings", bindings) as Dictionary
+	var automatic_repair: Dictionary = {}
 	if not bool(provider_validation.get("ok", false)):
-		return _failure(
-			String(provider_validation.get("errorCode", "SESSION_LLM_BINDINGS_INVALID")),
-			bool(provider_validation.get("retryable", false)),
-			provider_validation.get("errors", []) as Array,
+		automatic_repair = _try_auto_repair_draft_bindings(
+			bindings,
+			provider_validation,
 		)
+		if bool(automatic_repair.get("ok", false)):
+			bindings.clear()
+			for repaired_value: Variant in automatic_repair.get("bindings", []) as Array:
+				if repaired_value is Dictionary:
+					bindings.append((repaired_value as Dictionary).duplicate(true))
+			provider_validation = _provider_service.call(
+				"validate_resident_bindings",
+				bindings,
+			) as Dictionary
+			if bool(provider_validation.get("ok", false)):
+				_apply_repaired_bindings_to_draft(bindings)
+			else:
+				return _failure(
+					String(provider_validation.get("errorCode", "SESSION_LLM_BINDINGS_INVALID")),
+					bool(provider_validation.get("retryable", false)),
+					provider_validation.get("errors", []) as Array,
+				)
+		else:
+			return _failure(
+				String(provider_validation.get("errorCode", "SESSION_LLM_BINDINGS_INVALID")),
+				bool(provider_validation.get("retryable", false)),
+				provider_validation.get("errors", []) as Array,
+			)
 	if _apply_handler.is_valid():
 		var external_result_value: Variant = _apply_handler.call(
 			_draft.duplicate(true),
@@ -443,7 +466,116 @@ func _apply_draft() -> Dictionary:
 				external_result.get("errors", []) as Array,
 			)
 	_committed_draft = _draft.duplicate(true)
-	return _success(true)
+	var result := _success(true)
+	if automatic_repair.has("automaticBindingRepair"):
+		result["automaticBindingRepair"] = (
+			automatic_repair.get("automaticBindingRepair", {}) as Dictionary
+		).duplicate(true)
+	return result
+
+
+func _try_auto_repair_draft_bindings(
+	bindings: Array[Dictionary],
+	validation: Dictionary,
+) -> Dictionary:
+	var failed_resident_ids: Dictionary = {}
+	var failed_targets: Dictionary = {}
+	for detail_value: Variant in validation.get("errors", []) as Array:
+		if not detail_value is Dictionary:
+			continue
+		var detail := detail_value as Dictionary
+		var meta := detail.get("meta", {}) as Dictionary
+		var resident_id := String(meta.get("residentId", "")).strip_edges()
+		if not resident_id.is_empty():
+			failed_resident_ids[resident_id] = true
+		var target_key := _binding_target_key(
+			String(meta.get("providerId", "")),
+			String(meta.get("modelId", "")),
+		)
+		if not target_key.is_empty():
+			failed_targets[target_key] = true
+	var candidate := {}
+	for model in _models:
+		if not bool(model.get("available", false)):
+			continue
+		var candidate_key := _binding_target_key(
+			String(model.get("providerId", "")),
+			String(model.get("modelId", "")),
+		)
+		if candidate_key.is_empty() or failed_targets.has(candidate_key):
+			continue
+		candidate = {
+			"providerId": String(model.get("providerId", "")),
+			"modelId": String(model.get("modelId", "")),
+		}
+		break
+	if candidate.is_empty():
+		return {"ok": false}
+	var repaired: Array[Dictionary] = []
+	var replaced_count := 0
+	for binding in bindings:
+		var copy := binding.duplicate(true)
+		var resident_id := String(copy.get("residentId", "")).strip_edges()
+		var llm := copy.get("llmBinding", {}) as Dictionary
+		var target_key := _binding_target_key(
+			String(llm.get("providerId", "")),
+			String(llm.get("modelId", "")),
+		)
+		var should_replace := false
+		if failed_resident_ids.is_empty() and failed_targets.is_empty():
+			should_replace = true
+		else:
+			should_replace = (
+				failed_resident_ids.has(resident_id)
+				or failed_targets.has(target_key)
+			)
+		if should_replace:
+			copy["llmBinding"] = {
+				"mode": "model",
+				"providerId": String(candidate.get("providerId", "")),
+				"modelId": String(candidate.get("modelId", "")),
+			}
+			replaced_count += 1
+		repaired.append(copy)
+	if replaced_count <= 0:
+		return {"ok": false}
+	return {
+		"ok": true,
+		"bindings": repaired,
+		"automaticBindingRepair": {
+			"applied": true,
+			"replacedCount": replaced_count,
+			"providerId": String(candidate.get("providerId", "")),
+			"modelId": String(candidate.get("modelId", "")),
+		},
+	}
+
+
+func _apply_repaired_bindings_to_draft(bindings: Array[Dictionary]) -> void:
+	var by_resident_id: Dictionary = {}
+	for binding in bindings:
+		by_resident_id[String(binding.get("residentId", ""))] = (
+			binding.get("llmBinding", {}) as Dictionary
+		).duplicate(true)
+	var slots: Array[Dictionary] = []
+	for slot_value: Variant in _draft.get("slots", []) as Array:
+		var slot := (slot_value as Dictionary).duplicate(true)
+		var resident_id := String(slot.get("residentId", ""))
+		if by_resident_id.has(resident_id):
+			slot["llmBinding"] = (
+				by_resident_id[resident_id] as Dictionary
+			).duplicate(true)
+		slots.append(slot)
+	_draft["slots"] = slots
+	_draft["draftRevision"] = int(_draft.get("draftRevision", 1)) + 1
+
+
+func _binding_target_key(provider_id: String, model_id: String) -> String:
+	provider_id = provider_id.strip_edges()
+	model_id = model_id.strip_edges()
+	if provider_id.is_empty() or model_id.is_empty():
+		return ""
+	return "%s\n%s" % [provider_id, model_id]
 
 
 func _request_back() -> Dictionary:
@@ -1011,6 +1143,11 @@ func _finish_operation(request_id: String, intent: String, result: Dictionary) -
 	var retryable := bool(result.get("retryable", false))
 	_operation = _operation_payload(request_id, intent, "success" if ok else ("error" if retryable else "rejected"))
 	_operation["completedAtMsec"] = Time.get_ticks_msec()
+	if result.has("automaticBindingRepair"):
+		_operation["automaticBindingRepair"] = (
+			result.get("automaticBindingRepair", {}) as Dictionary
+		).duplicate(true)
+		_operation["message"] = "检测到模型连接变化，已自动切换到当前可用模型。"
 	_error = null if ok else _error_payload(
 		String(result.get("errorCode", "RESIDENT_MODEL_ASSIGNMENT_REJECTED")),
 		retryable,
@@ -1089,6 +1226,8 @@ func _error_message(error_code: String) -> String:
 			return "页面数据已更新，请按最新状态继续操作。"
 		"RESIDENT_MODEL_ASSIGNMENT_DRAFT_INCOMPLETE", "SESSION_DRAFT_INVALID":
 			return "仍有居民未完成有效模型绑定，草稿已保留。"
+		"SESSION_LLM_BINDINGS_INVALID", "SESSION_LLM_PROVIDER_REQUIRED", "SESSION_LLM_MODEL_REQUIRED":
+			return "当前模型连接不可用，系统已尝试自动迁移但没有找到可用模型，草稿已保留。"
 		"PROVIDER_HEALTH_UNAVAILABLE", "PROVIDER_HEALTH_QUERY_FAILED", "PROVIDER_HEALTH_SNAPSHOT_INVALID", "PROVIDER_CATALOG_UNAVAILABLE", "PROVIDER_MODEL_CATALOG_INVALID", "PROVIDER_MODEL_CATALOG_DUPLICATED", "PROVIDER_HEALTH_CATALOG_INVALID", "PROVIDER_HEALTH_CATALOG_DUPLICATED", "PROVIDER_FORMAL_RUNTIME_REQUIRED", "LLM_PROVIDER_UNAVAILABLE", "LLM_MODEL_UNAVAILABLE", "LLM_MODEL_UNKNOWN":
 			return "目标 Provider 或模型当前不可用，原绑定与草稿已保留。"
 		"SESSION_DRAFT_SCHEMA_UNSUPPORTED", "SESSION_DRAFT_SOURCE_INVALID", "SESSION_DRAFT_REVISION_INVALID", "SESSION_DRAFT_SLOTS_INVALID", "SESSION_DRAFT_SLOT_INVALID", "SESSION_RESIDENT_COUNT_OUT_OF_RANGE", "SESSION_HOME_SPACE_COUNT_MISMATCH", "SESSION_HOME_SPACE_REQUIRED", "SESSION_HOME_SPACE_UNKNOWN", "SESSION_HOME_SPACE_DUPLICATED", "SESSION_HOME_SPACE_MISSING", "SESSION_RESIDENT_ID_REQUIRED", "SESSION_RESIDENT_ID_UNKNOWN", "SESSION_RESIDENT_ID_DUPLICATED", "SESSION_LLM_BINDING_INVALID":

@@ -5156,10 +5156,26 @@ func _start_formal_continue(
 			identities.duplicate(true),
 			bindings.duplicate(true),
 			resident_names.duplicate(),
+			provider_runtime.duplicate(true),
+			{},
 		),
 	) as Dictionary
 	if not bool(health_started.get("accepted", false)):
-		_publish_startup_result(health_started)
+		var repair_started := _start_formal_continue_binding_repair(
+			health_started,
+			generation,
+			discovery,
+			world_data,
+			identities,
+			bindings,
+			resident_names,
+			provider_runtime,
+		)
+		if not bool(repair_started.get("accepted", false)):
+			_publish_startup_result(_with_continue_binding_recovery(
+				health_started,
+				repair_started,
+			))
 
 
 func _on_formal_continue_provider_health_completed(
@@ -5170,11 +5186,28 @@ func _on_formal_continue_provider_health_completed(
 	identities: Array,
 	bindings: Array,
 	resident_names: Array,
+	provider_runtime: Dictionary,
+	repair_notice: Dictionary = {},
 ) -> void:
 	if generation != _flow_generation:
 		return
 	if not bool(health_result.get("ok", false)):
-		_publish_startup_result(health_result)
+		var repair_started := _start_formal_continue_binding_repair(
+			health_result,
+			generation,
+			discovery,
+			world_data,
+			identities,
+			bindings,
+			resident_names,
+			provider_runtime,
+		)
+		if bool(repair_started.get("accepted", false)):
+			return
+		_publish_startup_result(_with_continue_binding_recovery(
+			health_result,
+			repair_started,
+		))
 		return
 	var binding_validation := _provider_service.call(
 		"check_entry_availability",
@@ -5316,10 +5349,14 @@ func _on_formal_continue_provider_health_completed(
 		)
 	)
 	restored_session_config["identityStatus"] = "confirmed"
+	if not repair_notice.is_empty():
+		restored_session_config["bindingRepair"] = repair_notice.duplicate(true)
 	_active_session_config = restored_session_config.duplicate(true)
 	_pending_continue_notice = (
 		discovery.get("continueNotice", {}) as Dictionary
 	).duplicate(true)
+	if not repair_notice.is_empty():
+		_pending_continue_notice["automaticBindingRepair"] = repair_notice.duplicate(true)
 	var profile_result := _record_last_played_slot(slot_id)
 	_last_result = (
 		restored.duplicate(true)
@@ -5329,6 +5366,292 @@ func _on_formal_continue_provider_health_completed(
 	if runtime is CanvasItem:
 		(runtime as CanvasItem).show()
 	call_deferred("_enter_pending_town", generation)
+
+
+func _start_formal_continue_binding_repair(
+	original_result: Dictionary,
+	generation: int,
+	discovery: Dictionary,
+	world_data: Dictionary,
+	identities: Array,
+	bindings: Array,
+	resident_names: Array,
+	provider_runtime: Dictionary,
+) -> Dictionary:
+	var candidates := _continue_binding_repair_candidates(
+		provider_runtime,
+		bindings,
+	)
+	if candidates.is_empty():
+		return {
+			"ok": false,
+			"accepted": false,
+			"errorCode": "CONTINUE_BINDING_REPAIR_NO_CANDIDATE",
+			"retryable": false,
+			"candidatesTested": 0,
+		}
+	return _probe_formal_continue_binding_repair_candidate(
+		original_result,
+		generation,
+		discovery,
+		world_data,
+		identities,
+		bindings,
+		resident_names,
+		provider_runtime,
+		candidates,
+		0,
+	)
+
+
+func _continue_binding_repair_candidates(
+	provider_runtime: Dictionary,
+	bindings: Array,
+) -> Array[Dictionary]:
+	var candidates: Array[Dictionary] = []
+	var excluded: Dictionary = {}
+	for value: Variant in bindings:
+		if not value is Dictionary:
+			continue
+		var binding := value as Dictionary
+		var llm := binding.get("llmBinding", {}) as Dictionary
+		var key := _continue_binding_target_key(
+			String(llm.get("providerId", "")),
+			String(llm.get("modelId", "")),
+		)
+		if not key.is_empty():
+			excluded[key] = true
+	_add_continue_binding_repair_candidate(
+		candidates,
+		excluded,
+		String(provider_runtime.get("providerId", "")),
+		String(provider_runtime.get("modelId", "")),
+	)
+	var configs := provider_runtime.get("providerConfigs", {}) as Dictionary
+	for provider_id_value: Variant in configs.keys():
+		var provider_id := String(provider_id_value)
+		var config := configs.get(provider_id, {}) as Dictionary
+		_add_continue_binding_repair_candidate(
+			candidates,
+			excluded,
+			provider_id,
+			String(config.get("api_model", "")),
+		)
+		var models_value: Variant = config.get("api_models", [])
+		if models_value is Array:
+			for model_value: Variant in models_value as Array:
+				_add_continue_binding_repair_candidate(
+					candidates,
+					excluded,
+					provider_id,
+					String(model_value),
+				)
+	var listed_value: Variant = _provider_service.call("list_available_models")
+	if listed_value is Array:
+		for model_value: Variant in listed_value as Array:
+			if not model_value is Dictionary:
+				continue
+			var model := model_value as Dictionary
+			if model.has("available") and not bool(model.get("available", false)):
+				continue
+			_add_continue_binding_repair_candidate(
+				candidates,
+				excluded,
+				String(model.get("providerId", model.get("provider_id", ""))),
+				String(model.get("modelId", model.get("id", ""))),
+			)
+			if candidates.size() >= 8:
+				break
+		if candidates.size() >= 8:
+			break
+	return candidates
+
+
+func _add_continue_binding_repair_candidate(
+	candidates: Array[Dictionary],
+	excluded: Dictionary,
+	provider_id: String,
+	model_id: String,
+) -> void:
+	provider_id = provider_id.strip_edges()
+	model_id = model_id.strip_edges()
+	if provider_id.is_empty() or model_id.is_empty():
+		return
+	var key := _continue_binding_target_key(provider_id, model_id)
+	if excluded.has(key):
+		return
+	for existing_value: Variant in candidates:
+		var existing := existing_value as Dictionary
+		if _continue_binding_target_key(
+				String(existing.get("providerId", "")),
+				String(existing.get("modelId", "")),
+			) == key:
+			return
+	candidates.append({"providerId": provider_id, "modelId": model_id})
+
+
+func _continue_binding_target_key(provider_id: String, model_id: String) -> String:
+	return "%s\n%s" % [provider_id.strip_edges(), model_id.strip_edges()]
+
+
+func _probe_formal_continue_binding_repair_candidate(
+	original_result: Dictionary,
+	generation: int,
+	discovery: Dictionary,
+	world_data: Dictionary,
+	identities: Array,
+	bindings: Array,
+	resident_names: Array,
+	provider_runtime: Dictionary,
+	candidates: Array,
+	candidate_index: int,
+) -> Dictionary:
+	var candidate := candidates[candidate_index] as Dictionary
+	var started := _provider_service.call(
+		"request_health_check",
+		[candidate.duplicate(true)],
+		Callable(self, "_on_formal_continue_binding_repair_health_completed").bind(
+			original_result.duplicate(true),
+			generation,
+			discovery.duplicate(true),
+			world_data.duplicate(true),
+			identities.duplicate(true),
+			bindings.duplicate(true),
+			resident_names.duplicate(),
+			provider_runtime.duplicate(true),
+			candidates.duplicate(true),
+			candidate_index,
+		),
+	) as Dictionary
+	if not bool(started.get("accepted", false)):
+		return started
+	return started
+
+
+func _on_formal_continue_binding_repair_health_completed(
+	candidate_result: Dictionary,
+	original_result: Dictionary,
+	generation: int,
+	discovery: Dictionary,
+	world_data: Dictionary,
+	identities: Array,
+	bindings: Array,
+	resident_names: Array,
+	provider_runtime: Dictionary,
+	candidates: Array,
+	candidate_index: int,
+) -> void:
+	if generation != _flow_generation:
+		return
+	if not bool(candidate_result.get("ok", false)):
+		var next_index := candidate_index + 1
+		if next_index < candidates.size():
+			var next_started := _probe_formal_continue_binding_repair_candidate(
+				original_result,
+				generation,
+				discovery,
+				world_data,
+				identities,
+				bindings,
+				resident_names,
+				provider_runtime,
+				candidates,
+				next_index,
+			)
+			if bool(next_started.get("accepted", false)):
+				return
+		_publish_startup_result(_with_continue_binding_recovery(
+			original_result,
+			{
+				"errorCode": "CONTINUE_BINDING_REPAIR_NO_AVAILABLE_CANDIDATE",
+				"retryable": bool(candidate_result.get("retryable", false)),
+				"candidatesTested": candidate_index + 1,
+			},
+		))
+		return
+	var candidate := candidates[candidate_index] as Dictionary
+	var repaired: Array[Dictionary] = []
+	var replaced_count := 0
+	for value: Variant in bindings:
+		if not value is Dictionary:
+			continue
+		var binding := (value as Dictionary).duplicate(true)
+		var llm := binding.get("llmBinding", {}) as Dictionary
+		var provider_id := String(llm.get("providerId", ""))
+		var model_id := String(llm.get("modelId", ""))
+		if not _continue_health_target_available(original_result, provider_id, model_id):
+			binding["llmBinding"] = {
+				"mode": "model",
+				"providerId": String(candidate.get("providerId", "")),
+				"modelId": String(candidate.get("modelId", "")),
+			}
+			replaced_count += 1
+		repaired.append(binding)
+	if replaced_count <= 0:
+		_publish_startup_result(_with_continue_binding_recovery(
+			original_result,
+			{
+				"errorCode": "CONTINUE_BINDING_REPAIR_NO_CHANGED_BINDING",
+				"retryable": false,
+				"candidatesTested": candidate_index + 1,
+			},
+		))
+		return
+	var repair_notice := {
+		"applied": true,
+		"replacedCount": replaced_count,
+		"providerId": String(candidate.get("providerId", "")),
+		"modelId": String(candidate.get("modelId", "")),
+		"candidatesTested": candidate_index + 1,
+	}
+	_on_formal_continue_provider_health_completed(
+		{
+			"ok": true,
+			"accepted": true,
+			"status": "available",
+			"errorCode": "",
+			"retryable": false,
+		},
+		generation,
+		discovery,
+		world_data,
+		identities,
+		repaired,
+		resident_names,
+		provider_runtime,
+		repair_notice,
+	)
+
+
+func _continue_health_target_available(
+	health_result: Dictionary,
+	provider_id: String,
+	model_id: String,
+) -> bool:
+	for value: Variant in health_result.get("targets", []) as Array:
+		if not value is Dictionary:
+			continue
+		var target := value as Dictionary
+		if (
+			String(target.get("providerId", "")) == provider_id
+			and String(target.get("modelId", "")) == model_id
+		):
+			return String(target.get("status", "")) == "available"
+	return false
+
+
+func _with_continue_binding_recovery(
+	result: Dictionary,
+	recovery_result: Dictionary,
+) -> Dictionary:
+	var final_result := result.duplicate(true)
+	final_result["recovery"] = {
+		"attempted": true,
+		"automatic": true,
+		"errorCode": String(recovery_result.get("errorCode", "")),
+		"candidatesTested": int(recovery_result.get("candidatesTested", 0)),
+	}
+	return final_result
 
 
 func _on_bootstrap_completed(result: Dictionary, generation: int) -> void:
@@ -6689,6 +7012,9 @@ func _startup_failure_message(result: Dictionary, prefix: String) -> String:
 	).strip_edges()
 	if error_code.is_empty():
 		error_code = "SESSION_CONTINUE_FAILED"
+	var recovery := result.get("recovery", {}) as Dictionary
+	if bool(recovery.get("attempted", false)):
+		return "%s：存档中的模型绑定已失效，系统已自动尝试迁移；当前配置仍没有可用模型，请补充有效 API Key 或可用模型后重试" % prefix
 	var player_code := UI_VIEW_MODEL.player_reason(error_code)
 	var player_message := _explicit_player_message(result)
 	if player_message.is_empty():
