@@ -78,9 +78,14 @@ func configure(
 			"Pre-generated interior occlusion is missing: %s" % manifest_path,
 		)
 		return false
+	var authored_occlusion := _load_data(occlusion_path)
+	if authored_occlusion.is_empty():
+		push_error("Authored interior occlusion is missing: %s" % occlusion_path)
+		return false
 	var validated := _validate_manifest(
 		manifest,
 		geometry,
+		authored_occlusion,
 		geometry_path,
 		occlusion_path,
 		shell_path,
@@ -451,6 +456,7 @@ func _z_index_with_offset(z_index: int, offset: int) -> int:
 func _validate_manifest(
 	data: Dictionary,
 	geometry: Dictionary,
+	authored_occlusion: Dictionary,
 	geometry_path: String,
 	occlusion_path: String,
 	shell_path: String,
@@ -466,6 +472,10 @@ func _validate_manifest(
 		geometry.get("source_revision"),
 		MAX_REVISION_LENGTH,
 	)
+	var occlusion_revision := _canonical_text_limited(
+		authored_occlusion.get("source_revision"),
+		MAX_REVISION_LENGTH,
+	)
 	if (
 		canvas_size == Vector2i.ZERO
 		or canvas_size.x * canvas_size.y > MAX_CANVAS_PIXELS
@@ -475,10 +485,11 @@ func _validate_manifest(
 			data.get("source_geometry_revision"),
 			MAX_REVISION_LENGTH,
 		) != geometry_revision
+		or occlusion_revision.is_empty()
 		or _canonical_text_limited(
 			data.get("source_occlusion_revision"),
 			MAX_REVISION_LENGTH,
-		).is_empty()
+		) != occlusion_revision
 		or _resource_path(data.get("source_shell_path")) != shell_path
 		or not _finite_pair(geometry.get("world_origin_px"))
 	):
