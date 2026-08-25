@@ -543,6 +543,20 @@ func _finish(town: Node, metrics: Dictionary) -> void:
 		return
 	for failure in _failures:
 		printerr("TOWN_INTERIOR_LAZY_LOADING_FAIL: %s" % failure)
+	printerr(
+		"TOWN_INTERIOR_LAZY_LOADING_METRICS startupMsec=%d prewarmMaxFrameUsec=%d buildMaxFrameUsec=%d buildMaxStageUsec=%d slowestStage=%s maxRoomCpuUsec=%d maxRoomWallUsec=%d firstEntryMsec=%d maxFirstEntryMsec=%d"
+		% [
+			int(metrics.get("startup_msec", 0)),
+			int(metrics.get("prewarm_longest_frame_usec", 0)),
+			int(metrics.get("build_max_frame_usec", 0)),
+			int(metrics.get("build_max_stage_usec", 0)),
+			String(metrics.get("slowest_stage", "")),
+			int(metrics.get("max_room_cpu_usec", 0)),
+			int(metrics.get("max_room_wall_usec", 0)),
+			int(metrics.get("first_entry_msec", 0)),
+			int(metrics.get("max_first_entry_msec", 0)),
+		]
+	)
 	call_deferred("_quit_after_cleanup", 1)
 
 

@@ -20,7 +20,7 @@
   },
   {
    "id": "res://tests/interior_occlusion_asset_generator_test.gd",
-   "min_checks": 53
+   "min_checks": 57
   },
   {
    "id": "res://tests/town_world_save_test.gd",

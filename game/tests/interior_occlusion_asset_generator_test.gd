@@ -6,6 +6,9 @@ const GENERATOR := preload(
 const PUBLISH_TRANSACTION := preload(
 	"res://tools/interiors/InteriorOcclusionPublishTransaction.gd"
 )
+const MANIFEST_PATH_RESOLVER := preload(
+	"res://world/maps/town/interiors/InteriorOcclusionManifestPathResolver.gd"
+)
 const TEST_ROOT := "user://issue141_generator_atomic"
 const ROOMS_ROOT := TEST_ROOT + "/rooms"
 const ROOM_IDS: Array[String] = ["room_a", "room_b"]
@@ -158,6 +161,7 @@ func _run() -> void:
 	_test_committed_backup_delete_failure()
 	_test_journal_record_failures()
 	_test_duplicate_room_ids()
+	_test_runtime_view_during_hard_interruption()
 	_remove_test_root()
 	await process_frame
 	await process_frame
@@ -386,6 +390,42 @@ func _test_duplicate_room_ids() -> void:
 	)
 
 
+func _test_runtime_view_during_hard_interruption() -> void:
+	_prepare_published_revision("v1")
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	_interrupt_publish_direct("manifest_commit_rename", 2)
+	var consistent_previous_view := true
+	for room_id in ROOM_IDS:
+		var manifest_path := _manifest_path(room_id)
+		var occlusion_path := ROOMS_ROOT.path_join(
+			room_id,
+		).path_join("wall_occlusion.json")
+		var resolved := MANIFEST_PATH_RESOLVER.resolve(
+			manifest_path,
+			occlusion_path,
+		) as Dictionary
+		var visible_manifest := _read_json(String(resolved.get("path", "")))
+		consistent_previous_view = (
+			consistent_previous_view
+			and resolved.get("ok") == true
+			and String(visible_manifest.get("source_occlusion_revision", "")) == "v1"
+		)
+	_expect(
+		consistent_previous_view,
+		"runtime resolves every room to the previous version during hard interruption",
+	)
+	_expect_equal(
+		_recover_without_republishing(),
+		"v1",
+		"the next generator completes hard-interruption recovery",
+	)
+	_expect_published_revision_is_consistent(
+		"v1",
+		"hard-interruption recovery leaves one complete previous version",
+	)
+
+
 func _prepare_interrupted_manifest_commit() -> void:
 	_prepare_published_revision("v1")
 	_create_room_fixture("room_a", "v2")
@@ -539,17 +579,21 @@ func _remove_tree_contents(path: String) -> void:
 	var directory := DirAccess.open(path)
 	if directory == null:
 		return
+	var entries: Array[Dictionary] = []
+	directory.include_hidden = true
 	directory.list_dir_begin()
 	var entry := directory.get_next()
 	while not entry.is_empty():
-		var child := path.path_join(entry)
-		if directory.current_is_dir():
+		entries.append({"name": entry, "directory": directory.current_is_dir()})
+		entry = directory.get_next()
+	directory.list_dir_end()
+	for record in entries:
+		var child := path.path_join(String(record.get("name", "")))
+		if bool(record.get("directory")):
 			_remove_tree_contents(child)
 			DirAccess.remove_absolute(child)
 		else:
 			DirAccess.remove_absolute(child)
-		entry = directory.get_next()
-	directory.list_dir_end()
 
 
 func _expect(condition: bool, message: String) -> void:

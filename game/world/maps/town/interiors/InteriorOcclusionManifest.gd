@@ -1,6 +1,10 @@
 class_name InteriorOcclusionManifest
 extends RefCounted
 
+const PATH_RESOLVER := preload(
+	"res://world/maps/town/interiors/InteriorOcclusionManifestPathResolver.gd"
+)
+
 const SCHEMA_VERSION := 2
 const MAX_SEGMENTS := 256
 const MAX_POLYGON_POINTS := 4096
@@ -91,6 +95,13 @@ func begin_load_staged(
 	var manifest_path := occlusion_path.get_base_dir().path_join(
 		"wall_occlusion_runtime.json",
 	)
+	var resolved_path := PATH_RESOLVER.resolve(manifest_path, occlusion_path) as Dictionary
+	if resolved_path.get("ok") != true:
+		return _failure(
+			"PUBLISH_TRANSACTION_INVALID",
+			String(resolved_path.get("error", "publish transaction is invalid")),
+		)
+	manifest_path = String(resolved_path.get("path", ""))
 	var manifest := _load_data(manifest_path)
 	if manifest.is_empty():
 		return _failure("MANIFEST_MISSING", "generated manifest is missing")

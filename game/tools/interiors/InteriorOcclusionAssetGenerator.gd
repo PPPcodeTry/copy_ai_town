@@ -350,23 +350,25 @@ func _remove_directory_contents(absolute_path: String) -> bool:
 	var directory := DirAccess.open(absolute_path)
 	if directory == null:
 		return false
+	var entries: Array[Dictionary] = []
+	directory.include_hidden = true
 	directory.list_dir_begin()
 	var entry := directory.get_next()
 	while not entry.is_empty():
-		var child := absolute_path.path_join(entry)
-		if directory.current_is_dir():
+		entries.append({"name": entry, "directory": directory.current_is_dir()})
+		entry = directory.get_next()
+	directory.list_dir_end()
+	for record in entries:
+		var child := absolute_path.path_join(String(record.get("name", "")))
+		if bool(record.get("directory")):
 			if (
 				not _remove_directory_contents(child)
 				or DirAccess.remove_absolute(child) != OK
 			):
-				directory.list_dir_end()
 				return false
 		else:
 			if DirAccess.remove_absolute(child) != OK:
-				directory.list_dir_end()
 				return false
-		entry = directory.get_next()
-	directory.list_dir_end()
 	return true
 
 
