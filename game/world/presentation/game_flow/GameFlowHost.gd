@@ -5429,6 +5429,8 @@ func _continue_binding_repair_candidates(
 	)
 	var configs := provider_runtime.get("providerConfigs", {}) as Dictionary
 	for provider_id_value: Variant in configs.keys():
+		if candidates.size() >= 8:
+			break
 		var provider_id := String(provider_id_value)
 		var config := configs.get(provider_id, {}) as Dictionary
 		_add_continue_binding_repair_candidate(
@@ -5437,6 +5439,8 @@ func _continue_binding_repair_candidates(
 			provider_id,
 			String(config.get("api_model", "")),
 		)
+		if candidates.size() >= 8:
+			break
 		var models_value: Variant = config.get("api_models", [])
 		if models_value is Array:
 			for model_value: Variant in models_value as Array:
@@ -5462,8 +5466,6 @@ func _continue_binding_repair_candidates(
 			)
 			if candidates.size() >= 8:
 				break
-		if candidates.size() >= 8:
-			break
 	return candidates
 
 
