@@ -203,6 +203,51 @@ func save_game(next_context: Variant) -> Dictionary:
 	return result
 
 
+func prepare_save_candidate() -> Dictionary:
+	if not _session_open or _save_context.is_empty():
+		return {"ok": false, "errors": ["没有可保存的活动存档会话"]}
+	var capture_result := _capture_resident_payloads(_residents)
+	if not bool(capture_result.get("ok", false)):
+		return capture_result
+	var resident_ids: Array = _residents.keys()
+	resident_ids.sort()
+	return {
+		"ok": true,
+		"context": _save_context.duplicate(true),
+		"residentIds": resident_ids,
+		"residentPayloads": (
+			capture_result.get("resident_payloads", {}) as Dictionary
+		).duplicate(true),
+	}
+
+
+func create_save_store_peer() -> RefCounted:
+	if _save_store == null or not _save_store.has_method("create_isolated_peer"):
+		return null
+	return _save_store.create_isolated_peer() as RefCounted
+
+
+func accept_published_save_context(
+	next_context_value: Variant,
+	expected_context_value: Variant,
+) -> Dictionary:
+	if not next_context_value is Dictionary or not expected_context_value is Dictionary:
+		return {"ok": false, "errors": ["后台存档上下文无效"]}
+	var next_context := next_context_value as Dictionary
+	var expected_context := expected_context_value as Dictionary
+	if _save_context != expected_context:
+		return {"ok": false, "errors": ["后台存档完成前 Agent 上下文已经变化"]}
+	if (
+		next_context.get("slot_id") != expected_context.get("slot_id")
+		or next_context.get("session_id") != expected_context.get("session_id")
+		or int(next_context.get("save_revision", 0))
+		<= int(expected_context.get("save_revision", 0))
+	):
+		return {"ok": false, "errors": ["后台存档修订上下文不连续"]}
+	_save_context = next_context.duplicate(true)
+	return {"ok": true, "context": _save_context.duplicate(true)}
+
+
 func close_game() -> Dictionary:
 	_discard_pending_new_game()
 	_discard_pending_restore()

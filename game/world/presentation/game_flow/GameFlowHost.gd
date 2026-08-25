@@ -297,6 +297,9 @@ var _replacement_admission_committed := false
 var _daily_auto_save_last_revision := 0
 var _daily_auto_save_failures: Array[Dictionary] = []
 var _daily_auto_save_inflight := false
+var _daily_auto_save_pending_day := -1
+var _daily_auto_save_last_request_msec := 0.0
+var _daily_auto_save_last_total_msec := 0.0
 
 
 func _ready() -> void:
@@ -370,6 +373,7 @@ func _notification(what: int) -> void:
 
 
 func _process(_delta: float) -> void:
+	_poll_daily_auto_save()
 	_bind_current_scene()
 	_poll_resident_replacement()
 	if _formal_runtime_audit_requested:
@@ -961,6 +965,9 @@ func _apply_pending_replacement_admission(
 		return _failure("REPLACEMENT_RESIDENT_CANDIDATE_MISSING", false)
 	if assignment_bindings.size() != 1 or not assignment_bindings[0] is Dictionary:
 		return _failure("SESSION_LLM_BINDINGS_INVALID", false)
+	var save_barrier := _finish_auto_save_before_session_mutation()
+	if not bool(save_barrier.get("ok", false)):
+		return save_barrier
 	var candidate := _pending_replacement_candidate.duplicate(true)
 	var record := candidate.get("record", {}) as Dictionary
 	var identity := candidate.get("identity", {}) as Dictionary
@@ -1483,6 +1490,9 @@ func get_daily_auto_save_diagnostics() -> Dictionary:
 		"lastRevision": _daily_auto_save_last_revision,
 		"failures": _daily_auto_save_failures.duplicate(true),
 		"inflight": _daily_auto_save_inflight,
+		"pendingDay": _daily_auto_save_pending_day,
+		"lastRequestMsec": _daily_auto_save_last_request_msec,
+		"lastTotalMsec": _daily_auto_save_last_total_msec,
 	}
 
 
@@ -1726,6 +1736,9 @@ func _release_internal_session_refs() -> void:
 	_daily_auto_save_last_revision = 0
 	_daily_auto_save_failures.clear()
 	_daily_auto_save_inflight = false
+	_daily_auto_save_pending_day = -1
+	_daily_auto_save_last_request_msec = 0.0
+	_daily_auto_save_last_total_msec = 0.0
 	_replacement_generation_sequence += 1
 	_replacement_generation_pending = false
 	_active_replacement_generation_id = 0
@@ -4380,24 +4393,70 @@ func _on_town_environment_changed(time: Dictionary, _weather: String) -> void:
 	var day := int(time.get("day", -1))
 	if day <= 0 or day <= _daily_auto_save_day:
 		return
+	if _daily_auto_save_inflight:
+		if day > _daily_auto_save_last_attempt_day:
+			_daily_auto_save_pending_day = maxi(
+				_daily_auto_save_pending_day,
+				day,
+			)
+		return
 	var now_msec := Time.get_ticks_msec()
 	if (
-		_daily_auto_save_inflight
-		or (
-			_daily_auto_save_last_attempt_day == day
-			and now_msec - _daily_auto_save_last_attempt_msec
-			< DAILY_AUTO_SAVE_RETRY_INTERVAL_MSEC
-		)
+		_daily_auto_save_last_attempt_day == day
+		and now_msec - _daily_auto_save_last_attempt_msec
+		< DAILY_AUTO_SAVE_RETRY_INTERVAL_MSEC
 	):
 		return
+	_begin_daily_auto_save(day)
+
+
+func _begin_daily_auto_save(day: int) -> void:
+	var request_started_usec := Time.get_ticks_usec()
 	_daily_auto_save_inflight = true
 	_daily_auto_save_last_attempt_day = day
-	_daily_auto_save_last_attempt_msec = now_msec
+	_daily_auto_save_last_attempt_msec = Time.get_ticks_msec()
 	_daily_auto_save_attempts += 1
-	var result := _session_ui_service.call("create_save", {
-		"reason": DAILY_AUTO_SAVE_REASON,
-	}) as Dictionary
+	var result: Dictionary
+	if _session_ui_service.has_method("begin_create_save_async"):
+		result = _session_ui_service.begin_create_save_async({
+			"reason": DAILY_AUTO_SAVE_REASON,
+		}) as Dictionary
+	else:
+		result = _failure("SESSION_ASYNC_SAVE_CONTRACT_INVALID", false)
+	_daily_auto_save_last_request_msec = (
+		float(Time.get_ticks_usec() - request_started_usec) / 1000.0
+	)
+	if bool(result.get("pending", false)):
+		return
+	_complete_daily_auto_save(day, result)
+
+
+func _poll_daily_auto_save() -> void:
+	if not _daily_auto_save_inflight:
+		return
+	if (
+		_session_ui_service == null
+		or not is_instance_valid(_session_ui_service)
+		or not _session_ui_service.has_method("poll_create_save_async")
+	):
+		_complete_daily_auto_save(
+			_daily_auto_save_last_attempt_day,
+			_failure("SESSION_ASYNC_SAVE_CONTRACT_INVALID", false),
+		)
+		return
+	var result := _session_ui_service.poll_create_save_async() as Dictionary
+	if bool(result.get("pending", false)):
+		return
+	if bool(result.get("idle", false)):
+		result = _failure("SESSION_ASYNC_SAVE_RESULT_MISSING", true)
+	_complete_daily_auto_save(_daily_auto_save_last_attempt_day, result)
+
+
+func _complete_daily_auto_save(day: int, result: Dictionary) -> void:
 	_daily_auto_save_inflight = false
+	_daily_auto_save_last_total_msec = float(
+		(result.get("timing", {}) as Dictionary).get("totalMsec", 0.0),
+	)
 	if bool(result.get("ok", false)):
 		_daily_auto_save_day = day
 		_daily_auto_save_successes += 1
@@ -4407,17 +4466,37 @@ func _on_town_environment_changed(time: Dictionary, _weather: String) -> void:
 				_daily_auto_save_last_revision,
 			)
 		)
-		return
-	var failure := {
-		"day": day,
-		"errorCode": String(
-			result.get("errorCode", "SESSION_SAVE_DAILY_AUTO_SAVE_FAILED")
-		),
-		"retryable": bool(result.get("retryable", false)),
-	}
-	_daily_auto_save_failures.append(failure)
-	if _daily_auto_save_failures.size() > DAILY_AUTO_SAVE_ERROR_HISTORY_LIMIT:
-		_daily_auto_save_failures.pop_front()
+	else:
+		var failure := {
+			"day": day,
+			"errorCode": String(
+				result.get("errorCode", "SESSION_SAVE_DAILY_AUTO_SAVE_FAILED")
+			),
+			"retryable": bool(result.get("retryable", false)),
+		}
+		_daily_auto_save_failures.append(failure)
+		if _daily_auto_save_failures.size() > DAILY_AUTO_SAVE_ERROR_HISTORY_LIMIT:
+			_daily_auto_save_failures.pop_front()
+	_start_pending_daily_auto_save()
+
+
+func _start_pending_daily_auto_save() -> void:
+	var pending_day := _daily_auto_save_pending_day
+	_daily_auto_save_pending_day = -1
+	if pending_day > _daily_auto_save_day:
+		_begin_daily_auto_save(pending_day)
+
+
+func _finish_auto_save_before_session_mutation() -> Dictionary:
+	if (
+		_session_ui_service == null
+		or not is_instance_valid(_session_ui_service)
+		or not _session_ui_service.has_method("has_active_create_save_async")
+		or not _session_ui_service.has_method("finish_create_save_async")
+		or not bool(_session_ui_service.has_active_create_save_async())
+	):
+		return {"ok": true, "errorCode": "", "retryable": false}
+	return _session_ui_service.finish_create_save_async() as Dictionary
 
 
 func _agent_save_participant() -> Object:
@@ -4996,6 +5075,9 @@ func _apply_in_session_resident_model_bindings(
 			"RESIDENT_MODEL_ASSIGNMENT_RUNTIME_DEPENDENCY_MISSING",
 			false,
 		)
+	var save_barrier := _finish_auto_save_before_session_mutation()
+	if not bool(save_barrier.get("ok", false)):
+		return save_barrier
 	var previous_bindings := (
 		_active_session_config.get("residentBindings", []) as Array
 	).duplicate(true)

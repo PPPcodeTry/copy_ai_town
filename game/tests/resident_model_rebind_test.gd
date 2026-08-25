@@ -30,6 +30,14 @@ class FakeSessionService:
 	extends RefCounted
 	var bindings: Array = []
 	var saved := false
+	var async_active := true
+	var finish_calls := 0
+	func has_active_create_save_async() -> bool:
+		return async_active
+	func finish_create_save_async() -> Dictionary:
+		finish_calls += 1
+		async_active = false
+		return {"ok": true, "errorCode": "", "retryable": false}
 	func update_resident_bindings(value: Variant) -> Dictionary:
 		bindings = (value as Array).duplicate(true)
 		return {"ok": true, "errorCode": "", "retryable": false, "changed": true}
@@ -100,6 +108,7 @@ func _run() -> void:
 	_expect(gateway.bindings == updated, "Agent 网关收到新绑定")
 	_expect(runtime.bindings == updated, "小镇运行时收到新绑定")
 	_expect(session.bindings == updated and session.saved, "改绑会更新存档并立即保存")
+	_expect(session.finish_calls == 1, "改绑前先收口活动自动保存")
 	_test_completed_assignment_rebind_action()
 	_test_single_resident_assignment_mode()
 	_test_low_population_in_session_assignment()
