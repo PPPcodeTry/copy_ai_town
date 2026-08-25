@@ -552,7 +552,7 @@ static func _detect_explicit_module_versions(versions: Dictionary) -> Dictionary
 	return {"ok": true}
 
 
-static func validate_registry() -> Array[String]:
+static func validate_registry(releases: Array = RELEASES) -> Array[String]:
 	var errors: Array[String] = []
 	var error_codes := {}
 	for error_type_value: Variant in ERROR_TYPES:
@@ -588,7 +588,7 @@ static func validate_registry() -> Array[String]:
 			if not VERSION_RULES.has(version_key):
 				errors.append("module version key is not registered: %s" % version_key)
 	var release_ids: Array[String] = []
-	for release_value: Variant in RELEASES:
+	for release_value: Variant in releases:
 		if not release_value is Dictionary:
 			errors.append("release descriptor must be a dictionary")
 			continue
@@ -598,10 +598,10 @@ static func validate_registry() -> Array[String]:
 		else:
 			release_ids.append(release_id)
 	var edge_ids := {}
-	for edge_index in RELEASES.size():
-		var release := RELEASES[edge_index] as Dictionary
+	for edge_index in releases.size():
+		var release := releases[edge_index] as Dictionary
 		var edge := release.get("nextEdge", {}) as Dictionary
-		if edge_index == RELEASES.size() - 1:
+		if edge_index == releases.size() - 1:
 			if not edge.is_empty():
 				errors.append("current release cannot have a next edge")
 			continue

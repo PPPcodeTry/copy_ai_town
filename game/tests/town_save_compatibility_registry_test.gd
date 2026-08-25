@@ -392,6 +392,15 @@ func _test_migration_path_is_ordered_and_explicit() -> void:
 		"SAVE_MIGRATION_PATH_MISSING",
 		"迁移链缺失有独立错误码",
 	)
+	var broken_releases := REGISTRY.RELEASES.duplicate(true)
+	(broken_releases[2] as Dictionary)["nextEdge"] = {}
+	_expect_equal(
+		REGISTRY.validate_registry(broken_releases).has(
+			"release has no migration edge: beta3",
+		),
+		true,
+		"故意断开的已支持版本迁移链会使注册表检查失败",
+	)
 
 
 func _test_place_service_owner_backfill_is_safe_and_idempotent() -> void:

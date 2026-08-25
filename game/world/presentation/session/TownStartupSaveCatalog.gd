@@ -959,6 +959,23 @@ func _inspect_manifest(
 	var snapshot_loaded := snapshot_loaded_value as Dictionary
 	if snapshot_loaded.get("ok") != true:
 		return _store_failure(snapshot_loaded)
+	var world_log_value: Variant = components.get("world_log")
+	if world_log_value is Dictionary:
+		var world_log := world_log_value as Dictionary
+		var world_log_loaded_value: Variant = _store.call(
+			"read_reference",
+			_required_string(world_log.get("snapshot_ref")),
+			_required_string(world_log.get("snapshot_sha256")),
+		)
+		if not world_log_loaded_value is Dictionary:
+			return _failure("STARTUP_SAVE_STORE_RESPONSE_INVALID", false)
+		var world_log_loaded := world_log_loaded_value as Dictionary
+		if world_log_loaded.get("ok") != true:
+			return _store_failure(world_log_loaded)
+		if not world_log_loaded.get("value") is Dictionary:
+			return _failure("SESSION_SAVE_WORLD_LOG_INVALID", false)
+	elif int(manifest.get("schema_version", 0)) >= 3:
+		return _failure("SESSION_SAVE_MANIFEST_INVALID", false)
 	var config_loaded_value: Variant = _store.call(
 		"read_reference",
 		config_ref,

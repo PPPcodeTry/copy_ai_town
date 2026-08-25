@@ -7,8 +7,8 @@ fixture_ids_text="${AI_TOWN_ISOLATED_FIXTURE_IDS:-}"
 if [[ -n "$fixture_ids_text" ]]; then
   fixture_ids=("${(@s: :)fixture_ids_text}")
   for fixture_id in "${fixture_ids[@]}"; do
-    if [[ "$fixture_id" != beta[1-5] ]]; then
-      print -u2 "历史升级样本只接受 beta1 至 beta5。"
+    if [[ "$fixture_id" != beta[1-6] ]]; then
+		print -u2 "存档兼容故事只接受 beta1 至 beta6。"
       exit 2
     fi
   done
@@ -18,8 +18,8 @@ if [[ -n "$fixture_ids_text" ]]; then
   export AI_TOWN_ISOLATED_FIXTURE_ROOT_BASE="$script_dir/fixtures/historical_saves"
 else
   fixture_id="${AI_TOWN_HISTORICAL_FIXTURE_ID:-beta2}"
-  if [[ "$fixture_id" != beta[1-5] ]]; then
-    print -u2 "历史升级样本只接受 beta1 至 beta5。"
+	if [[ "$fixture_id" != beta[1-6] ]]; then
+		print -u2 "存档兼容故事只接受 beta1 至 beta6。"
     exit 2
   fi
   export AI_TOWN_HISTORICAL_FIXTURE_ID="$fixture_id"

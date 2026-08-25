@@ -18,13 +18,13 @@ run_shard() {
 }
 
 if ((parallel == 1)); then
-  run_shard "matrix" "beta1 beta2 beta3 beta4 beta5"
+	run_shard "matrix" "beta1 beta2 beta3 beta4 beta5 beta6"
 else
   log_root="$(mktemp -d "${TMPDIR:-/tmp}/ai-town-history-matrix.XXXXXX")"
   trap 'rm -rf "$log_root"' EXIT
   run_shard "matrix-a" "beta1 beta3 beta5" >"$log_root/a.log" 2>&1 &
   first_pid=$!
-  run_shard "matrix-b" "beta2 beta4" >"$log_root/b.log" 2>&1 &
+	run_shard "matrix-b" "beta2 beta4 beta6" >"$log_root/b.log" 2>&1 &
   second_pid=$!
   failed=0
   if ! wait "$first_pid"; then
@@ -39,4 +39,4 @@ else
     exit 1
   fi
 fi
-print "HISTORICAL_SAVE_MIGRATION_MATRIX_PASS releases=5"
+print "HISTORICAL_SAVE_MIGRATION_MATRIX_PASS releases=6"

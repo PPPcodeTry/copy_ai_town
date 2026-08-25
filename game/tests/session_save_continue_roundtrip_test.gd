@@ -201,6 +201,14 @@ func _run() -> void:
 		(damaged_manifest.get("components", {}) as Dictionary)
 		.get("world", {}) as Dictionary
 	)
+	_assert_component_damage_matrix(
+		store,
+		test_root,
+		slot_id,
+		session_id,
+		identity,
+		damaged_manifest,
+	)
 	var damaged_reference := String(damaged_world.get("snapshot_ref", ""))
 	var damaged_path := "%s/%s" % [test_root, damaged_reference]
 	var damaged_file := FileAccess.open(damaged_path, FileAccess.WRITE)
@@ -520,6 +528,102 @@ func _reopen_repaired_revision(request: Dictionary) -> Dictionary:
 	return saved
 
 
+func _assert_component_damage_matrix(
+	store: RefCounted,
+	test_root: String,
+	slot_id: String,
+	session_id: String,
+	identity: String,
+	manifest: Dictionary,
+) -> void:
+	var revision := int(manifest.get("save_revision", -1))
+	var revision_text := "%020d" % revision
+	var components := manifest.get("components", {}) as Dictionary
+	var world := components.get("world", {}) as Dictionary
+	var world_log := components.get("world_log", {}) as Dictionary
+	var cases := [
+		{
+			"name": "manifest",
+			"path": "%s/slots/%s/manifests/%s.json" % [test_root, slot_id, revision_text],
+			"errorCode": "SESSION_SAVE_MANIFEST_INVALID",
+		},
+		{
+			"name": "session-config",
+			"path": "%s/%s" % [test_root, manifest.get("session_config_ref", "")],
+			"errorCode": "SESSION_SAVE_REFERENCE_HASH_MISMATCH",
+		},
+		{
+			"name": "world",
+			"path": "%s/%s" % [test_root, world.get("snapshot_ref", "")],
+			"errorCode": "SESSION_SAVE_REFERENCE_HASH_MISMATCH",
+		},
+		{
+			"name": "world-log",
+			"path": "%s/%s" % [test_root, world_log.get("snapshot_ref", "")],
+			"errorCode": "SESSION_SAVE_REFERENCE_HASH_MISMATCH",
+		},
+		{
+			"name": "agent",
+			"path": (
+				"user://agent_saves/%s/sessions/%s/revisions/%d/snapshot.json"
+				% [slot_id, session_id, revision]
+			),
+			"errorCode": "SESSION_SAVE_AGENT_SNAPSHOT_INVALID",
+		},
+	]
+	for case_value: Variant in cases:
+		var damage_case := case_value as Dictionary
+		var component_name := String(damage_case.get("name", ""))
+		var path := String(damage_case.get("path", ""))
+		var original := _read_text(path)
+		_expect(not original.is_empty(), "%s 损坏样本可读取" % component_name)
+		_expect_ok(_write_text(path, "{}\n"), "可构造 %s 独立损坏" % component_name)
+		_assert_recoverable_damage(
+			store,
+			slot_id,
+			identity,
+			String(damage_case.get("errorCode", "")),
+			component_name,
+		)
+		_expect_ok(_write_text(path, original), "%s 原始证据可复原" % component_name)
+
+
+func _assert_recoverable_damage(
+	store: RefCounted,
+	slot_id: String,
+	identity: String,
+	expected_error_code: String,
+	component_name: String,
+) -> void:
+	var catalog: RefCounted = STARTUP_SAVE_CATALOG.new()
+	var agent_store: RefCounted = AGENT_SAVE_STORE.new()
+	_expect_ok(catalog.call(
+		"configure",
+		store,
+		"user://tests/town_startup_profile/matrix_%s_%s.json" % [
+			identity,
+			component_name,
+		],
+		agent_store,
+	) as Dictionary, "%s 损坏检查器可配置" % component_name)
+	var inspected := catalog.call("get_catalog", [
+		{"slotId": slot_id, "displayName": "损坏矩阵"},
+		{
+			"slotId": "matrix-empty-%s" % identity,
+			"displayName": "空槽位",
+		},
+	]) as Dictionary
+	_expect_ok(inspected, "%s 损坏可完成只读诊断" % component_name)
+	var slot := inspected.get("continueSlot", {}) as Dictionary
+	_expect_equal(slot.get("state"), "recoverable", "%s 损坏可回退完整配对" % component_name)
+	_expect_equal(slot.get("errorCode"), expected_error_code, "%s 损坏分类准确" % component_name)
+	_expect_equal(
+		(slot.get("recoveryPlan", {}) as Dictionary).get("action"),
+		"restore_complete_pair_and_publish",
+		"%s 损坏生成安全发布计划" % component_name,
+	)
+
+
 func _inspect_recovery_case(
 	store: RefCounted,
 	slot_id: String,
@@ -686,6 +790,27 @@ func _read_json(path: String) -> Dictionary:
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	file = null
 	return parsed as Dictionary if parsed is Dictionary else {}
+
+
+func _read_text(path: String) -> String:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	return file.get_as_text()
+
+
+func _write_text(path: String, content: String) -> Dictionary:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return {"ok": false, "errorCode": "TEST_FILE_WRITE_FAILED"}
+	file.store_string(content)
+	file.flush()
+	var error := file.get_error()
+	file = null
+	return {
+		"ok": error == OK,
+		"errorCode": "" if error == OK else "TEST_FILE_WRITE_FAILED",
+	}
 
 
 func _wait_frames(count: int) -> void:

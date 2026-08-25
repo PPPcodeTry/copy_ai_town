@@ -64,12 +64,14 @@ func _run() -> void:
 	).strip_edges()
 	if not requested_release.is_empty():
 		_release_id = requested_release
-	if _release_id not in ["beta1", "beta2", "beta3", "beta4", "beta5"]:
-		_expect(false, "历史升级故事只接受 beta1 至 beta5")
+	if _release_id not in ["beta1", "beta2", "beta3", "beta4", "beta5", "beta6"]:
+		_expect(false, "存档兼容故事只接受 beta1 至 beta6")
 		_finish()
 		return
 	_slot_id = "roundtrip-slot-%s" % _release_id
 	_session_id = "roundtrip-session-%s" % _release_id
+	if _release_id == "beta6":
+		_expect_ok(_mark_fixture_as_current_release(), "beta6 样本写入当前发行标记")
 	var store: RefCounted = STORE.new()
 	var catalog: RefCounted = STARTUP_CATALOG.new()
 	_expect_ok(
@@ -191,51 +193,74 @@ func _run() -> void:
 		},
 		catalog,
 	) as Dictionary
-	_expect_ok(upgraded, "%s 存档可通过通用升级器发布为 beta6" % _release_id)
-	_expect_equal(upgraded.get("changed"), true, "旧版本升级明确产生新修订")
+	_expect_ok(upgraded, "%s 存档可通过正式继续入口恢复" % _release_id)
+	var is_current_release := _release_id == "beta6"
+	_expect_equal(
+		upgraded.get("changed", false),
+		false if is_current_release else true,
+		"当前版本不迁移，旧版本明确发布升级修订",
+	)
 	_expect_equal(
 		(upgraded.get("context", {}) as Dictionary).get("save_revision"),
-		2,
-		"升级器把结果发布为修订 2",
+		1 if is_current_release else 2,
+		"正式入口保持当前修订或发布升级修订",
 	)
-	var first_migration := upgraded.get("migrationReceipt", {}) as Dictionary
-	_expect(
-		(first_migration.get("applied", []) as Array).has(
-			ACTIVITY_MIGRATION_ID,
-		),
-		"beta1/2 首次恢复明确报告活动迁移",
-	) if _release_id in ["beta1", "beta2"] else _expect(
-		not (first_migration.get("applied", []) as Array).has(
-			ACTIVITY_MIGRATION_ID,
-		),
-		"beta3 至 beta5 不重复执行已完成的活动迁移",
-	)
-	_expect(
-		(first_migration.get("applied", []) as Array).has(
-			PLACE_SERVICE_OWNER_MIGRATION_ID,
-		),
-		"首次恢复明确报告地点服务协调者迁移",
-	)
-	_expect(
-		(first_migration.get("applied", []) as Array).has(
-			AGENT_SHOP_OWNER_MIGRATION_ID,
-		),
-		"首次恢复明确报告 Agent 铺面负责人迁移",
-	)
-	_expect_equal(
-		(
-			(first_migration.get("moduleReceipts", {}) as Dictionary)
-			.get("resident_payload", {}) as Dictionary
-		).get("applied"),
-		[AGENT_SHOP_OWNER_MIGRATION_ID],
-		"Agent 迁移回执保持独立模块和版本",
-	)
+	if is_current_release:
+		_expect_equal(
+			upgraded.get("migrationReceipt", {}),
+			{},
+			"原生 beta6 继续游戏不产生迁移回执",
+		)
+		_expect_ok(
+			(first.get("runtime") as Node).call(
+				"complete_restored_session",
+				upgraded.get("context", {}),
+			) as Dictionary,
+			"原生 beta6 恢复结果可提交给运行时",
+		)
+	else:
+		var first_migration := upgraded.get("migrationReceipt", {}) as Dictionary
+		_expect(
+			(first_migration.get("applied", []) as Array).has(
+				ACTIVITY_MIGRATION_ID,
+			),
+			"beta1/2 首次恢复明确报告活动迁移",
+		) if _release_id in ["beta1", "beta2"] else _expect(
+			not (first_migration.get("applied", []) as Array).has(
+				ACTIVITY_MIGRATION_ID,
+			),
+			"beta3 至 beta5 不重复执行已完成的活动迁移",
+		)
+		_expect(
+			(first_migration.get("applied", []) as Array).has(
+				PLACE_SERVICE_OWNER_MIGRATION_ID,
+			),
+			"首次恢复明确报告地点服务协调者迁移",
+		)
+		_expect(
+			(first_migration.get("applied", []) as Array).has(
+				AGENT_SHOP_OWNER_MIGRATION_ID,
+			),
+			"首次恢复明确报告 Agent 铺面负责人迁移",
+		)
+		_expect_equal(
+			(
+				(first_migration.get("moduleReceipts", {}) as Dictionary)
+				.get("resident_payload", {}) as Dictionary
+			).get("applied"),
+			[AGENT_SHOP_OWNER_MIGRATION_ID],
+			"Agent 迁移回执保持独立模块和版本",
+		)
 	var first_world: RefCounted = first.get("world")
 	var before_time := first_world.call("get_time") as Dictionary
 	_expect_ok(first_world.call("advance", 1.0) as Dictionary, "升级后的世界可继续推进")
 	_expect(first_world.call("get_time") != before_time, "升级后产生可观察的时间变化")
 	var played_revision := await _save_restored(first, session_config, identities)
-	_expect_equal(played_revision, 3, "升级后继续游玩并保存为修订 3")
+	_expect_equal(
+		played_revision,
+		2 if is_current_release else 3,
+		"继续游玩后发布下一份成对修订",
+	)
 	var upgraded_config := session_config.duplicate(true)
 	upgraded_config["saveRelease"] = COMPATIBILITY.current_release()
 	var current_catalog := catalog.call("get_catalog", slot_definitions) as Dictionary
@@ -311,7 +336,11 @@ func _run() -> void:
 	)
 	_expect_equal(second_migration.get("applied"), [], "第二次恢复不再重复迁移")
 	var reopened_revision := await _save_restored(reopened, upgraded_config, identities)
-	_expect_equal(reopened_revision, 4, "新 Runtime 重开后可再次成对保存")
+	_expect_equal(
+		reopened_revision,
+		played_revision + 1,
+		"新 Runtime 重开后可再次成对保存",
+	)
 	var resaved_state := (
 		_read_world_snapshot(store, _slot_id, _session_id, reopened_revision)
 		.get("state", {}) as Dictionary
@@ -507,6 +536,46 @@ func _read_json(path: String) -> Dictionary:
 		return {}
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	return parsed as Dictionary if parsed is Dictionary else {}
+
+
+func _mark_fixture_as_current_release() -> Dictionary:
+	var revision_text := "%020d" % FIRST_REVISION
+	var revision_root := (
+		"user://town_session_saves/slots/%s/sessions/%s/revisions/%s"
+		% [_slot_id, _session_id, revision_text]
+	)
+	var config_path := "%s/session_config.json" % revision_root
+	var config := _read_json(config_path)
+	if config.is_empty():
+		return {"ok": false, "errorCode": "TEST_SESSION_CONFIG_MISSING"}
+	config["saveRelease"] = COMPATIBILITY.current_release()
+	var written := _write_json(config_path, config)
+	if written.get("ok") != true:
+		return written
+	var config_sha256 := _sha256_file(config_path)
+	if config_sha256.is_empty():
+		return {"ok": false, "errorCode": "TEST_SESSION_CONFIG_HASH_FAILED"}
+	var manifest_path := (
+		"user://town_session_saves/slots/%s/manifests/%s.json"
+		% [_slot_id, revision_text]
+	)
+	var manifest := _read_json(manifest_path)
+	if manifest.is_empty():
+		return {"ok": false, "errorCode": "TEST_MANIFEST_MISSING"}
+	manifest["session_config_sha256"] = config_sha256
+	return _write_json(manifest_path, manifest)
+
+
+func _sha256_file(path: String) -> String:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var hashing := HashingContext.new()
+	if hashing.start(HashingContext.HASH_SHA256) != OK:
+		return ""
+	if hashing.update(file.get_buffer(file.get_length())) != OK:
+		return ""
+	return hashing.finish().hex_encode()
 
 
 func _write_json(path: String, value: Dictionary) -> Dictionary:

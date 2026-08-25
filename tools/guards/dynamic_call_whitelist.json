@@ -567,8 +567,8 @@
       "func": "send",
       "call": "string:Callable(world, \"resident_display_name\")",
       "reason": "总控向专用模块注入代码中固定命名的 Callable；方法名不来自配置、存档或外部输入。"
-    },
-    {
+      },
+      {
       "path": "game/ui/resident_model_assignment/runtime/ResidentModelAssignmentService.gd",
       "func": "_apply_draft",
       "call": "string:.call( \"validate_resident_bindings\", bindings, )",
@@ -597,6 +597,12 @@
       "func": "_probe_formal_continue_binding_repair_candidate",
       "call": "string:Callable(self, \"_on_formal_continue_binding_repair_health_completed\")",
       "reason": "自动迁移候选模型的异步健康检查需要回到恢复宿主；方法名固定且不来自存档或外部输入。"
+    },
+    {
+      "path": "game/world/presentation/session/TownStartupSaveCatalog.gd",
+      "func": "_inspect_manifest",
+      "call": "string:.call( \"read_reference\", _required_string(world_log.get(\"snapshot_ref\")), _required_string(world_log.get(\"snapshot_sha256\")), )",
+      "reason": "启动目录通过已校验的存档 Store 契约读取 world log 引用；方法名固定，不来自存档或外部输入。"
     }
   ]
 }
