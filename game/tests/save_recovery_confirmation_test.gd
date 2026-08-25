@@ -7,6 +7,7 @@ const BUILDER := preload(
 const PAGE_SCENE := preload(
 	"res://ui/new_game_overwrite/NewGameOverwriteScreen.tscn"
 )
+const STARTUP_SCENE := preload("res://ui/startup/StartupScreen.tscn")
 
 var _failures: Array[String] = []
 var _checks := 0
@@ -82,6 +83,7 @@ func _run() -> void:
 	page.queue_free()
 	await process_frame
 	_verify_host_rediagnosis_failure()
+	await _verify_host_cancel_refresh()
 	_finish()
 
 
@@ -110,6 +112,40 @@ func _verify_host_rediagnosis_failure() -> void:
 		"重新诊断失败会关闭旧计划，不能继续执行过期修复",
 	)
 	host.set("_startup_save_catalog", original_catalog)
+
+
+func _verify_host_cancel_refresh() -> void:
+	var host := root.get_node_or_null("GameFlowHost")
+	_expect(host != null, "仅返回测试使用真实 GameFlowHost")
+	if host == null:
+		return
+	var startup := STARTUP_SCENE.instantiate() as Control
+	root.add_child(startup)
+	current_scene = startup
+	host.call("_bind_startup", startup)
+	await process_frame
+	startup.set("_host_request_pending_intent", &"session.continue")
+	var stale_page := PAGE_SCENE.instantiate() as Control
+	startup.add_child(stale_page)
+	host.set("_startup_overwrite_page", stale_page)
+	host.set("_pending_save_handling_mode", "continue_recovery")
+	host.set("_pending_save_handling_origin", "continue")
+	host.call(
+		"_on_new_game_overwrite_intent_requested",
+		&"session.cancel_continue_recovery",
+		{},
+	)
+	await process_frame
+	var snapshot := startup.call("get_route_contract_snapshot") as Dictionary
+	_expect(
+		not bool(snapshot.get("hostRequestPending", true)),
+		"仅返回会清除启动页的旧请求，允许再次继续游戏",
+	)
+	current_scene = null
+	if is_instance_valid(stale_page):
+		stale_page.queue_free()
+	startup.queue_free()
+	await process_frame
 
 
 func _expect_button(page: Control, node_name: String, copy: String) -> void:

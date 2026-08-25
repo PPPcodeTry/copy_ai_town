@@ -2274,6 +2274,7 @@ func _on_new_game_overwrite_intent_requested(
 	match String(intent):
 		"session.cancel_new_game_overwrite", "session.cancel_continue_recovery":
 			_close_new_game_overwrite()
+			_refresh_startup_main_menu_view_models()
 		"session.rediagnose_recovery":
 			_rediagnose_continue_recovery()
 		"save.cancel_delete_slot":
