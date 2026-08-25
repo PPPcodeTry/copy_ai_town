@@ -5,6 +5,9 @@ extends RefCounted
 const MANIFEST := preload(
 	"res://world/presentation/session/TownSessionSaveManifest.gd"
 )
+const COMPATIBILITY := preload(
+	"res://world/presentation/session/TownSaveCompatibilityRegistry.gd"
+)
 const STORE_METHODS: Array[String] = [
 	"begin_slot_transaction",
 	"end_slot_transaction",
@@ -50,6 +53,7 @@ const RESTORE_FAILURE_STAGES: Array[String] = TownSaveJournalStates.RESTORE_TRAN
 const SESSION_CONFIG_FIELDS: Array[String] = [
 	"mode",
 	"sessionId",
+	"saveRelease",
 	"openingConfig",
 	"residentIdentities",
 	"residentBindings",
@@ -1594,6 +1598,16 @@ func _validate_session_config(
 		or value.get("mode") not in ["new_game", "continue"]
 		or not value.get("sessionId") is String
 		or value.get("sessionId") != session_id
+	):
+		return _failure("SESSION_SAVE_SESSION_CONFIG_INVALID", false)
+	if (
+		value.has("saveRelease")
+		and (
+			not value.get("saveRelease") is String
+			or not COMPATIBILITY.is_valid_release_marker(
+				String(value.get("saveRelease", "")),
+			)
+		)
 	):
 		return _failure("SESSION_SAVE_SESSION_CONFIG_INVALID", false)
 	if (

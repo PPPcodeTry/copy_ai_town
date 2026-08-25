@@ -20,6 +20,12 @@ const MANIFEST := preload(
 const RECOVERY_PLANNER := preload(
 	"res://world/presentation/session/TownSaveRecoveryPlanner.gd"
 )
+const COMPATIBILITY := preload(
+	"res://world/presentation/session/TownSaveCompatibilityRegistry.gd"
+)
+const HISTORICAL_UPGRADER := preload(
+	"res://world/presentation/session/TownHistoricalSaveUpgrader.gd"
+)
 
 const FORMAL_WORLD_REQUIRED := "SESSION_SAVE_FORMAL_WORLD_REQUIRED"
 const SERVICE_NOT_CONFIGURED := "SESSION_SAVE_SERVICE_NOT_CONFIGURED"
@@ -341,6 +347,80 @@ func execute_recovery_plan(
 	return result
 
 
+func upgrade_revision(
+	source: Dictionary,
+	publication: Dictionary,
+	catalog: Object,
+) -> Dictionary:
+	if not _configuration_error.is_empty() or _coordinator == null:
+		return _failure(SERVICE_NOT_CONFIGURED, false)
+	var upgrader := HISTORICAL_UPGRADER.new()
+	var configured := upgrader.configure(
+		_coordinator,
+		_runtime,
+		catalog,
+	) as Dictionary
+	if configured.get("ok") != true:
+		return configured
+	var upgraded := upgrader.upgrade(
+		source.duplicate(true),
+		publication.duplicate(true),
+	) as Dictionary
+	_last_result = upgraded.duplicate(true)
+	return upgraded
+
+
+func restore_discovered_revision(
+	discovery: Dictionary,
+	world_data: Dictionary,
+	resident_identities: Array,
+	agent_hydrator: Object,
+	publication: Dictionary,
+	catalog: Object,
+) -> Dictionary:
+	var compatibility_value: Variant = discovery.get("compatibility")
+	if not compatibility_value is Dictionary:
+		return _failure("SAVE_COMPATIBILITY_EVIDENCE_INVALID", false)
+	var compatibility := compatibility_value as Dictionary
+	var restore_gate := COMPATIBILITY.restore_gate(compatibility)
+	if restore_gate.get("ok") != true:
+		return restore_gate
+	var manifest := discovery.get("manifest", {}) as Dictionary
+	var session_config := discovery.get("sessionConfig", {}) as Dictionary
+	if (
+		manifest.is_empty()
+		or session_config.is_empty()
+		or not discovery.get("compatibilityEvidence") is Dictionary
+	):
+		return _failure("SAVE_COMPATIBILITY_EVIDENCE_INVALID", false)
+	if String(compatibility.get("supportStatus", "")) == COMPATIBILITY.STATUS_SUPPORTED:
+		var upgraded := upgrade_revision({
+			"context": {
+				"slot_id": String(manifest.get("slot_id", "")),
+				"session_id": String(manifest.get("session_id", "")),
+				"save_revision": int(manifest.get("save_revision", 0)),
+			},
+			"releaseEvidence": (
+				discovery.get("compatibilityEvidence", {}) as Dictionary
+			).duplicate(true),
+			"sessionConfig": session_config.duplicate(true),
+			"worldData": world_data.duplicate(true),
+			"residentIdentities": resident_identities.duplicate(true),
+			"agentHydrator": agent_hydrator,
+		}, publication, catalog)
+		upgraded["completedByUpgrade"] = bool(upgraded.get("ok", false))
+		return upgraded
+	if String(compatibility.get("supportStatus", "")) != COMPATIBILITY.STATUS_CURRENT:
+		return _failure("SAVE_VERSION_COMBINATION_UNKNOWN", false)
+	return continue_revision(
+		String(manifest.get("session_id", "")),
+		int(manifest.get("save_revision", 0)),
+		world_data,
+		resident_identities,
+		agent_hydrator,
+	)
+
+
 func continue_latest(
 	world_data: Dictionary,
 	resident_identities: Array,
@@ -455,7 +535,9 @@ func _save_blocker() -> String:
 
 
 func _manifest_session_config() -> Dictionary:
-	var filtered := {}
+	var filtered := {
+		"saveRelease": COMPATIBILITY.current_release(),
+	}
 	for field_name in [
 		"mode",
 		"sessionId",

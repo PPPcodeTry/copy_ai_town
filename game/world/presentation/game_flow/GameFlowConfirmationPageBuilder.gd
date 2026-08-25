@@ -52,6 +52,7 @@ static func new_game_overwrite(
 					"cancel": "取消",
 					"retryRestore": "继续旧小镇",
 					"confirmOverwrite": "覆盖并开始",
+					"rediagnose": "",
 				},
 			},
 			"draftRevision": 0,
@@ -76,6 +77,11 @@ static func new_game_overwrite(
 				"intent": "session.retry_restore",
 				"enabled": true,
 				"disabledReason": "",
+			},
+			"rediagnose": {
+				"intent": "session.rediagnose_recovery",
+				"enabled": false,
+				"disabledReason": "ACTION_NOT_AVAILABLE_IN_MODE",
 			},
 		},
 		"operation": UI_VIEW_MODEL.idle_operation(),
@@ -137,6 +143,7 @@ static func delete_save(
 					"cancel": "返回",
 					"retryRestore": "",
 					"confirmOverwrite": "确认删除",
+					"rediagnose": "",
 				},
 			},
 			"draftRevision": 0,
@@ -159,6 +166,11 @@ static func delete_save(
 			},
 			"retryRestore": {
 				"intent": "session.retry_restore",
+				"enabled": false,
+				"disabledReason": "ACTION_NOT_AVAILABLE_IN_MODE",
+			},
+			"rediagnose": {
+				"intent": "session.rediagnose_recovery",
 				"enabled": false,
 				"disabledReason": "ACTION_NOT_AVAILABLE_IN_MODE",
 			},
@@ -228,9 +240,10 @@ static func continue_recovery(
 							+ "原存档和损坏证据都会保留。"
 						)
 					),
-					"cancel": "返回",
-					"retryRestore": "修复并继续",
+					"cancel": "仅返回",
+					"retryRestore": "执行修复",
 					"confirmOverwrite": "",
+					"rediagnose": "重新诊断",
 				},
 			},
 			"draftRevision": 0,
@@ -253,6 +266,11 @@ static func continue_recovery(
 			},
 			"retryRestore": {
 				"intent": "session.confirm_recovery",
+				"enabled": true,
+				"disabledReason": "",
+			},
+			"rediagnose": {
+				"intent": "session.rediagnose_recovery",
 				"enabled": true,
 				"disabledReason": "",
 			},

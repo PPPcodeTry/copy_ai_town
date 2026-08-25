@@ -218,6 +218,62 @@ func _test_release_detection_distinguishes_failure_types() -> void:
 		["futureModule"],
 		"未来模块错误指出未知版本键",
 	)
+	var future_release_evidence := _release_evidence(
+		27,
+		"70dcd511461e5266174f3ddb5323d2adf4ecd5caf38cf25d7ba886ead3e3b818",
+		"hashed",
+	)
+	future_release_evidence["recordedRelease"] = "beta7"
+	var future_release := REGISTRY.detect_release(future_release_evidence)
+	_expect_equal(future_release.get("supportStatus"), "read_only", "未来发行版只读识别")
+	_expect_equal(
+		(future_release.get("error", {}) as Dictionary).get("code"),
+		"SAVE_VERSION_NEWER_THAN_SUPPORTED",
+		"未来发行版返回稳定错误码",
+	)
+	_expect_equal(REGISTRY.is_valid_release_marker("beta7"), true, "未来发行版标记可读取")
+	_expect_equal(REGISTRY.is_valid_release_marker(" beta7"), false, "非规范发行版标记拒绝")
+	_expect_equal(
+		REGISTRY.restore_gate(future_release).get("errorCode"),
+		"SAVE_VERSION_NEWER_THAN_SUPPORTED",
+		"正式恢复入口沿用未来发行版的只读拒绝结果",
+	)
+	var extracted_future_world_data := REGISTRY.evidence_from_save(
+		{"schema_version": 3},
+		{
+			"schemaVersion": 2,
+			"worldDataVersion": 5,
+			"state": {},
+		},
+		{},
+		"",
+		{
+			"profile": 2,
+			"agent": 3,
+			"residentPayload": 2,
+			"residentRuntime": 6,
+			"residentMemory": 6,
+		},
+	)
+	_expect_equal(
+		(extracted_future_world_data.get("versions", {}) as Dictionary).get("worldData"),
+		5,
+		"兼容证据读取存档内真实 World Data 版本",
+	)
+	_expect_equal(
+		REGISTRY.detect_release(extracted_future_world_data).get("supportStatus"),
+		"read_only",
+		"未来 World Data 版本在解码前只读拒绝",
+	)
+	var old_payload := REGISTRY.detect_release({
+		"versions": {"residentPayload": 1},
+	})
+	_expect_equal(old_payload.get("supportStatus"), "unsupported", "过旧居民载荷先按版本拒绝")
+	_expect_equal(
+		(old_payload.get("error", {}) as Dictionary).get("code"),
+		"SAVE_VERSION_NO_LONGER_SUPPORTED",
+		"过旧居民载荷不依赖当前 resident_state 结构",
+	)
 
 	var old_evidence := _release_evidence(
 		26,
@@ -239,6 +295,11 @@ func _test_release_detection_distinguishes_failure_types() -> void:
 		(unknown.get("error", {}) as Dictionary).get("type"),
 		"unknown_combination",
 		"未知版本组合不冒充损坏或过旧",
+	)
+	_expect_equal(
+		REGISTRY.restore_gate(unknown).get("errorCode"),
+		"SAVE_VERSION_COMBINATION_UNKNOWN",
+		"未知组合不能回落为普通恢复",
 	)
 
 	var mixed_versions := _release_evidence(

@@ -53,7 +53,11 @@ const VERSION_RULES := {
 		"requiredForDetection": true,
 	},
 	"provider": {"current": 2, "supported": [1, 2], "requiredForDetection": false},
-	"worldData": {"current": 4, "supported": [4], "requiredForDetection": true},
+	"worldData": {
+		"current": SAVE_SCHEMA_REGISTRY.WORLD_DATA_VERSION,
+		"supported": [SAVE_SCHEMA_REGISTRY.WORLD_DATA_VERSION],
+		"requiredForDetection": true,
+	},
 	"worldLog": {"current": 1, "supported": [1], "requiredForDetection": false},
 	"customResidentLibrary": {
 		"current": 1,
@@ -314,21 +318,9 @@ static func detect_release(evidence: Dictionary) -> Dictionary:
 			"version combination is missing",
 		)
 	var versions := versions_value as Dictionary
-	var unknown_versions: Array[String] = []
-	for key_value: Variant in versions:
-		var key := String(key_value)
-		if not VERSION_RULES.has(key):
-			unknown_versions.append(key)
-	unknown_versions.sort()
-	if not unknown_versions.is_empty():
-		return _detection_error(
-			"future_version",
-			STATUS_READ_ONLY,
-			"one or more module versions are not registered",
-			unknown_versions,
-		)
-	var future_versions: Array[String] = []
-	var unsupported_versions: Array[String] = []
+	var explicit_version_check := _detect_explicit_module_versions(versions)
+	if explicit_version_check.get("ok") != true:
+		return explicit_version_check
 	for key_value: Variant in VERSION_RULES:
 		var key := String(key_value)
 		if not versions.has(key):
@@ -342,32 +334,18 @@ static func detect_release(evidence: Dictionary) -> Dictionary:
 				STATUS_INVALID,
 				"version is missing: %s" % key,
 			)
-		var version_value: Variant = versions.get(key)
-		if typeof(version_value) != TYPE_INT:
+	var recorded_release := String(evidence.get("recordedRelease", ""))
+	if not recorded_release.is_empty() and not is_registered_release(recorded_release):
+		if _release_number(recorded_release) > _release_number(_current_release()):
 			return _detection_error(
-				"invalid_evidence",
-				STATUS_INVALID,
-				"version must be an integer: %s" % key,
+				"future_version",
+				STATUS_READ_ONLY,
+				"recorded release is newer than supported",
 			)
-		var rule := VERSION_RULES.get(key, {}) as Dictionary
-		var current := int(rule.get("current", 0))
-		if int(version_value) > current:
-			future_versions.append(key)
-		elif not (rule.get("supported", []) as Array).has(version_value):
-			unsupported_versions.append(key)
-	if not future_versions.is_empty():
 		return _detection_error(
-			"future_version",
-			STATUS_READ_ONLY,
-			"one or more module versions are newer than supported",
-			future_versions,
-		)
-	if not unsupported_versions.is_empty():
-		return _detection_error(
-			"unsupported_version",
-			STATUS_UNSUPPORTED,
-			"one or more module versions are no longer supported",
-			unsupported_versions,
+			"unknown_combination",
+			STATUS_INVALID,
+			"recorded release is not registered",
 		)
 	var section_count_value: Variant = evidence.get("worldSectionCount")
 	var fingerprint_value: Variant = evidence.get("activitySourceFingerprint")
@@ -405,7 +383,6 @@ static func detect_release(evidence: Dictionary) -> Dictionary:
 			STATUS_INVALID,
 			"release evidence does not match a supported contract",
 		)
-	var recorded_release := String(evidence.get("recordedRelease", ""))
 	if not recorded_release.is_empty():
 		if not candidates.has(recorded_release):
 			return _detection_error(
@@ -428,6 +405,37 @@ static func detect_release(evidence: Dictionary) -> Dictionary:
 		"readOnly": false,
 		"error": {},
 	}
+
+
+static func evidence_from_save(
+	manifest: Dictionary,
+	world_snapshot: Dictionary,
+	session_config: Dictionary,
+	resident_path_layout: String = "",
+	module_versions: Dictionary = {},
+) -> Dictionary:
+	var versions := BETA1_TO_BETA6_VERSION_COMBINATION.duplicate(true)
+	versions["world"] = int(world_snapshot.get("schemaVersion", 0))
+	versions["manifest"] = int(manifest.get("schema_version", 0))
+	versions["worldData"] = int(world_snapshot.get("worldDataVersion", 0))
+	for key_value: Variant in module_versions:
+		versions[String(key_value)] = module_versions.get(key_value)
+	var state := world_snapshot.get("state", {}) as Dictionary
+	var activity := state.get("activityRuntime", {}) as Dictionary
+	var evidence := {
+		"versions": versions,
+		"worldSectionCount": state.size(),
+		"activitySourceFingerprint": String(
+			activity.get("sourceFingerprint", ""),
+		),
+		"residentPathLayout": resident_path_layout,
+	}
+	var recorded_release := String(
+		session_config.get("saveRelease", ""),
+	).strip_edges()
+	if not recorded_release.is_empty():
+		evidence["recordedRelease"] = recorded_release
+	return evidence
 
 
 static func migration_path(
@@ -464,6 +472,84 @@ static func migration_path(
 		"currentMigrationIds": _current_migration_ids(),
 		"error": {},
 	}
+
+
+static func current_release() -> String:
+	return _current_release()
+
+
+static func is_registered_release(release_id: String) -> bool:
+	return _release_order().has(release_id)
+
+
+static func is_valid_release_marker(release_id: String) -> bool:
+	var normalized := release_id.strip_edges()
+	return (
+		normalized == release_id
+		and normalized.begins_with("beta")
+		and _release_number(normalized) > 0
+	)
+
+
+static func restore_gate(detection: Dictionary) -> Dictionary:
+	if (
+		detection.get("ok") == true
+		and String(detection.get("supportStatus", "")) in [
+			STATUS_CURRENT,
+			STATUS_SUPPORTED,
+		]
+	):
+		return {"ok": true, "errorCode": "", "retryable": false}
+	var error := detection.get("error", {}) as Dictionary
+	return {
+		"ok": false,
+		"errorCode": String(
+			error.get("code", "SAVE_VERSION_COMBINATION_UNKNOWN"),
+		),
+		"retryable": false,
+		"readOnly": bool(detection.get("readOnly", true)),
+		"supportStatus": String(detection.get("supportStatus", STATUS_INVALID)),
+	}
+
+
+static func _detect_explicit_module_versions(versions: Dictionary) -> Dictionary:
+	var unknown_versions: Array[String] = []
+	for key_value: Variant in versions:
+		var key := String(key_value)
+		if not VERSION_RULES.has(key):
+			unknown_versions.append(key)
+			continue
+		var version_value: Variant = versions.get(key)
+		if typeof(version_value) != TYPE_INT:
+			return _detection_error(
+				"invalid_evidence",
+				STATUS_INVALID,
+				"version must be an integer: %s" % key,
+			)
+		var rule := VERSION_RULES.get(key, {}) as Dictionary
+		if int(version_value) > int(rule.get("current", 0)):
+			return _detection_error(
+				"future_version",
+				STATUS_READ_ONLY,
+				"one or more module versions are newer than supported",
+				[key],
+			)
+		if not (rule.get("supported", []) as Array).has(version_value):
+			return _detection_error(
+				"unsupported_version",
+				STATUS_UNSUPPORTED,
+				"one or more module versions are no longer supported",
+				[key],
+			)
+	unknown_versions.sort()
+	if not unknown_versions.is_empty():
+		return _detection_error(
+			"future_version",
+			STATUS_READ_ONLY,
+			"one or more module versions are not registered",
+			unknown_versions,
+		)
+	return {"ok": true}
 
 
 static func validate_registry() -> Array[String]:
@@ -572,6 +658,15 @@ static func _current_release() -> String:
 	if RELEASES.is_empty():
 		return ""
 	return String((RELEASES.back() as Dictionary).get("id", ""))
+
+
+static func _release_number(release_id: String) -> int:
+	if not release_id.begins_with("beta"):
+		return -1
+	var number := release_id.trim_prefix("beta")
+	if number.is_empty() or not number.is_valid_int():
+		return -1
+	return int(number)
 
 
 static func _current_migration_ids() -> Array[String]:

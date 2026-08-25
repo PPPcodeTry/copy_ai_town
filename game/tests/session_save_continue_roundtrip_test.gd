@@ -215,76 +215,31 @@ func _run() -> void:
 	source_runtime.queue_free()
 	await _wait_frames(4)
 
-	var restore_gateway: Node = GATEWAY.new()
-	var gateway_configuration := restore_gateway.call("configure_session", {
-		"sessionId": session_id,
-		"slotId": slot_id,
-		"saveRevision": 1,
-		"restorePending": true,
-		"openingConfig": session_config.get("openingConfig", {}),
-		"residentIdentities": identities.duplicate(true),
-		"residentBindings": bindings.duplicate(true),
-		"capabilityMode": "formal",
-		"formalReady": true,
-	}, provider_service, request_host) as Dictionary
-	_expect_ok(gateway_configuration, "恢复中的居民网关可配置")
-	var restored_runtime: Node = TOWN_RUNTIME_SCENE.instantiate()
-	_expect_ok(
-		restored_runtime.call("configure_agent_gateway", restore_gateway) as Dictionary,
-		"恢复网关可注入新小镇",
-	)
-	var restored_session_config := {
-		"mode": "continue",
-		"sessionId": session_id,
-		"slotId": slot_id,
-		"saveRevision": 1,
-		"restorePending": true,
-		"openingConfig": session_config.get("openingConfig", {}),
-		"residentIdentities": identities.duplicate(true),
-		"residentBindings": bindings.duplicate(true),
-		"connectedResidents": _resident_names(identities),
-		"worldStartMode": "formal",
-		"capabilityMode": "formal",
-		"source": "runtime",
-		"formalReady": true,
-		"providerFormalReady": true,
-		"internalPlaytest": false,
-		"internalLivePlaytest": false,
-		"requireAgentGateway": true,
-		"useLiveModel": true,
-		"enablePlayerAvatar": false,
-		"avatarInitialMode": "observer",
-		"enableTestUi": false,
-	}
-	_expect_ok(
-		restored_runtime.call("configure_session", restored_session_config) as Dictionary,
-		"正式继续游戏配置可在小镇入树前完成",
-	)
+	var prepared := await _prepare_continue_runtime({
+		"providerService": provider_service,
+		"requestHost": request_host,
+		"testRoot": test_root,
+		"sessionConfig": session_config,
+		"identities": identities,
+		"bindings": bindings,
+		"context": context,
+	})
+	_expect_ok(prepared.get("gatewayConfiguration", {}), "恢复中的居民网关可配置")
+	_expect_ok(prepared.get("gatewayInjection", {}), "恢复网关可注入新小镇")
+	_expect_ok(prepared.get("runtimeConfiguration", {}), "正式继续游戏配置可在小镇入树前完成")
+	_expect_ok(prepared.get("startup", {}), "恢复中的正式小镇完成场景挂载")
+	_expect_ok(prepared.get("storeConfiguration", {}), "恢复服务可复用测试存档目录")
+	_expect_ok(prepared.get("serviceConfiguration", {}), "成对恢复服务可配置")
+	var restore_gateway: Node = prepared.get("gateway")
+	var restored_runtime: Node = prepared.get("runtime")
+	var restored_world: RefCounted = prepared.get("world")
+	var restored_agent: RefCounted = prepared.get("agent")
+	var restore_service: RefCounted = prepared.get("service")
 	_expect_equal(
 		restored_runtime.call("_viewport_size_or_default"),
 		Vector2(1920.0, 1080.0),
-		"小镇入树前使用项目逻辑分辨率，不访问未挂载视口",
+		"正式小镇使用项目逻辑分辨率",
 	)
-	root.add_child(restored_runtime)
-	await _wait_frames(5)
-	_expect_ok(
-		restored_runtime.call("get_startup_result") as Dictionary,
-		"恢复中的正式小镇完成场景挂载",
-	)
-	var restored_world: RefCounted = restored_runtime.call("get_world_runtime")
-	var restored_agent: RefCounted = restore_gateway.call("get_agent_save_participant")
-	var restore_service: RefCounted = SESSION_UI_SERVICE.new()
-	_expect_ok(
-		restore_service.call("configure_test_store_root", test_root) as Dictionary,
-		"恢复服务可复用测试存档目录",
-	)
-	_expect_ok(restore_service.call(
-		"configure",
-		restored_runtime,
-		restored_world,
-		restored_agent,
-		restored_session_config,
-	) as Dictionary, "成对恢复服务可配置")
 	var restored := restore_service.call(
 		"continue_revision",
 		session_id,
@@ -365,6 +320,40 @@ func _run() -> void:
 	).duplicate(true)
 	restored_runtime.queue_free()
 	await _wait_frames(4)
+	var reopen_request := {
+		"providerService": provider_service,
+		"requestHost": request_host,
+		"testRoot": test_root,
+		"sessionConfig": session_config,
+		"identities": identities,
+		"bindings": bindings,
+		"context": repaired_context,
+		"worldData": world_data,
+	}
+	var reopened := await _reopen_repaired_revision(reopen_request)
+	_expect_ok(reopened, "修复后的修订可由全新 Runtime 重开")
+	_expect_equal(
+		(reopened.get("restoredContext", {}) as Dictionary).get("save_revision"),
+		3,
+		"全新 Runtime 读取修复发布的修订 3",
+	)
+	_expect_equal(
+		(reopened.get("savedContext", {}) as Dictionary).get("save_revision"),
+		4,
+		"重开后继续运行并再次保存为修订 4",
+	)
+	var final_catalog := (recovery_case.get("catalog") as RefCounted).call(
+		"get_catalog",
+		recovery_case.get("slotDefinitions", []),
+	) as Dictionary
+	_expect_ok(final_catalog, "重开并再次保存后启动目录仍可检查")
+	var final_slot := final_catalog.get("continueSlot", {}) as Dictionary
+	_expect_equal(final_slot.get("state"), "healthy", "再次保存后槽位保持健康")
+	_expect_equal(
+		(final_slot.get("summary", {}) as Dictionary).get("saveRevision"),
+		4,
+		"再次启动会选择修复后继续产生的最新修订",
+	)
 	_expect_ok(
 		cleanup_agent.call("delete_game", cleanup_context) as Dictionary,
 		"闭环测试居民存档可清理",
@@ -372,6 +361,163 @@ func _run() -> void:
 	_expect_ok(store.call("cleanup_test_root") as Dictionary, "闭环测试世界存档可清理")
 	request_host.queue_free()
 	_finish()
+
+
+func _prepare_continue_runtime(request: Dictionary) -> Dictionary:
+	var context := request.get("context", {}) as Dictionary
+	var revision := int(context.get("save_revision", -1))
+	var slot_id := String(context.get("slot_id", ""))
+	var session_id := String(context.get("session_id", ""))
+	var session_config := request.get("sessionConfig", {}) as Dictionary
+	var identities := request.get("identities", []) as Array
+	var bindings := request.get("bindings", []) as Array
+	var steps := {}
+	var gateway: Node = GATEWAY.new()
+	steps["gatewayConfiguration"] = gateway.call("configure_session", {
+		"sessionId": session_id,
+		"slotId": slot_id,
+		"saveRevision": revision,
+		"restorePending": true,
+		"openingConfig": session_config.get("openingConfig", {}),
+		"residentIdentities": identities.duplicate(true),
+		"residentBindings": bindings.duplicate(true),
+		"capabilityMode": "formal",
+		"formalReady": true,
+	}, request.get("providerService"), request.get("requestHost")) as Dictionary
+	if (steps.get("gatewayConfiguration") as Dictionary).get("ok") != true:
+		return steps
+	var runtime: Node = TOWN_RUNTIME_SCENE.instantiate()
+	steps["gatewayInjection"] = runtime.call(
+		"configure_agent_gateway",
+		gateway,
+	) as Dictionary
+	if (steps.get("gatewayInjection") as Dictionary).get("ok") != true:
+		runtime.free()
+		return steps
+	var runtime_config := {
+		"mode": "continue",
+		"sessionId": session_id,
+		"slotId": slot_id,
+		"saveRevision": revision,
+		"restorePending": true,
+		"openingConfig": session_config.get("openingConfig", {}),
+		"residentIdentities": identities.duplicate(true),
+		"residentBindings": bindings.duplicate(true),
+		"connectedResidents": _resident_names(identities),
+		"worldStartMode": "formal",
+		"capabilityMode": "formal",
+		"source": "runtime",
+		"formalReady": true,
+		"providerFormalReady": true,
+		"internalPlaytest": false,
+		"internalLivePlaytest": false,
+		"requireAgentGateway": true,
+		"useLiveModel": true,
+		"enablePlayerAvatar": false,
+		"avatarInitialMode": "observer",
+		"enableTestUi": false,
+	}
+	steps["runtimeConfiguration"] = runtime.call(
+		"configure_session",
+		runtime_config,
+	) as Dictionary
+	if (steps.get("runtimeConfiguration") as Dictionary).get("ok") != true:
+		runtime.free()
+		return steps
+	root.add_child(runtime)
+	await _wait_frames(5)
+	steps["startup"] = runtime.call("get_startup_result") as Dictionary
+	if (steps.get("startup") as Dictionary).get("ok") != true:
+		runtime.queue_free()
+		await _wait_frames(4)
+		return steps
+	var service: RefCounted = SESSION_UI_SERVICE.new()
+	steps["storeConfiguration"] = service.call(
+		"configure_test_store_root",
+		String(request.get("testRoot", "")),
+	) as Dictionary
+	if (steps.get("storeConfiguration") as Dictionary).get("ok") != true:
+		runtime.queue_free()
+		await _wait_frames(4)
+		return steps
+	steps["serviceConfiguration"] = service.call(
+		"configure",
+		runtime,
+		runtime.call("get_world_runtime"),
+		gateway.call("get_agent_save_participant"),
+		runtime_config,
+	) as Dictionary
+	if (steps.get("serviceConfiguration") as Dictionary).get("ok") != true:
+		runtime.queue_free()
+		await _wait_frames(4)
+		return steps
+	steps.merge({
+		"gateway": gateway,
+		"runtime": runtime,
+		"world": runtime.call("get_world_runtime"),
+		"agent": gateway.call("get_agent_save_participant"),
+		"service": service,
+		"runtimeConfig": runtime_config,
+	}, true)
+	return steps
+
+
+func _reopen_repaired_revision(request: Dictionary) -> Dictionary:
+	var prepared := await _prepare_continue_runtime(request)
+	var service_result := prepared.get("serviceConfiguration", {}) as Dictionary
+	if service_result.get("ok") != true:
+		return service_result
+	var context := request.get("context", {}) as Dictionary
+	var revision := int(context.get("save_revision", -1))
+	var session_id := String(context.get("session_id", ""))
+	var identities := request.get("identities", []) as Array
+	var world_data := request.get("worldData", {}) as Dictionary
+	var gateway: Node = prepared.get("gateway")
+	var runtime: Node = prepared.get("runtime")
+	var service: RefCounted = prepared.get("service")
+	var restored := service.call(
+		"continue_revision",
+		session_id,
+		revision,
+		world_data,
+		identities,
+		gateway,
+	) as Dictionary
+	if restored.get("ok") != true:
+		runtime.queue_free()
+		await _wait_frames(4)
+		return restored
+	var restored_context := restored.get("context", {}) as Dictionary
+	var completed := runtime.call(
+		"complete_restored_session",
+		restored_context,
+	) as Dictionary
+	if completed.get("ok") != true:
+		runtime.queue_free()
+		await _wait_frames(4)
+		return completed
+	var world: RefCounted = runtime.call("get_world_runtime")
+	var before_time := world.call("get_time") as Dictionary
+	var advanced := world.call("advance", 1.0) as Dictionary
+	if advanced.get("ok") != true or world.call("get_time") == before_time:
+		runtime.queue_free()
+		await _wait_frames(4)
+		return {"ok": false, "errorCode": "TEST_REPAIRED_WORLD_DID_NOT_ADVANCE"}
+	var saved := service.call("create_save") as Dictionary
+	if saved.get("ok") == true:
+		var published_context := saved.get("context", {}) as Dictionary
+		var recorded := runtime.call(
+			"record_published_save",
+			published_context,
+		) as Dictionary
+		if recorded.get("ok") != true:
+			saved = recorded
+		else:
+			saved["restoredContext"] = restored_context.duplicate(true)
+			saved["savedContext"] = published_context.duplicate(true)
+	runtime.queue_free()
+	await _wait_frames(4)
+	return saved
 
 
 func _inspect_recovery_case(

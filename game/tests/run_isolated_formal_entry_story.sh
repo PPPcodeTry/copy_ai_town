@@ -11,6 +11,8 @@ temp_prefix="${AI_TOWN_ISOLATED_TEMP_PREFIX:-ai-town-formal-story}"
 failure_marker="${AI_TOWN_ISOLATED_FAILURE_MARKER:-ISOLATED_FORMAL_ENTRY_STORY_FAIL}"
 success_marker="${AI_TOWN_ISOLATED_SUCCESS_MARKER:-ISOLATED_FORMAL_ENTRY_STORY_PASS}"
 fixture_root="${AI_TOWN_ISOLATED_FIXTURE_ROOT:-}"
+fixture_ids_text="${AI_TOWN_ISOLATED_FIXTURE_IDS:-}"
+fixture_root_base="${AI_TOWN_ISOLATED_FIXTURE_ROOT_BASE:-}"
 qa_name="$qa_prefix-$$"
 temp_base="${TMPDIR:-/tmp}"
 if [[
@@ -23,6 +25,27 @@ fi
 if [[ -n "$fixture_root" && "$fixture_root" != "$project_root/tests/fixtures/"* ]]; then
 	print -u2 "隔离测试样本必须位于 tests/fixtures 下。"
 	exit 2
+fi
+if [[ -n "$fixture_ids_text" ]]; then
+	if [[
+		-n "$fixture_root"
+		|| "$fixture_root_base" != "$project_root/tests/fixtures/"*
+	]]; then
+		print -u2 "批量隔离测试需要唯一的 tests/fixtures 样本根目录。"
+		exit 2
+	fi
+	fixture_ids=("${(@s: :)fixture_ids_text}")
+	for fixture_id in "${fixture_ids[@]}"; do
+		if [[
+			"$fixture_id" == *[^a-z0-9-]*
+			|| ! -d "$fixture_root_base/$fixture_id"
+		]]; then
+			print -u2 "批量隔离测试样本无效：$fixture_id"
+			exit 2
+		fi
+	done
+else
+	fixture_ids=()
 fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
 	default_userdata_root="${HOME}/Library/Application Support/Godot/app_userdata"
@@ -94,7 +117,7 @@ fi
 /usr/bin/perl -pi -e \
 	"s/^config\\/name=.*/config\\/name=\"$qa_name\"/" \
 	"$temp_game/project.godot"
-if [[ -n "$fixture_root" ]]; then
+if [[ -n "$fixture_root" && ${#fixture_ids[@]} -eq 0 ]]; then
 	mkdir -p "$qa_user_root"
 	cp -R "$fixture_root/." "$qa_user_root/"
 fi
@@ -130,44 +153,62 @@ if rg -q '^ERROR:' "$import_log_path"; then
 	exit 3
 fi
 
-set +e
-/usr/bin/perl -e \
-	'$timeout = shift @ARGV; alarm $timeout; exec @ARGV;' \
-	"$timeout_seconds" \
-	"$godot_bin" \
-	--headless \
-	--path "$temp_game" \
-	--script "$test_script" \
-	>"$log_path" 2>&1
-exit_code=$?
-set -e
+run_story() {
+	local fixture_id="$1"
+	local story_log="$log_path"
+	local command_prefix=()
+	if [[ -n "$fixture_id" ]]; then
+		story_log="$temp_root/formal-entry-$fixture_id.log"
+		command_prefix=(env "AI_TOWN_HISTORICAL_FIXTURE_ID=$fixture_id")
+		rm -rf "$qa_user_root"
+		mkdir -p "$qa_user_root"
+		cp -R "$fixture_root_base/$fixture_id/." "$qa_user_root/"
+		print "\n== 历史存档升级：$fixture_id → beta6 =="
+	fi
+	set +e
+	"${command_prefix[@]}" /usr/bin/perl -e \
+		'$timeout = shift @ARGV; alarm $timeout; exec @ARGV;' \
+		"$timeout_seconds" \
+		"$godot_bin" \
+		--headless \
+		--path "$temp_game" \
+		--script "$test_script" \
+		>"$story_log" 2>&1
+	local exit_code=$?
+	set -e
 
-if (( exit_code != 0 )); then
-	print -u2 \
-		"$failure_marker exit=$exit_code timeout=${timeout_seconds}s"
-	tail -n 120 "$log_path" >&2
-	exit "$exit_code"
-fi
-if rg -q 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$log_path"; then
-	print -u2 "$failure_marker script_error=true"
-	rg -n 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$log_path" >&2
-	exit 3
-fi
-# 精确允许列表：本故事测试会故意移除 Gateway 验证失败路径，
-# 生产代码经 push_error 打出下面这一条（Godot 4.7 中 push_error
-# 输出即行首 ERROR:）。除这一条外的任何引擎错误仍判失败。
-allowed_error_pattern="${AI_TOWN_ISOLATED_ALLOWED_ERROR_PATTERN:-^ERROR: Agent Gateway 初始化失败：当前 session 要求正式 Agent Gateway。$}"
-unexpected_engine_errors="$(rg '^ERROR:' "$log_path" | rg -v "$allowed_error_pattern" || true)"
-if [[ -n "$unexpected_engine_errors" ]]; then
-	print -u2 "$failure_marker engine_error=true"
-	print -r -- "$unexpected_engine_errors" >&2
-	exit 3
-fi
-if ! rg -Fq "$pass_marker" "$log_path"; then
-	print -u2 "$failure_marker missing_pass_marker=true"
-	tail -n 120 "$log_path" >&2
-	exit 4
-fi
+	if (( exit_code != 0 )); then
+		print -u2 \
+			"$failure_marker exit=$exit_code timeout=${timeout_seconds}s"
+		tail -n 120 "$story_log" >&2
+		return "$exit_code"
+	fi
+	if rg -q 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$story_log"; then
+		print -u2 "$failure_marker script_error=true"
+		rg -n 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$story_log" >&2
+		return 3
+	fi
+	# 除精确允许的故事错误外，任何引擎错误都判失败。
+	local allowed_error_pattern="${AI_TOWN_ISOLATED_ALLOWED_ERROR_PATTERN:-^ERROR: Agent Gateway 初始化失败：当前 session 要求正式 Agent Gateway。$}"
+	local unexpected_engine_errors="$(rg '^ERROR:' "$story_log" | rg -v "$allowed_error_pattern" || true)"
+	if [[ -n "$unexpected_engine_errors" ]]; then
+		print -u2 "$failure_marker engine_error=true"
+		print -r -- "$unexpected_engine_errors" >&2
+		return 3
+	fi
+	if ! rg -Fq "$pass_marker" "$story_log"; then
+		print -u2 "$failure_marker missing_pass_marker=true"
+		tail -n 120 "$story_log" >&2
+		return 4
+	fi
+	rg -F "$pass_marker" "$story_log" | tail -n 1
+	print "$success_marker"
+}
 
-rg -F "$pass_marker" "$log_path" | tail -n 1
-print "$success_marker"
+if (( ${#fixture_ids[@]} == 0 )); then
+	run_story ""
+else
+	for fixture_id in "${fixture_ids[@]}"; do
+		run_story "$fixture_id"
+	done
+fi

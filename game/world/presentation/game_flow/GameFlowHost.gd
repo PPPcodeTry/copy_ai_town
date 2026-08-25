@@ -20,6 +20,9 @@ const TOWN_UI_RUNTIME_HOST_SCRIPT_PATH := (
 const SESSION_UI_SERVICE := preload(
 	"res://world/presentation/session/TownSessionUiService.gd"
 )
+const SAVE_COMPATIBILITY := preload(
+	"res://world/presentation/session/TownSaveCompatibilityRegistry.gd"
+)
 const SESSION_SAVE_STORE := preload(
 	"res://world/presentation/session/TownSessionSaveStore.gd"
 )
@@ -1828,7 +1831,7 @@ func _on_startup_intent_requested(intent: StringName, payload: Dictionary) -> vo
 					String(selected_slot.get("state", "")) != "empty"
 					and not bool(route_payload.get("overwriteConfirmed", false))
 				):
-					var existing_save := _discover_startup_slot(slot_id)
+					var existing_save := _discover_startup_slot_for_overwrite(slot_id)
 					if not bool(existing_save.get("ok", false)):
 						_publish_startup_action_failure(intent, existing_save)
 						return
@@ -2271,6 +2274,8 @@ func _on_new_game_overwrite_intent_requested(
 	match String(intent):
 		"session.cancel_new_game_overwrite", "session.cancel_continue_recovery":
 			_close_new_game_overwrite()
+		"session.rediagnose_recovery":
+			_rediagnose_continue_recovery()
 		"save.cancel_delete_slot":
 			_close_new_game_overwrite()
 			_open_startup_load_game("load")
@@ -2297,6 +2302,35 @@ func _on_new_game_overwrite_intent_requested(
 			_last_result = _failure("SESSION_OVERWRITE_INTENT_UNSUPPORTED", false)
 
 
+func _rediagnose_continue_recovery() -> void:
+	if _pending_save_handling_mode != "continue_recovery":
+		_last_result = _failure("SESSION_RECOVERY_DIAGNOSIS_NOT_AUTHORIZED", false)
+		return
+	var summary := (
+		_pending_new_game_discovery.get("summary", {}) as Dictionary
+	).duplicate(true)
+	var slot_id := String(summary.get("slotId", "")).strip_edges()
+	if slot_id.is_empty():
+		_last_result = _failure("STARTUP_SAVE_SLOT_ID_INVALID", false)
+		return
+	var route_origin := _pending_save_handling_origin
+	var inspected := _discover_startup_slot(slot_id, true)
+	_last_result = inspected.duplicate(true)
+	if not bool(inspected.get("ok", false)):
+		_close_new_game_overwrite()
+		_publish_startup_action_failure(
+			&"session.rediagnose_recovery",
+			inspected,
+		)
+		return
+	if bool(inspected.get("requiresRecoveryConfirmation", false)):
+		_open_continue_recovery(inspected, route_origin)
+		return
+	_close_new_game_overwrite()
+	if route_origin == "load_game":
+		_open_startup_load_game("load")
+
+
 func _confirm_new_game_overwrite() -> void:
 	if not is_instance_valid(_startup_overwrite_page):
 		_last_result = _failure("STARTUP_OVERWRITE_HOST_UNAVAILABLE", false)
@@ -2304,7 +2338,7 @@ func _confirm_new_game_overwrite() -> void:
 	var expected_summary := (
 		_pending_new_game_discovery.get("summary", {}) as Dictionary
 	)
-	var latest := _discover_startup_slot(
+	var latest := _discover_startup_slot_for_overwrite(
 		String(expected_summary.get("slotId", "")),
 	)
 	if not bool(latest.get("ok", false)):
@@ -4996,7 +5030,7 @@ func _archive_confirmed_formal_slot() -> Dictionary:
 	if target_slot_id.is_empty():
 		return _failure("STARTUP_SAVE_SLOT_ID_INVALID", false)
 	if not bool(_new_game_route_context.get("overwriteConfirmed", false)):
-		var unexpected_save := _discover_startup_slot(target_slot_id)
+		var unexpected_save := _discover_startup_slot_for_overwrite(target_slot_id)
 		if bool(unexpected_save.get("ok", false)):
 			return _failure("FORMAL_SLOT_OVERWRITE_CONFIRMATION_REQUIRED", false)
 		if String(unexpected_save.get("errorCode", "")) not in [
@@ -5021,7 +5055,7 @@ func _archive_confirmed_formal_slot() -> Dictionary:
 	if not expected_value is Dictionary:
 		return _failure("FORMAL_SLOT_ARCHIVE_CONTEXT_INVALID", false)
 	var expected := expected_value as Dictionary
-	var latest := _discover_startup_slot(target_slot_id)
+	var latest := _discover_startup_slot_for_overwrite(target_slot_id)
 	if not bool(latest.get("ok", false)):
 		return latest
 	var latest_summary := latest.get("summary", {}) as Dictionary
@@ -5062,6 +5096,12 @@ func _start_formal_continue(
 	)
 	if not bool(discovery.get("ok", false)):
 		_publish_startup_result(discovery)
+		return
+	var compatibility_gate := SAVE_COMPATIBILITY.restore_gate(
+		discovery.get("compatibility", {}) as Dictionary,
+	)
+	if compatibility_gate.get("ok") != true:
+		_publish_startup_result(compatibility_gate)
 		return
 	if (
 		bool(discovery.get("requiresRecoveryConfirmation", false))
@@ -5320,20 +5360,40 @@ func _on_formal_continue_provider_health_completed(
 		_discard_pending_runtime()
 		_publish_startup_result(service_result)
 		return
-	var restored := restore_service.call(
-		"continue_revision",
-		session_id,
-		restore_revision,
-		world_data,
-		identities,
-		_gateway,
-	) as Dictionary
+	var recovery_plan := (
+		discovery.get("recoveryPlan", {}) as Dictionary
+	).duplicate(true)
+	var restored: Dictionary
+	if recovery_plan.is_empty():
+		restored = restore_service.restore_discovered_revision(
+			discovery,
+			world_data,
+			identities,
+			_gateway,
+			{
+				"slotDefinitions": FORMAL_SLOT_DEFINITIONS.duplicate(true),
+				"residentMessages": (
+					discovery.get("residentMessages", []) as Array
+				).duplicate(true),
+			},
+			_startup_save_catalog,
+		)
+	else:
+		restored = restore_service.call(
+			"continue_revision",
+			session_id,
+			restore_revision,
+			world_data,
+			identities,
+			_gateway,
+		) as Dictionary
 	if not bool(restored.get("ok", false)):
 		_discard_pending_runtime()
 		_publish_startup_result(restored)
 		return
+	var upgraded_on_restore := bool(restored.get("completedByUpgrade", false))
 	_advance_town_entry_loading(0.88, "正在布置小镇…")
-	if runtime.has_method("complete_restored_session"):
+	if not upgraded_on_restore and runtime.has_method("complete_restored_session"):
 		var completion := runtime.call(
 			"complete_restored_session",
 			restored.get("context", {}) as Dictionary,
@@ -5342,9 +5402,6 @@ func _on_formal_continue_provider_health_completed(
 			_discard_pending_runtime()
 			_publish_startup_result(completion)
 			return
-	var recovery_plan := (
-		discovery.get("recoveryPlan", {}) as Dictionary
-	).duplicate(true)
 	if not recovery_plan.is_empty():
 		if not bool(discovery.get("recoveryConfirmed", false)):
 			_discard_pending_runtime()
@@ -6871,22 +6928,27 @@ func _discover_startup_slot(slot_id: String, include_config := false) -> Diction
 	var catalog := _startup_catalog_snapshot()
 	if not bool(catalog.get("ok", false)):
 		return catalog
-	for slot_value: Variant in catalog.get("slots", []) as Array:
-		if not slot_value is Dictionary:
-			continue
-		var slot := slot_value as Dictionary
-		if String(slot.get("slotId", "")) != slot_id:
-			continue
-		if not bool(slot.get("continueAvailable", false)):
-			var error_code := String(slot.get("errorCode", "")).strip_edges()
-			if error_code.is_empty():
-				error_code = "SESSION_SAVE_NO_PUBLISHED_REVISION"
-			return _failure(
-				error_code,
-				false,
-			)
-		return _catalog_slot_discovery(slot, include_config)
-	return _failure("STARTUP_SAVE_SLOT_ID_INVALID", false)
+	var slot := _startup_slot_by_id(catalog, slot_id)
+	if slot.is_empty():
+		return _failure("STARTUP_SAVE_SLOT_ID_INVALID", false)
+	if not bool(slot.get("continueAvailable", false)):
+		var error_code := String(slot.get("errorCode", "")).strip_edges()
+		if error_code.is_empty():
+			error_code = "SESSION_SAVE_NO_PUBLISHED_REVISION"
+		return _failure(error_code, false)
+	return _catalog_slot_discovery(slot, include_config)
+
+
+func _discover_startup_slot_for_overwrite(slot_id: String) -> Dictionary:
+	var catalog := _startup_catalog_snapshot()
+	if not bool(catalog.get("ok", false)):
+		return catalog
+	var slot := _startup_slot_by_id(catalog, slot_id)
+	if slot.is_empty():
+		return _failure("STARTUP_SAVE_SLOT_ID_INVALID", false)
+	if String(slot.get("state", "empty")) == "empty":
+		return _failure("SESSION_SAVE_NO_PUBLISHED_REVISION", false)
+	return _catalog_slot_discovery(slot, false)
 
 
 func _catalog_slot_discovery(slot: Dictionary, include_config: bool) -> Dictionary:
@@ -6922,6 +6984,12 @@ func _catalog_slot_discovery(slot: Dictionary, include_config: bool) -> Dictiona
 		).duplicate(true),
 		"residentMessages": (
 			slot.get("residentMessages", []) as Array
+		).duplicate(true),
+		"compatibilityEvidence": (
+			slot.get("compatibilityEvidence", {}) as Dictionary
+		).duplicate(true),
+		"compatibility": (
+			slot.get("compatibility", {}) as Dictionary
 		).duplicate(true),
 	}
 	if include_config:

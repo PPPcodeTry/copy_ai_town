@@ -12,8 +12,8 @@ export AI_TOWN_PROVIDER_TEST_NO_NETWORK=1
 start_at="${AI_TOWN_FORMAL_RELEASE_START_AT:-1}"
 end_at="${AI_TOWN_FORMAL_RELEASE_END_AT:-0}"
 skip_indices=",${AI_TOWN_FORMAL_RELEASE_SKIP_INDICES:-},"
-# 慢速档(aya 2026-08-06 批准):FAST=1 时本地快速链跳过下列最慢五项,
-# 批次收官链与 CI 全量跑。required_tests 清单不受影响(测试仍注册)。
+# 慢速档(aya 2026-08-06 批准):FAST=1 时本地快速链跳过下列最慢四项，
+# main、手动运行和批次收官链仍全量跑。required_tests 清单不受影响。
 fast_mode="${AI_TOWN_FORMAL_RELEASE_FAST:-0}"
 slow_lane=(
 	"res://tests/town_world_foundation_test.gd"
@@ -38,8 +38,9 @@ checks=(
 	"res://tests/town_activity_test.gd|TOWN_ACTIVITY_PASS"
 	"res://tests/town_resident_content_test.gd|TOWN_RESIDENT_CONTENT_PASS|392"
 	"res://tests/town_world_save_test.gd|TOWN_WORLD_SAVE_PASS|177"
-	"res://tests/session_save_continue_roundtrip_test.gd|SESSION_SAVE_CONTINUE_ROUNDTRIP_PASS|52"
-	"res://tests/town_save_compatibility_registry_test.gd|TOWN_SAVE_COMPATIBILITY_REGISTRY_PASS|49"
+	"res://tests/session_save_continue_roundtrip_test.gd|SESSION_SAVE_CONTINUE_ROUNDTRIP_PASS|58"
+	"res://tests/save_recovery_confirmation_test.gd|SAVE_RECOVERY_CONFIRMATION_PASS|14"
+	"res://tests/town_save_compatibility_registry_test.gd|TOWN_SAVE_COMPATIBILITY_REGISTRY_PASS|59"
 	"res://tests/windows_directory_cleanup_test.gd|WINDOWS_DIRECTORY_CLEANUP_PASS|56"
 	"res://tests/startup_social_feedback_test.gd|STARTUP_SOCIAL_FEEDBACK_PASS|65"
 	"res://ui/startup/tests/StartupTypographyContractTest.gd|STARTUP_TYPOGRAPHY_CONTRACT_PASS|54"
@@ -63,7 +64,7 @@ for check in "${checks[@]}"; do
 	pass_marker="${fields[2]}"
 	min_checks="${fields[3]:-}"
 	if [[ "$fast_mode" == "1" ]] && (( ${slow_lane[(Ie)$test_script]} )); then
-		print "\n== 快速链跳过慢速档 $index/${#checks[@]}: $test_script (收官链与 CI 全跑) =="
+		print "\n== 快速链跳过慢速档 $index/${#checks[@]}: $test_script (main／手动／收官全跑) =="
 		skipped=$((skipped + 1))
 		continue
 	fi

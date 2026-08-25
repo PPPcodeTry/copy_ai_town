@@ -25,13 +25,17 @@ const RUNTIME_GATE := preload(
 const COORDINATOR := preload(
 	"res://world/presentation/session/TownSessionSaveCoordinator.gd"
 )
+const SESSION_UI_SERVICE := preload(
+	"res://world/presentation/session/TownSessionUiService.gd"
+)
+const COMPATIBILITY := preload(
+	"res://world/presentation/session/TownSaveCompatibilityRegistry.gd"
+)
 const SCHEMA_REGISTRY := preload(
 	"res://world/presentation/session/TownSaveSchemaRegistry.gd"
 )
 
-const SLOT_ID := "roundtrip-slot-beta2"
 const EMPTY_SLOT_ID := "historical-empty-slot"
-const SESSION_ID := "roundtrip-session-beta2"
 const FIRST_REVISION := 1
 const ACTIVITY_MIGRATION_ID := "2026-08-12-public-dining-day-routine"
 const PLACE_SERVICE_OWNER_MIGRATION_ID := (
@@ -43,6 +47,9 @@ const AGENT_SHOP_OWNER_MIGRATION_ID := (
 
 var _failures: Array[String] = []
 var _checks := 0
+var _release_id := "beta2"
+var _slot_id := "roundtrip-slot-beta2"
+var _session_id := "roundtrip-session-beta2"
 
 
 func _initialize() -> void:
@@ -52,21 +59,82 @@ func _initialize() -> void:
 func _run() -> void:
 	DisplayServer.window_set_size(Vector2i(1920, 1080))
 	root.size = Vector2i(1920, 1080)
+	var requested_release := OS.get_environment(
+		"AI_TOWN_HISTORICAL_FIXTURE_ID",
+	).strip_edges()
+	if not requested_release.is_empty():
+		_release_id = requested_release
+	if _release_id not in ["beta1", "beta2", "beta3", "beta4", "beta5"]:
+		_expect(false, "历史升级故事只接受 beta1 至 beta5")
+		_finish()
+		return
+	_slot_id = "roundtrip-slot-%s" % _release_id
+	_session_id = "roundtrip-session-%s" % _release_id
 	var store: RefCounted = STORE.new()
 	var catalog: RefCounted = STARTUP_CATALOG.new()
 	_expect_ok(
 		catalog.call("configure", store, "user://town_startup_profile.json", AGENT_STORE.new()) as Dictionary,
 		"启动存档目录可配置",
 	)
-	var startup := catalog.call("get_catalog", [
-		{"slotId": SLOT_ID, "displayName": "历史存档"},
+	var slot_definitions := [
+		{"slotId": _slot_id, "displayName": "历史存档"},
 		{"slotId": EMPTY_SLOT_ID, "displayName": "空槽位"},
-	]) as Dictionary
-	_expect_ok(startup, "beta2 存档可由正式启动目录发现")
-	_expect_equal(startup.get("continueAvailable"), true, "beta2 存档可继续")
+	]
+	var startup := catalog.call("get_catalog", slot_definitions) as Dictionary
+	_expect_ok(startup, "%s 存档可由正式启动目录发现" % _release_id)
+	_expect_equal(startup.get("continueAvailable"), true, "%s 存档可继续" % _release_id)
 	var slot := startup.get("continueSlot", {}) as Dictionary
 	_expect_equal(slot.get("state"), "healthy", "旧格式不会被误判为坏档")
 	_expect_equal(slot.get("agentIntegrity"), "agent_snapshot_verified", "World 与 Agent 完整对通过检查")
+	var agent_slot_path := "user://agent_saves/%s/slot.json" % _slot_id
+	var original_agent_slot := _read_json(agent_slot_path)
+	var future_agent_slot := original_agent_slot.duplicate(true)
+	future_agent_slot["format_version"] = 4
+	_expect_ok(_write_json(agent_slot_path, future_agent_slot), "可构造未来 Agent 版本证据")
+	var future_catalog := catalog.call("get_catalog", slot_definitions) as Dictionary
+	_expect_ok(future_catalog, "未来 Agent 版本仍可只读列入目录")
+	var future_slot := (future_catalog.get("slots", []) as Array)[0] as Dictionary
+	_expect_equal(future_slot.get("state"), "read_only", "未来 Agent 版本不判为坏档")
+	_expect_equal(
+		future_slot.get("errorCode"),
+		"SAVE_VERSION_NEWER_THAN_SUPPORTED",
+		"未来 Agent 版本返回稳定只读错误",
+	)
+	_expect_equal(
+		(future_slot.get("recoveryPlan", {}) as Dictionary).is_empty(),
+		true,
+		"未来 Agent 版本不会生成坏档修复计划",
+	)
+	_expect_ok(_write_json(agent_slot_path, original_agent_slot), "恢复历史 Agent 版本证据")
+	startup = catalog.call("get_catalog", slot_definitions) as Dictionary
+	slot = startup.get("continueSlot", {}) as Dictionary
+	var manifest_path := (
+		"user://town_session_saves/slots/%s/manifests/%020d.json"
+		% [_slot_id, FIRST_REVISION]
+	)
+	var original_manifest := _read_json(manifest_path)
+	var future_manifest := original_manifest.duplicate(true)
+	future_manifest["schema_version"] = 4
+	_expect_ok(_write_json(manifest_path, future_manifest), "可构造未来 manifest 版本证据")
+	var future_manifest_catalog := catalog.call("get_catalog", slot_definitions) as Dictionary
+	_expect_ok(future_manifest_catalog, "未来 manifest 可按外层版本只读列入目录")
+	var future_manifest_slot := (
+		future_manifest_catalog.get("slots", []) as Array
+	)[0] as Dictionary
+	_expect_equal(future_manifest_slot.get("state"), "read_only", "未来 manifest 不判为坏档")
+	_expect_equal(
+		future_manifest_slot.get("errorCode"),
+		"SAVE_VERSION_NEWER_THAN_SUPPORTED",
+		"未来 manifest 返回稳定只读错误",
+	)
+	_expect_equal(
+		(future_manifest_slot.get("recoveryPlan", {}) as Dictionary).is_empty(),
+		true,
+		"未来 manifest 不读取当前 World 结构，也不生成修复计划",
+	)
+	_expect_ok(_write_json(manifest_path, original_manifest), "恢复历史 manifest 版本证据")
+	startup = catalog.call("get_catalog", slot_definitions) as Dictionary
+	slot = startup.get("continueSlot", {}) as Dictionary
 	var session_config := (slot.get("sessionConfig", {}) as Dictionary).duplicate(true)
 	var identities := (session_config.get("residentIdentities", []) as Array).duplicate(true)
 	_expect_equal(identities.size(), 15, "历史样本保留全部居民")
@@ -82,7 +150,7 @@ func _run() -> void:
 		"providerConfigs": {},
 	}, provider_host) as Dictionary, "离线模型服务可用于历史存档恢复")
 
-	var first := await _restore_revision(
+	var first := await _prepare_runtime(
 		store,
 		provider_service,
 		provider_host,
@@ -90,17 +158,57 @@ func _run() -> void:
 		identities,
 		FIRST_REVISION,
 	)
-	var first_restore := first.get("restore", {}) as Dictionary
-	_expect_ok(first_restore, "beta2 存档可恢复到 beta6 运行时")
-	var first_migration := (
-		(first_restore.get("commitReceipt", {}) as Dictionary)
-		.get("migrationReceipt", {}) as Dictionary
+	var upgrade_service := first.get("service") as RefCounted
+	var blocked_discovery := slot.duplicate(true)
+	var blocked_evidence := (
+		slot.get("compatibilityEvidence", {}) as Dictionary
+	).duplicate(true)
+	blocked_evidence["activitySourceFingerprint"] = "unknown-fingerprint"
+	blocked_discovery["compatibility"] = COMPATIBILITY.detect_release(
+		blocked_evidence,
 	)
+	var blocked := upgrade_service.call(
+		"restore_discovered_revision",
+		blocked_discovery,
+		_read_json("res://world/data/town/town_world.json"),
+		identities,
+		first.get("gateway"),
+		{"slotDefinitions": slot_definitions, "residentMessages": []},
+		catalog,
+	) as Dictionary
+	_expect_equal(blocked.get("ok"), false, "生产恢复入口拒绝未知版本组合")
+	_expect_equal(blocked.get("readOnly"), true, "拒绝结果保持只读")
+
+	var upgraded := upgrade_service.call(
+		"restore_discovered_revision",
+		slot,
+		_read_json("res://world/data/town/town_world.json"),
+		identities,
+		first.get("gateway"),
+		{
+			"slotDefinitions": slot_definitions.duplicate(true),
+			"residentMessages": slot.get("residentMessages", []),
+		},
+		catalog,
+	) as Dictionary
+	_expect_ok(upgraded, "%s 存档可通过通用升级器发布为 beta6" % _release_id)
+	_expect_equal(upgraded.get("changed"), true, "旧版本升级明确产生新修订")
+	_expect_equal(
+		(upgraded.get("context", {}) as Dictionary).get("save_revision"),
+		2,
+		"升级器把结果发布为修订 2",
+	)
+	var first_migration := upgraded.get("migrationReceipt", {}) as Dictionary
 	_expect(
 		(first_migration.get("applied", []) as Array).has(
 			ACTIVITY_MIGRATION_ID,
 		),
-		"首次恢复明确报告 beta2 活动迁移",
+		"beta1/2 首次恢复明确报告活动迁移",
+	) if _release_id in ["beta1", "beta2"] else _expect(
+		not (first_migration.get("applied", []) as Array).has(
+			ACTIVITY_MIGRATION_ID,
+		),
+		"beta3 至 beta5 不重复执行已完成的活动迁移",
 	)
 	_expect(
 		(first_migration.get("applied", []) as Array).has(
@@ -126,23 +234,46 @@ func _run() -> void:
 	var before_time := first_world.call("get_time") as Dictionary
 	_expect_ok(first_world.call("advance", 1.0) as Dictionary, "升级后的世界可继续推进")
 	_expect(first_world.call("get_time") != before_time, "升级后产生可观察的时间变化")
-	var second_revision := await _save_restored(first, session_config, identities)
-	_expect_equal(second_revision, 2, "升级结果保存为新的成对修订")
+	var played_revision := await _save_restored(first, session_config, identities)
+	_expect_equal(played_revision, 3, "升级后继续游玩并保存为修订 3")
+	var upgraded_config := session_config.duplicate(true)
+	upgraded_config["saveRelease"] = COMPATIBILITY.current_release()
+	var current_catalog := catalog.call("get_catalog", slot_definitions) as Dictionary
+	_expect_ok(current_catalog, "升级后可从生产目录重新取得版本证据")
+	var current_slot := current_catalog.get("continueSlot", {}) as Dictionary
+	var repeated := upgrade_service.call("upgrade_revision", {
+		"context": {
+			"slot_id": _slot_id,
+			"session_id": _session_id,
+			"save_revision": played_revision,
+		},
+		"releaseEvidence": (
+			current_slot.get("compatibilityEvidence", {}) as Dictionary
+		).duplicate(true),
+		"sessionConfig": (
+			current_slot.get("sessionConfig", {}) as Dictionary
+		).duplicate(true),
+		"worldData": _read_json("res://world/data/town/town_world.json"),
+		"residentIdentities": identities.duplicate(true),
+		"agentHydrator": first.get("gateway"),
+	}, {
+		"slotDefinitions": slot_definitions.duplicate(true),
+		"residentMessages": [],
+	}, catalog) as Dictionary
+	_expect_ok(repeated, "当前版本再次交给升级器仍返回成功")
+	_expect_equal(repeated.get("changed"), false, "第二次升级不再写入新修订")
 	await _release_runtime(first)
-	var reopened_catalog := catalog.call("get_catalog", [
-		{"slotId": SLOT_ID, "displayName": "历史存档"},
-		{"slotId": EMPTY_SLOT_ID, "displayName": "空槽位"},
-	]) as Dictionary
+	var reopened_catalog := catalog.call("get_catalog", slot_definitions) as Dictionary
 	_expect_ok(reopened_catalog, "运行时释放后启动目录可重新读取升级结果")
 	var reopened_slot := reopened_catalog.get("continueSlot", {}) as Dictionary
 	_expect_equal(reopened_slot.get("state"), "healthy", "升级后启动目录保持健康")
 	_expect_equal(
 		(reopened_slot.get("summary", {}) as Dictionary).get("saveRevision"),
-		second_revision,
+		played_revision,
 		"启动目录选择升级后的最新修订",
 	)
 
-	var saved_snapshot := _read_world_snapshot(store, SLOT_ID, SESSION_ID, second_revision)
+	var saved_snapshot := _read_world_snapshot(store, _slot_id, _session_id, played_revision)
 	_expect_equal(
 		(saved_snapshot.get("state", {}) as Dictionary).size(),
 		27,
@@ -160,25 +291,29 @@ func _run() -> void:
 		"缺失的旅行者关系按当前格式重建",
 	)
 
-	var reopened := await _restore_revision(
+	var reopened := await _prepare_runtime(
 		store,
 		provider_service,
 		provider_host,
-		session_config,
+		upgraded_config,
 		identities,
-		second_revision,
+		played_revision,
 	)
-	var reopened_restore := reopened.get("restore", {}) as Dictionary
+	var reopened_restore := _restore_prepared(
+		reopened,
+		played_revision,
+		identities,
+	)
 	_expect_ok(reopened_restore, "升级后存档重建运行时仍可恢复")
 	var second_migration := (
 		(reopened_restore.get("commitReceipt", {}) as Dictionary)
 		.get("migrationReceipt", {}) as Dictionary
 	)
 	_expect_equal(second_migration.get("applied"), [], "第二次恢复不再重复迁移")
-	var third_revision := await _save_restored(reopened, session_config, identities)
-	_expect_equal(third_revision, 3, "重开后的存档可再次成对保存")
+	var reopened_revision := await _save_restored(reopened, upgraded_config, identities)
+	_expect_equal(reopened_revision, 4, "新 Runtime 重开后可再次成对保存")
 	var resaved_state := (
-		_read_world_snapshot(store, SLOT_ID, SESSION_ID, third_revision)
+		_read_world_snapshot(store, _slot_id, _session_id, reopened_revision)
 		.get("state", {}) as Dictionary
 	)
 	_expect_equal(
@@ -191,13 +326,13 @@ func _run() -> void:
 		saved_state.get("travelerRelations"),
 		"第二次保存不再改变重建的旅行者关系",
 	)
-	_expect_agent_snapshots_equal(second_revision, third_revision)
+	_expect_agent_snapshots_equal(played_revision, reopened_revision)
 	await _release_runtime(reopened)
 	provider_host.queue_free()
 	_finish()
 
 
-func _restore_revision(
+func _prepare_runtime(
 	store: RefCounted,
 	provider_service: RefCounted,
 	provider_host: Node,
@@ -208,7 +343,7 @@ func _restore_revision(
 	var gateway: Node = GATEWAY.new()
 	var gateway_config := session_config.duplicate(true)
 	gateway_config.merge({
-		"slotId": SLOT_ID,
+		"slotId": _slot_id,
 		"saveRevision": revision,
 		"restorePending": true,
 		"capabilityMode": "formal",
@@ -246,35 +381,55 @@ func _restore_revision(
 		gateway.call("get_agent_save_participant"),
 		gate,
 	) as Dictionary, "成对存档协调器可配置")
-	var restored := coordinator.call(
-		"restore_revision",
-		SLOT_ID,
-		SESSION_ID,
-		revision,
-		_read_json("res://world/data/town/town_world.json"),
-		identities,
-		gateway,
-	) as Dictionary
-	if restored.get("ok") == true:
-		_expect_ok(
-			runtime.call("complete_restored_session", restored.get("context", {})) as Dictionary,
-			"恢复结果可提交给小镇运行时",
-		)
+	var service: RefCounted = SESSION_UI_SERVICE.new()
+	_expect_ok(service.call(
+		"configure",
+		runtime,
+		world,
+		gateway.call("get_agent_save_participant"),
+		runtime_config,
+	) as Dictionary, "生产会话服务可配置通用升级入口")
 	return {
 		"runtime": runtime,
 		"gateway": gateway,
 		"world": world,
 		"coordinator": coordinator,
-		"restore": restored,
+		"service": service,
 	}
+
+
+func _restore_prepared(
+	prepared: Dictionary,
+	revision: int,
+	identities: Array,
+) -> Dictionary:
+	var restored := (prepared.get("coordinator") as RefCounted).call(
+		"restore_revision",
+		_slot_id,
+		_session_id,
+		revision,
+		_read_json("res://world/data/town/town_world.json"),
+		identities,
+		prepared.get("gateway"),
+	) as Dictionary
+	if restored.get("ok") == true:
+		_expect_ok(
+			(prepared.get("runtime") as Node).call(
+				"complete_restored_session",
+				restored.get("context", {}),
+			) as Dictionary,
+			"恢复结果可提交给小镇运行时",
+		)
+	return restored
 
 
 func _save_restored(restored: Dictionary, session_config: Dictionary, identities: Array) -> int:
 	var next_config := session_config.duplicate(true)
 	next_config["mode"] = "continue"
+	next_config["saveRelease"] = COMPATIBILITY.current_release()
 	var saved := (restored.get("coordinator") as RefCounted).call("save", {
-		"slotId": SLOT_ID,
-		"sessionId": SESSION_ID,
+		"slotId": _slot_id,
+		"sessionId": _session_id,
 		"residentIdentities": identities.duplicate(true),
 		"sessionConfig": next_config,
 		"residentMessages": [],
@@ -306,13 +461,13 @@ func _read_world_snapshot(store: RefCounted, slot_id: String, session_id: String
 func _expect_agent_snapshots_equal(first_revision: int, second_revision: int) -> void:
 	var agent_store: RefCounted = AGENT_STORE.new()
 	var first := agent_store.call("load_snapshot", {
-		"slot_id": SLOT_ID,
-		"session_id": SESSION_ID,
+		"slot_id": _slot_id,
+		"session_id": _session_id,
 		"save_revision": first_revision,
 	}) as Dictionary
 	var second := agent_store.call("load_snapshot", {
-		"slot_id": SLOT_ID,
-		"session_id": SESSION_ID,
+		"slot_id": _slot_id,
+		"session_id": _session_id,
 		"save_revision": second_revision,
 	}) as Dictionary
 	_expect_ok(first, "首次升级后的 Agent 快照可重读")
@@ -352,6 +507,20 @@ func _read_json(path: String) -> Dictionary:
 		return {}
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	return parsed as Dictionary if parsed is Dictionary else {}
+
+
+func _write_json(path: String, value: Dictionary) -> Dictionary:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return {"ok": false, "errorCode": "TEST_FILE_WRITE_FAILED"}
+	file.store_string(JSON.stringify(value, "\t"))
+	file.flush()
+	var write_error := file.get_error()
+	file = null
+	return {
+		"ok": write_error == OK,
+		"errorCode": "" if write_error == OK else "TEST_FILE_WRITE_FAILED",
+	}
 
 
 func _wait_frames(count: int) -> void:
