@@ -38,6 +38,9 @@ const STARTUP_SAVE_CATALOG := preload(
 const SAVE_RECONCILIATION_SERVICE := preload(
 	"res://world/presentation/session/TownSaveReconciliationService.gd"
 )
+const SAVE_RECOVERY_PLANNER := preload(
+	"res://world/presentation/session/TownSaveRecoveryPlanner.gd"
+)
 const AUDIO_DISPLAY_SETTINGS_SERVICE := preload(
 	"res://world/presentation/ui/TownAudioDisplaySettingsService.gd"
 )
@@ -247,6 +250,8 @@ var _pending_new_game_discovery: Dictionary = {}
 var _pending_save_handling_mode := ""
 var _pending_save_handling_origin := ""
 var _pending_continue_notice: Dictionary = {}
+var _pending_model_unavailable_notice: Dictionary = {}
+var _model_unavailable_notice_sequence := 0
 var _overwrite_compensator := FORMAL_OVERWRITE_COMPENSATOR.new()
 var _pending_formal_overwrite_archive: Dictionary:
 	get:
@@ -1804,6 +1809,7 @@ func _on_startup_intent_requested(intent: StringName, payload: Dictionary) -> vo
 	match String(intent):
 		"session.new_game":
 			_pending_continue_notice.clear()
+			_pending_model_unavailable_notice.clear()
 			if not _startup_new_game_payload_is_authorized(payload):
 				_publish_startup_action_failure(
 					intent,
@@ -4361,6 +4367,7 @@ func _bind_town_runtime(runtime: Node) -> void:
 		)
 		_daily_auto_save_last_attempt_day = -1
 	_present_pending_continue_notice()
+	_present_pending_model_unavailable_notice()
 
 
 func _on_town_environment_changed(time: Dictionary, _weather: String) -> void:
@@ -5241,8 +5248,53 @@ func _start_formal_continue(
 			provider_runtime.get("providerConfigs", {}) as Dictionary
 		).duplicate(true),
 	}, self) as Dictionary
+	var recovery_plan_for_gate := (
+		discovery.get("recoveryPlan", {}) as Dictionary
+	).duplicate(true)
+	var recovery_action := String(recovery_plan_for_gate.get("action", ""))
+	var recovery_mode := recovery_action in [
+		SAVE_RECONCILIATION_SERVICE.RECONCILE_ACTION,
+		SAVE_RECOVERY_PLANNER.REPUBLISH_ACTION,
+	]
 	if not bool(provider_configuration.get("ok", false)):
-		_publish_startup_result(provider_configuration)
+		if not recovery_mode:
+			_publish_startup_result(provider_configuration)
+			return
+		_queue_model_unavailable_notice(provider_configuration)
+	if recovery_mode:
+		# Recovery only republishes the last complete World + Agent pair. It must
+		# not depend on a live model connection: a depleted quota or an offline
+		# provider should be reported after the data repair, not prevent it.
+		_advance_town_entry_loading(0.34, "正在检查存档完整性…")
+		var provider_service := _provider_service as TownAgentProviderService
+		var health_started := provider_service.request_health_check(
+			bindings.duplicate(true),
+			func(health_result: Dictionary) -> void:
+				_on_formal_recovery_provider_health_completed(
+					health_result,
+					generation,
+				)
+		) as Dictionary
+		if not bool(health_started.get("accepted", false)):
+			_queue_model_unavailable_notice(health_started)
+		_on_formal_continue_provider_health_completed(
+			{
+				"ok": true,
+				"accepted": true,
+				"status": "available",
+				"errorCode": "",
+				"retryable": false,
+			},
+			generation,
+			discovery.duplicate(true),
+			world_data.duplicate(true),
+			identities.duplicate(true),
+			bindings.duplicate(true),
+			resident_names.duplicate(),
+			provider_runtime.duplicate(true),
+			{},
+			true,
+		)
 		return
 	_advance_town_entry_loading(0.34, "正在检查居民连接…")
 	var health_started := _provider_service.call(
@@ -5287,34 +5339,39 @@ func _on_formal_continue_provider_health_completed(
 	resident_names: Array,
 	provider_runtime: Dictionary,
 	repair_notice: Dictionary = {},
+	bypass_model_gate := false,
 ) -> void:
 	if generation != _flow_generation:
 		return
 	if not bool(health_result.get("ok", false)):
-		var repair_started := _start_formal_continue_binding_repair(
-			health_result,
-			generation,
-			discovery,
-			world_data,
-			identities,
-			bindings,
-			resident_names,
-			provider_runtime,
-		)
-		if bool(repair_started.get("accepted", false)):
+		if bypass_model_gate:
+			_queue_model_unavailable_notice(health_result)
+		else:
+			var repair_started := _start_formal_continue_binding_repair(
+				health_result,
+				generation,
+				discovery,
+				world_data,
+				identities,
+				bindings,
+				resident_names,
+				provider_runtime,
+			)
+			if bool(repair_started.get("accepted", false)):
+				return
+			_publish_startup_result(_with_continue_binding_recovery(
+				health_result,
+				repair_started,
+			))
 			return
-		_publish_startup_result(_with_continue_binding_recovery(
-			health_result,
-			repair_started,
-		))
-		return
-	var binding_validation := _provider_service.call(
-		"check_entry_availability",
-		bindings.duplicate(true),
-	) as Dictionary
-	if not bool(binding_validation.get("ok", false)):
-		_publish_startup_result(binding_validation)
-		return
+	if not bypass_model_gate:
+		var binding_validation := _provider_service.call(
+			"check_entry_availability",
+			bindings.duplicate(true),
+		) as Dictionary
+		if not bool(binding_validation.get("ok", false)):
+			_publish_startup_result(binding_validation)
+			return
 	_advance_town_entry_loading(0.52, "正在准备小镇地图…")
 	var manifest := discovery.get("manifest", {}) as Dictionary
 	var saved_config := discovery.get("sessionConfig", {}) as Dictionary
@@ -5334,6 +5391,7 @@ func _on_formal_continue_provider_health_completed(
 		"residentBindings": bindings.duplicate(true),
 		"capabilityMode": "formal",
 		"formalReady": true,
+		"allowUnavailableModelDuringRestore": bypass_model_gate,
 	}
 	var gateway_result := _gateway.call(
 		"configure_session",
@@ -5376,6 +5434,7 @@ func _on_formal_continue_provider_health_completed(
 		"source": "runtime",
 		"formalReady": true,
 		"providerFormalReady": true,
+		"allowUnavailableModelDuringRestore": bypass_model_gate,
 		"internalPlaytest": false,
 		"internalLivePlaytest": false,
 		"requireAgentGateway": true,
@@ -5855,6 +5914,78 @@ func _with_continue_binding_recovery(
 		"candidatesTested": int(recovery_result.get("candidatesTested", 0)),
 	}
 	return final_result
+
+
+func _on_formal_recovery_provider_health_completed(
+	health_result: Dictionary,
+	generation: int,
+) -> void:
+	if generation != _flow_generation:
+		return
+	if (
+		bool(health_result.get("ok", false))
+		and String(health_result.get("status", "")) == "available"
+	):
+		return
+	_queue_model_unavailable_notice(health_result)
+
+
+func _queue_model_unavailable_notice(result: Dictionary) -> void:
+	_model_unavailable_notice_sequence += 1
+	_pending_model_unavailable_notice = {
+		"noticeId": "model_unavailable_after_recovery-%d" % _model_unavailable_notice_sequence,
+		"errorCode": String(result.get("errorCode", "LLM_MODEL_UNAVAILABLE")),
+	}
+	if is_instance_valid(_town_ui_host):
+		call_deferred("_present_pending_model_unavailable_notice")
+
+
+func _present_pending_model_unavailable_notice() -> void:
+	if _pending_model_unavailable_notice.is_empty():
+		return
+	if (
+		not is_instance_valid(_town_ui_host)
+		or not _town_ui_host.has_method("present_feedback")
+	):
+		return
+	var notice := _pending_model_unavailable_notice.duplicate(true)
+	var notice_id := String(notice.get("noticeId", "model_unavailable_after_recovery"))
+	var town_ui_host := _town_ui_host as TownUiRuntimeHost
+	if town_ui_host == null:
+		return
+	var presented := town_ui_host.present_feedback({
+		"scope": "startup",
+		"status": "ready",
+		"revision": _model_unavailable_notice_sequence,
+		"data": {
+			"source": "runtime",
+			"capabilityMode": "formal",
+			"formalReady": true,
+			"feedback": {
+				"feedbackId": "startup-%s" % notice_id,
+				"component": "toast",
+				"tone": "warning",
+				"title": "模型不可用",
+				"message": "存档已修复，请打开暂停菜单中的“模型设置”更换模型。",
+				"blocking": false,
+				"dismissPolicy": "auto_or_manual",
+				"durationMsec": 9000,
+				"anchor": "viewport_top_right",
+				"dedupeKey": "startup.%s" % notice_id,
+			},
+		},
+		"actions": {},
+		"operation": {
+			"requestId": "startup-%s" % notice_id,
+			"intent": "session.continue",
+			"status": "success",
+			"submittedAtMsec": 0,
+			"completedAtMsec": Time.get_ticks_msec(),
+		},
+		"error": null,
+	}) as Dictionary
+	if bool(presented.get("ok", false)):
+		_pending_model_unavailable_notice.clear()
 
 
 func _on_bootstrap_completed(result: Dictionary, generation: int) -> void:

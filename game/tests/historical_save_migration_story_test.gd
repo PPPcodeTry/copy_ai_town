@@ -317,7 +317,7 @@ func _run() -> void:
 	var saved_state := saved_snapshot.get("state", {}) as Dictionary
 	_expect_equal(
 		(saved_state.get("activityRuntime", {}) as Dictionary).get("sourceFingerprint"),
-		SCHEMA_REGISTRY.ACTIVITY_SOURCE_FINGERPRINT_AFTER_PUBLIC_DINING_DAY_REWORK,
+		SCHEMA_REGISTRY.ACTIVITY_SOURCE_FINGERPRINT_AFTER_UNSTAFFED_PUBLIC_PLACE_ACCESS,
 		"升级后写入当前活动指纹",
 	)
 	_expect_equal(

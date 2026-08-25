@@ -301,20 +301,14 @@ func _run() -> void:
 	)
 	# 正式存档继续沿用清单中的稳定会话配置；restorePending 等字段只属于
 	# 本次进场运行上下文，不能写回持久化配置。
-	var resaved_session_config := session_config.duplicate(true)
-	var resaved := restore_coordinator.call("save", {
-		"slotId": slot_id,
-		"sessionId": session_id,
-		"residentIdentities": identities.duplicate(true),
-		"sessionConfig": resaved_session_config,
-		"savedAt": Time.get_datetime_string_from_system(false, false),
+	var resaved := restore_service.call("create_save", {
 		"residentMessages": [],
 	}) as Dictionary
 	_expect_ok(resaved, "五人存档恢复后可以再次成对保存")
 	_expect_equal(
 		(resaved.get("context", {}) as Dictionary).get("save_revision"),
-		2,
-		"恢复后的再次保存发布第二个修订",
+		4,
+		"恢复后的再次保存发布修订 4",
 	)
 	_expect_equal(
 		(restored_world.call("get_resident_ids") as Array).size(),
@@ -347,8 +341,8 @@ func _run() -> void:
 	)
 	_expect_equal(
 		(reopened.get("savedContext", {}) as Dictionary).get("save_revision"),
-		4,
-		"重开后继续运行并再次保存为修订 4",
+		5,
+		"重开后继续运行并再次保存为修订 5",
 	)
 	var final_catalog := (recovery_case.get("catalog") as RefCounted).call(
 		"get_catalog",
@@ -359,7 +353,7 @@ func _run() -> void:
 	_expect_equal(final_slot.get("state"), "healthy", "再次保存后槽位保持健康")
 	_expect_equal(
 		(final_slot.get("summary", {}) as Dictionary).get("saveRevision"),
-		4,
+		5,
 		"再次启动会选择修复后继续产生的最新修订",
 	)
 	_expect_ok(

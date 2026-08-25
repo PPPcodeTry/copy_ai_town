@@ -190,8 +190,13 @@ const RELEASES := [
 		"worldSectionCount": 27,
 		"activitySourceFingerprint": (
 			SAVE_SCHEMA_REGISTRY
-			.ACTIVITY_SOURCE_FINGERPRINT_AFTER_PUBLIC_DINING_DAY_REWORK
+			.ACTIVITY_SOURCE_FINGERPRINT_AFTER_UNSTAFFED_PUBLIC_PLACE_ACCESS
 		),
+		# beta6 样本在当前无人值守公共场所规则合入前生成；它已经带有
+		# beta6 写入标记，仍应按当前发行版识别，再由恢复流水线重写当前指纹。
+		"legacyActivitySourceFingerprints": [
+			SAVE_SCHEMA_REGISTRY.ACTIVITY_SOURCE_FINGERPRINT_AFTER_PUBLIC_DINING_DAY_REWORK,
+		],
 		"residentPathLayout": "hashed",
 		"nextEdge": {},
 	},
@@ -367,8 +372,14 @@ static func detect_release(evidence: Dictionary) -> Dictionary:
 			continue
 		if int(release.get("worldSectionCount", 0)) != int(section_count_value):
 			continue
-		if String(release.get("activitySourceFingerprint", "")) != String(
-			fingerprint_value
+		var release_fingerprint := String(release.get("activitySourceFingerprint", ""))
+		var legacy_fingerprints := release.get(
+			"legacyActivitySourceFingerprints",
+			[],
+		) as Array
+		if (
+			release_fingerprint != String(fingerprint_value)
+			and not legacy_fingerprints.has(String(fingerprint_value))
 		):
 			continue
 		if (
