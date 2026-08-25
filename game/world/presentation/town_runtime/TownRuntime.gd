@@ -289,6 +289,7 @@ func _notification(what: int) -> void:
 
 
 func _process(delta: float) -> void:
+	_refresh_active_interior_occlusion()
 	var profile_started_usec := (
 		Time.get_ticks_usec() if _frame_profile_enabled else 0
 	)
@@ -381,6 +382,15 @@ func _process(delta: float) -> void:
 	if not _startup_completion_emitted:
 		_startup_completion_emitted = true
 		startup_completed.emit(get_startup_result())
+
+
+func _interior_occlusion_subjects() -> Array[Node2D]:
+	var subjects := super._interior_occlusion_subjects() as Array[Node2D]
+	if _resident_presentation != null:
+		subjects.append_array(
+			_resident_presentation.get_active_occlusion_subjects(),
+		)
+	return subjects
 
 
 # A1 探针:把本帧既有分项按渲染帧编号写入探针,adapter / HUD 段由各自宿主写入;
@@ -3859,32 +3869,6 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 		_avatar_place_change_active = false
 		_sync_avatar_visual_from_world(true)
 		return
-	var target_interior_id := String(
-		_exterior_portal_spec(portal_id).get("interior_id", ""),
-	)
-	var target_room := _interior_roots.get(target_interior_id) as Node2D
-	var presentation_result := (
-		_resident_presentation.set_observed_interior(
-			place_name,
-			target_room.position,
-		) as Dictionary
-		if target_room != null
-		else {
-			"ok": false,
-			"code": "PRESENTATION_INTERIOR_ROOM_UNAVAILABLE",
-		}
-	)
-	if presentation_result.get("ok") != true:
-		var rollback := _world.return_player_avatar_outdoors(
-			_avatar_outdoor_place,
-			threshold_position,
-		) as Dictionary
-		_show_player_command_feedback(
-			presentation_result if rollback.get("ok") == true else rollback,
-		)
-		_avatar_place_change_active = false
-		_sync_avatar_visual_from_world(true)
-		return
 	await super._enter_interior(body, portal_id)
 	if not is_inside_tree():
 		return
@@ -3894,6 +3878,13 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 		_observed_place_name = place_name
 		_environment_renderer.set_outdoor_visible(false)
 		_set_building_hotspots_available(false)
+		_sync_avatar_visual_from_world(true)
+	else:
+		var rollback := _world.return_player_avatar_outdoors(
+			_avatar_outdoor_place,
+			threshold_position,
+		) as Dictionary
+		_show_player_command_feedback(rollback)
 		_sync_avatar_visual_from_world(true)
 	_avatar_place_change_active = false
 	observed_place_changed.emit({
@@ -4005,17 +3996,7 @@ func _show_observed_interior(place_name: String, portal_id: String) -> bool:
 		var target_interior_id := String(
 			portal_spec.get("interior_id", ""),
 		)
-		var target_room := (
-			_interior_roots.get(target_interior_id) as Node2D
-		)
-		if target_room == null:
-			_view_sync_active = false
-			return false
-		var prepared := _resident_presentation.set_observed_interior(
-			place_name,
-			target_room.position,
-		) as Dictionary
-		if prepared.get("ok") != true:
+		if not INTERIOR_DEFINITIONS.has(target_interior_id):
 			_view_sync_active = false
 			return false
 		await _enter_interior(_player, portal_id)

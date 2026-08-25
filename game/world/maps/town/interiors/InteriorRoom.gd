@@ -74,9 +74,13 @@ func configure(
 	if not _occlusion_path.is_empty() and not _geometry_data.is_empty():
 		_wall_occlusion = WALL_OCCLUSION_SCRIPT.new() as InteriorWallOcclusion
 		add_child(_wall_occlusion)
-		if not bool(_wall_occlusion.configure(shell,
+		if not bool(_wall_occlusion.configure(
+			shell,
 			_geometry_data,
-			_occlusion_path)):
+			_geometry_path,
+			_occlusion_path,
+			shell_path,
+		)):
 			_wall_occlusion.queue_free()
 			_wall_occlusion = null
 	_furniture_manifest_path = furniture_manifest_path
@@ -279,6 +283,18 @@ func is_geometry_debug_visible() -> bool:
 
 func has_wall_occlusion() -> bool:
 	return is_instance_valid(_wall_occlusion)
+
+
+func update_wall_occlusion_subjects(subjects: Array[Node2D]) -> bool:
+	if not is_instance_valid(_wall_occlusion):
+		return false
+	return bool(_wall_occlusion.update_for_subjects(subjects))
+
+
+func get_wall_occlusion_refresh_count() -> int:
+	if not is_instance_valid(_wall_occlusion):
+		return 0
+	return int(_wall_occlusion.get_refresh_count())
 
 
 func get_floor_local_bounds() -> Rect2:

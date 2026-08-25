@@ -1,0 +1,290 @@
+{
+  "canvas_size_px": [
+    1312.0,
+    1199.0
+  ],
+  "room_id": "home_template_b",
+  "schema_version": 1,
+  "segments": [
+    {
+      "fade_distance_px": 64.0,
+      "foreground_canvas_origin_px": [
+        83,
+        620
+      ],
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_left_front.png",
+      "foreground_texture_size_px": [
+        308,
+        97
+      ],
+      "id": "fg_left_front",
+      "minimum_alpha": 0.15,
+      "reveal_polygons_canvas_px": [
+        [
+          [
+            128.0,
+            604.0
+          ],
+          [
+            384.0,
+            604.0
+          ],
+          [
+            384.0,
+            636.0
+          ],
+          [
+            128.0,
+            636.0
+          ]
+        ]
+      ]
+    },
+    {
+      "fade_distance_px": 64.0,
+      "foreground_canvas_origin_px": [
+        390,
+        765
+      ],
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_central_left_front.png",
+      "foreground_texture_size_px": [
+        177,
+        102
+      ],
+      "id": "fg_central_left_front",
+      "minimum_alpha": 0.15,
+      "reveal_polygons_canvas_px": [
+        [
+          [
+            416.0,
+            764.0
+          ],
+          [
+            576.0,
+            764.0
+          ],
+          [
+            576.0,
+            796.0
+          ],
+          [
+            416.0,
+            796.0
+          ]
+        ],
+        [
+          [
+            608.0,
+            892.0
+          ],
+          [
+            704.0,
+            892.0
+          ],
+          [
+            704.0,
+            956.0
+          ],
+          [
+            608.0,
+            956.0
+          ]
+        ]
+      ]
+    },
+    {
+      "fade_distance_px": 64.0,
+      "foreground_canvas_origin_px": [
+        747,
+        765
+      ],
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_central_right_front.png",
+      "foreground_texture_size_px": [
+        149,
+        102
+      ],
+      "id": "fg_central_right_front",
+      "minimum_alpha": 0.15,
+      "reveal_polygons_canvas_px": [
+        [
+          [
+            736.0,
+            764.0
+          ],
+          [
+            896.0,
+            764.0
+          ],
+          [
+            896.0,
+            796.0
+          ],
+          [
+            736.0,
+            796.0
+          ]
+        ],
+        [
+          [
+            608.0,
+            892.0
+          ],
+          [
+            704.0,
+            892.0
+          ],
+          [
+            704.0,
+            956.0
+          ],
+          [
+            608.0,
+            956.0
+          ]
+        ]
+      ]
+    },
+    {
+      "fade_distance_px": 64.0,
+      "foreground_canvas_origin_px": [
+        925,
+        765
+      ],
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_front.png",
+      "foreground_texture_size_px": [
+        308,
+        102
+      ],
+      "id": "fg_right_front",
+      "minimum_alpha": 0.15,
+      "reveal_polygons_canvas_px": [
+        [
+          [
+            928.0,
+            764.0
+          ],
+          [
+            1184.0,
+            764.0
+          ],
+          [
+            1184.0,
+            796.0
+          ],
+          [
+            928.0,
+            796.0
+          ]
+        ]
+      ]
+    },
+    {
+      "fade_distance_px": 64.0,
+      "foreground_canvas_origin_px": [
+        897,
+        489
+      ],
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_divider_upper.png",
+      "foreground_texture_size_px": [
+        28,
+        101
+      ],
+      "id": "fg_right_divider_upper",
+      "minimum_alpha": 0.15,
+      "reveal_polygons_canvas_px": [
+        [
+          [
+            864.0,
+            476.0
+          ],
+          [
+            928.0,
+            476.0
+          ],
+          [
+            928.0,
+            606.0
+          ],
+          [
+            864.0,
+            606.0
+          ]
+        ]
+      ]
+    },
+    {
+      "fade_distance_px": 64.0,
+      "foreground_canvas_origin_px": [
+        897,
+        724
+      ],
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_divider_lower.png",
+      "foreground_texture_size_px": [
+        28,
+        41
+      ],
+      "id": "fg_right_divider_lower",
+      "minimum_alpha": 0.15,
+      "reveal_polygons_canvas_px": [
+        [
+          [
+            864.0,
+            708.0
+          ],
+          [
+            928.0,
+            708.0
+          ],
+          [
+            928.0,
+            764.0
+          ],
+          [
+            864.0,
+            764.0
+          ]
+        ]
+      ]
+    },
+    {
+      "fade_distance_px": 64.0,
+      "foreground_canvas_origin_px": [
+        925,
+        489
+      ],
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_partition.png",
+      "foreground_texture_size_px": [
+        283,
+        120
+      ],
+      "id": "fg_right_partition",
+      "minimum_alpha": 0.15,
+      "reveal_polygons_canvas_px": [
+        [
+          [
+            928.0,
+            636.0
+          ],
+          [
+            1184.0,
+            636.0
+          ],
+          [
+            1184.0,
+            668.0
+          ],
+          [
+            928.0,
+            668.0
+          ]
+        ]
+      ]
+    }
+  ],
+  "source_geometry_revision": "home_template_b_space_v3_reachable",
+  "source_geometry_sha256": "67408779f62ba217bf1693883118767f7edba49d2c91a86d2d3763a472180b8a",
+  "source_occlusion_revision": "home_template_b_space_annotations_v2_right_room_door",
+  "source_occlusion_sha256": "853fead62a4c73c88c4e515379df297034bd3838c4b22f1831843b44d8af81b2",
+  "source_shell_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/assets/background/room_shell.png",
+  "source_shell_sha256": "38145e73d5e7488cdc4521272725cb58f9e103c42a9f237bbcca94af9e7f8abb"
+}

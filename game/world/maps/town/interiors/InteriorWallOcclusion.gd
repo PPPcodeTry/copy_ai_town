@@ -1,9 +1,8 @@
-# 室内前景墙遮挡：只用人物脚点判定，墙面在脚点进入对应区域后
-# 升到人物前方并按距离平滑淡出。
+# 室内前景墙遮挡。前景贴图由资源工具预生成，运行时只校验并加载；
+# 人物脚点、可见性或深度没有变化时，不重复执行多边形命中计算。
 class_name InteriorWallOcclusion
 extends Node2D
 
-const SUBJECT_GROUP: StringName = &"map_occlusion_subject"
 const Z_STEP := 4
 const DEFAULT_FOREGROUND_Z := 999
 const MAX_SEGMENTS := 256
@@ -12,116 +11,201 @@ const MAX_POLYGONS_PER_SEGMENT := 64
 const MAX_TOTAL_POLYGON_POINTS := 32768
 const MAX_CANVAS_COMPONENT := 65536.0
 const MAX_CANVAS_PIXELS := 16777216
-const MAX_TOTAL_EXTRACTED_PIXELS := 33554432
 const MAX_JSON_BYTES := 8388608
 const MAX_ID_LENGTH := 128
 const MAX_REVISION_LENGTH := 256
-const TOP_LEVEL_KEYS := [
+const MANIFEST_KEYS := [
 	"canvas_size_px",
 	"room_id",
 	"schema_version",
 	"segments",
-	"source_revision",
+	"source_geometry_revision",
+	"source_geometry_sha256",
+	"source_occlusion_revision",
+	"source_occlusion_sha256",
+	"source_shell_path",
+	"source_shell_sha256",
 ]
-const SEGMENT_REQUIRED_KEYS := [
+const SEGMENT_KEYS := [
 	"fade_distance_px",
-	"foreground_polygon_canvas_px",
+	"foreground_canvas_origin_px",
+	"foreground_texture_path",
+	"foreground_texture_size_px",
 	"id",
 	"minimum_alpha",
 	"reveal_polygons_canvas_px",
 ]
-const SEGMENT_OPTIONAL_KEYS := [
-	"foreground_cutout_polygons_canvas_px",
-]
 
 var _segments: Array[Dictionary] = []
 var _subject_overlays: Dictionary = {}
+var _subject_states: Dictionary = {}
 var _debug_root: Node2D
-var _configured_shell: Sprite2D
-var _original_shell_image: Image
+var _refresh_count := 0
 
 
 func configure(
 	shell_value: Variant,
 	geometry_value: Variant,
+	geometry_path_value: Variant,
 	occlusion_path_value: Variant,
+	shell_path_value: Variant,
 ) -> bool:
 	if not shell_value is Sprite2D or not geometry_value is Dictionary:
 		return false
-	if not occlusion_path_value is String:
+	if (
+		not geometry_path_value is String
+		or not occlusion_path_value is String
+		or not shell_path_value is String
+	):
 		return false
 	var shell := shell_value as Sprite2D
 	var geometry := geometry_value as Dictionary
-	var occlusion_path := _canonical_text(occlusion_path_value)
-	if occlusion_path.is_empty() or shell.texture == null:
+	var geometry_path := _resource_path(geometry_path_value)
+	var occlusion_path := _resource_path(occlusion_path_value)
+	var shell_path := _resource_path(shell_path_value)
+	if (
+		shell.texture == null
+		or geometry_path.is_empty()
+		or occlusion_path.is_empty()
+		or shell_path.is_empty()
+	):
 		return false
-	var data := _load_data(occlusion_path)
-	if data.is_empty():
-		return false
-	var canvas_size := _canvas_size(geometry.get("canvas_size_px"))
-	var data_canvas_size := _canvas_size(data.get("canvas_size_px"))
-	var room_id := _canonical_id(geometry.get("room_id"), MAX_ID_LENGTH)
-	var source_revision := _canonical_text_limited(
-		geometry.get("source_revision"),
-		MAX_REVISION_LENGTH,
+	var manifest_path := occlusion_path.get_base_dir().path_join(
+		"wall_occlusion_runtime.json",
 	)
-	if (
-		canvas_size == Vector2i.ZERO
-		or canvas_size.x * canvas_size.y > MAX_CANVAS_PIXELS
-		or data_canvas_size != canvas_size
-		or room_id.is_empty()
-		or source_revision.is_empty()
-		or not _finite_pair(geometry.get("world_origin_px"))
-	):
+	var manifest := _load_data(manifest_path)
+	if manifest.is_empty():
+		push_error(
+			"Pre-generated interior occlusion is missing: %s" % manifest_path,
+		)
 		return false
-	var original_image := _source_image_for(shell)
-	if (
-		original_image == null
-		or original_image.is_empty()
-		or original_image.get_width() != canvas_size.x
-		or original_image.get_height() != canvas_size.y
-	):
-		return false
-	var validated := _validate_data(
-		data,
-		canvas_size,
-		room_id,
+	var validated := _validate_manifest(
+		manifest,
+		geometry,
+		geometry_path,
+		occlusion_path,
+		shell_path,
 	)
 	if validated.is_empty():
+		push_error(
+			"Pre-generated interior occlusion is stale or invalid: %s"
+			% manifest_path,
+		)
 		return false
-	var base_image := original_image.duplicate() as Image
-	base_image.convert(Image.FORMAT_RGBA8)
 	var world_origin := _pair(geometry.get("world_origin_px"))
+	var built := _build_render_nodes(
+		validated.get("segments", []) as Array[Dictionary],
+		world_origin,
+	)
+	var new_segments := built.get("segments", []) as Array[Dictionary]
+	var new_debug_root := built.get("debug_root") as Node2D
+	if new_segments.is_empty() or not is_instance_valid(new_debug_root):
+		_release_build(new_segments, new_debug_root)
+		return false
+	_commit_build(new_segments, new_debug_root)
+	return true
+
+
+func set_debug_visible(value: Variant) -> void:
+	if value is bool and is_instance_valid(_debug_root):
+		_debug_root.visible = value
+
+
+func is_debug_visible() -> bool:
+	return is_instance_valid(_debug_root) and _debug_root.visible
+
+
+func get_refresh_count() -> int:
+	return _refresh_count
+
+
+func update_for_subject(subject_value: Variant) -> bool:
+	return update_for_subjects([subject_value]) if subject_value is Node2D else false
+
+
+func update_for_subjects(subject_values: Variant) -> bool:
+	if not subject_values is Array:
+		return false
+	var subjects: Array[Node2D] = []
+	for value: Variant in subject_values as Array:
+		if not value is Node2D:
+			return false
+		var subject := value as Node2D
+		if (
+			is_instance_valid(subject)
+			and subject.is_inside_tree()
+			and subject.is_visible_in_tree()
+		):
+			subjects.append(subject)
+	var next_states := _subject_states_for(subjects)
+	if next_states == _subject_states:
+		return false
+	_subject_states = next_states
+	_refresh_count += 1
+	_prune_subject_overlays(subjects)
+	_hide_subject_overlays()
+	var has_subject := not subjects.is_empty()
+	var behind_z := DEFAULT_FOREGROUND_Z
+	var has_subject_depth := false
+	for subject in subjects:
+		var subject_behind_z := _z_index_with_offset(subject.z_index, -Z_STEP)
+		behind_z = subject_behind_z if not has_subject_depth else mini(
+			behind_z,
+			subject_behind_z,
+		)
+		has_subject_depth = true
+	for segment in _segments:
+		var foreground := segment.get("foreground") as CanvasItem
+		if not is_instance_valid(foreground):
+			continue
+		if not has_subject:
+			_reset_foreground(segment)
+			continue
+		# 完整墙面留在所有人物后方，只把触发脚点附近的小片提升到人物前方。
+		foreground.z_index = behind_z
+		foreground.modulate.a = 1.0
+		for subject in subjects:
+			var local_foot := to_local(subject.global_position)
+			var active_polygon := _active_polygon_for(segment, local_foot)
+			if active_polygon.is_empty():
+				continue
+			var overlay := _subject_overlay_for(segment, subject, local_foot)
+			if not is_instance_valid(overlay):
+				continue
+			overlay.visible = true
+			overlay.z_index = _z_index_with_offset(subject.z_index, Z_STEP)
+			overlay.modulate = Color(
+				1.0,
+				1.0,
+				1.0,
+				_alpha_for_active_foot(local_foot, active_polygon, segment),
+			)
+	return true
+
+
+func _build_render_nodes(
+	validated_segments: Array[Dictionary],
+	world_origin: Vector2,
+) -> Dictionary:
 	var new_segments: Array[Dictionary] = []
 	var new_debug_root := Node2D.new()
 	new_debug_root.name = "WallOcclusionDebug"
 	new_debug_root.visible = false
-	for segment_data in validated.get("segments", []) as Array[Dictionary]:
-		var canvas_polygon := _polygon(
-			segment_data.get("foreground_polygon_canvas_px"),
-			canvas_size,
-		)
-		var cutout_polygons: Array[PackedVector2Array] = []
-		for cutout_value: Variant in (
-			segment_data.get("foreground_cutout_polygons_canvas_px", []) as Array
-		):
-			cutout_polygons.append(_polygon(cutout_value, canvas_size))
-		var extracted := _extract_foreground_image(
-			base_image,
-			canvas_polygon,
-			cutout_polygons,
-		)
-		var foreground_image := extracted.get("image") as Image
-		if foreground_image == null or foreground_image.is_empty():
-			_release_build(new_segments, new_debug_root)
-			return false
+	for segment_data in validated_segments:
 		var foreground := Sprite2D.new()
 		foreground.name = String(segment_data.get("id"))
 		foreground.centered = false
 		foreground.position = (
-			extracted.get("canvas_origin", Vector2.ZERO) as Vector2
-		) - world_origin
-		foreground.texture = ImageTexture.create_from_image(foreground_image)
+			_pair(segment_data.get("foreground_canvas_origin_px"))
+			- world_origin
+		)
+		foreground.texture = _load_texture(
+			String(segment_data.get("foreground_texture_path")),
+		)
+		if foreground.texture == null:
+			foreground.free()
+			_release_build(new_segments, new_debug_root)
+			return {}
 		foreground.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		foreground.z_as_relative = false
 		foreground.z_index = DEFAULT_FOREGROUND_Z
@@ -130,7 +214,7 @@ func configure(
 			segment_data.get("reveal_polygons_canvas_px") as Array
 		):
 			var reveal_local := _offset_polygon(
-				_polygon(polygon_value, canvas_size),
+				_polygon(polygon_value, Vector2i(MAX_CANVAS_COMPONENT, MAX_CANVAS_COMPONENT)),
 				-world_origin,
 			)
 			reveal_polygons.append(reveal_local)
@@ -151,102 +235,55 @@ func configure(
 			"minimum_alpha": float(segment_data.get("minimum_alpha")),
 			"default_z_index": DEFAULT_FOREGROUND_Z,
 		})
-	if new_segments.is_empty():
-		_release_build(new_segments, new_debug_root)
-		return false
-	_commit_build(
-		shell,
-		original_image,
-		base_image,
-		new_segments,
-		new_debug_root,
-	)
-	return true
+	return {"segments": new_segments, "debug_root": new_debug_root}
 
 
-func set_debug_visible(value: Variant) -> void:
-	if value is bool and is_instance_valid(_debug_root):
-		_debug_root.visible = value
+func _commit_build(
+	new_segments: Array[Dictionary],
+	new_debug_root: Node2D,
+) -> void:
+	_clear_render_nodes()
+	for segment in new_segments:
+		add_child(segment.get("foreground") as Sprite2D)
+	add_child(new_debug_root)
+	_segments = new_segments
+	_debug_root = new_debug_root
+	_subject_states.clear()
+	_refresh_count = 0
+	name = "WallOcclusion"
+	set_process(false)
 
 
-func is_debug_visible() -> bool:
-	return is_instance_valid(_debug_root) and _debug_root.visible
+func _clear_render_nodes() -> void:
+	_subject_overlays.clear()
+	for child in get_children():
+		remove_child(child)
+		child.free()
+	_segments.clear()
+	_subject_states.clear()
+	_debug_root = null
 
 
-func update_for_subject(subject_value: Variant) -> void:
-	if subject_value is Node2D:
-		update_for_subjects([subject_value])
+func _release_build(
+	segments: Array[Dictionary],
+	debug_root: Node2D,
+) -> void:
+	for segment in segments:
+		var foreground := segment.get("foreground") as Node
+		if is_instance_valid(foreground):
+			foreground.free()
+	if is_instance_valid(debug_root):
+		debug_root.free()
 
 
-func update_for_subjects(subject_values: Variant) -> void:
-	if not subject_values is Array:
-		return
-	var subjects: Array[Node2D] = []
-	for value: Variant in subject_values as Array:
-		if not value is Node2D:
-			return
-		subjects.append(value as Node2D)
-	_prune_subject_overlays(subjects)
-	_hide_subject_overlays()
-	var has_valid_subject := false
-	var behind_z := DEFAULT_FOREGROUND_Z
+func _subject_states_for(subjects: Array[Node2D]) -> Dictionary:
+	var states := {}
 	for subject in subjects:
-		if (
-			not is_instance_valid(subject)
-			or not subject.is_inside_tree()
-			or not subject.is_visible_in_tree()
-		):
-			continue
-		var subject_behind_z := _z_index_with_offset(
-			subject.z_index,
-			-Z_STEP,
-		)
-		if not has_valid_subject:
-			behind_z = subject_behind_z
-			has_valid_subject = true
-		else:
-			behind_z = mini(behind_z, subject_behind_z)
-	for segment in _segments:
-		var foreground := segment.get("foreground") as CanvasItem
-		if not is_instance_valid(foreground):
-			continue
-		if not has_valid_subject:
-			_reset_foreground(segment)
-			continue
-		# The full wall face remains behind all subjects. Only the portion around
-		# the subject that triggered this reveal is promoted above that subject.
-		foreground.z_index = behind_z
-		foreground.modulate.a = 1.0
-		for subject in subjects:
-			if (
-				not is_instance_valid(subject)
-				or not subject.is_inside_tree()
-				or not subject.is_visible_in_tree()
-			):
-				continue
-			var local_foot := to_local(subject.global_position)
-			var active_polygon := _active_polygon_for(segment, local_foot)
-			if active_polygon.is_empty():
-				continue
-			var subject_alpha := _alpha_for_active_foot(
-				local_foot,
-				active_polygon,
-				segment,
-			)
-			var overlay := _subject_overlay_for(segment, subject, local_foot)
-			if not is_instance_valid(overlay):
-				continue
-			overlay.visible = true
-			overlay.z_index = _z_index_with_offset(subject.z_index, Z_STEP)
-			overlay.modulate = Color(1.0, 1.0, 1.0, subject_alpha)
-
-
-func _z_index_with_offset(z_index: int, offset: int) -> int:
-	return clampi(
-		z_index + offset,
-		RenderingServer.CANVAS_ITEM_Z_MIN,
-		RenderingServer.CANVAS_ITEM_Z_MAX,
-	)
+		states[subject.get_instance_id()] = {
+			"global_position": subject.global_position,
+			"z_index": subject.z_index,
+		}
+	return states
 
 
 func _subject_overlay_for(
@@ -262,7 +299,10 @@ func _subject_overlay_for(
 	var overlay := _subject_overlays.get(key) as Sprite2D
 	if not is_instance_valid(overlay):
 		overlay = Sprite2D.new()
-		overlay.name = "%sSubjectOverlay_%d" % [segment_id, subject.get_instance_id()]
+		overlay.name = "%sSubjectOverlay_%d" % [
+			segment_id,
+			subject.get_instance_id(),
+		]
 		overlay.centered = false
 		overlay.texture_filter = foreground.texture_filter
 		overlay.z_as_relative = false
@@ -270,8 +310,10 @@ func _subject_overlay_for(
 		add_child(overlay)
 		_subject_overlays[key] = overlay
 	var source_rect := Rect2(Vector2.ZERO, foreground.texture.get_size())
-	var source_foot := local_foot - foreground.position
-	var slice := _subject_slice_rect(source_rect, source_foot)
+	var slice := _subject_slice_rect(
+		source_rect,
+		local_foot - foreground.position,
+	)
 	if not slice.has_area():
 		overlay.visible = false
 		return overlay
@@ -293,10 +335,6 @@ func _subject_overlay_for(
 func _subject_slice_rect(source_rect: Rect2, source_foot: Vector2) -> Rect2:
 	if not source_rect.has_area():
 		return Rect2()
-	# A reveal polygon can extend through a doorway between two extracted wall
-	# faces. Clamp the slice to the nearest edge so both faces still get an
-	# independent subject overlay when the foot point is just outside either
-	# extracted texture.
 	const HALF_EXTENT := 96.0
 	var slice := source_rect
 	if source_rect.size.x >= source_rect.size.y:
@@ -323,7 +361,11 @@ func _intersection_rect(first: Rect2, second: Rect2) -> Rect2:
 	var top := maxf(first.position.y, second.position.y)
 	var right := minf(first.end.x, second.end.x)
 	var bottom := minf(first.end.y, second.end.y)
-	return Rect2(left, top, right - left, bottom - top) if right > left and bottom > top else Rect2()
+	return (
+		Rect2(left, top, right - left, bottom - top)
+		if right > left and bottom > top
+		else Rect2()
+	)
 
 
 func _hide_subject_overlays() -> void:
@@ -334,25 +376,14 @@ func _hide_subject_overlays() -> void:
 
 
 func _prune_subject_overlays(subjects: Array[Node2D]) -> void:
-	# Residents can be represented by a new Node2D after an indoor/outdoor or
-	# identity transition. Do not retain one wall Sprite2D/AtlasTexture for each
-	# historical instance ID; only subjects in the current visible set are
-	# allowed to keep a cached slice.
 	var active_subject_ids := {}
 	for subject in subjects:
-		if (
-			is_instance_valid(subject)
-			and subject.is_inside_tree()
-			and subject.is_visible_in_tree()
-		):
-			active_subject_ids[subject.get_instance_id()] = true
+		active_subject_ids[subject.get_instance_id()] = true
 	for key_value: Variant in _subject_overlays.keys():
 		var key := String(key_value)
 		var separator := key.rfind(":")
 		var overlay := _subject_overlays.get(key_value) as Sprite2D
-		var subject_id := -1
-		if separator >= 0:
-			subject_id = int(key.substr(separator + 1))
+		var subject_id := int(key.substr(separator + 1)) if separator >= 0 else -1
 		if (
 			separator < 0
 			or not active_subject_ids.has(subject_id)
@@ -361,95 +392,6 @@ func _prune_subject_overlays(subjects: Array[Node2D]) -> void:
 			if is_instance_valid(overlay):
 				overlay.free()
 			_subject_overlays.erase(key_value)
-
-
-func _process(_delta: float) -> void:
-	if not visible or get_parent() == null:
-		return
-	var parent_canvas := get_parent() as CanvasItem
-	if parent_canvas != null and not parent_canvas.visible:
-		return
-	var subjects := _find_subjects()
-	update_for_subjects(subjects)
-
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_PREDELETE:
-		_restore_configured_shell()
-
-
-func _commit_build(
-	shell: Sprite2D,
-	original_image: Image,
-	base_image: Image,
-	new_segments: Array[Dictionary],
-	new_debug_root: Node2D,
-) -> void:
-	if _configured_shell != shell:
-		_restore_configured_shell()
-	_clear_render_nodes()
-	_original_shell_image = original_image.duplicate() as Image
-	_configured_shell = shell
-	shell.texture = ImageTexture.create_from_image(base_image)
-	for segment in new_segments:
-		add_child(segment.get("foreground") as Sprite2D)
-	add_child(new_debug_root)
-	_segments = new_segments
-	_debug_root = new_debug_root
-	name = "WallOcclusion"
-	set_process(true)
-
-
-func _source_image_for(shell: Sprite2D) -> Image:
-	if (
-		_configured_shell == shell
-		and _original_shell_image != null
-		and not _original_shell_image.is_empty()
-	):
-		return _original_shell_image.duplicate() as Image
-	var image := shell.texture.get_image()
-	return image.duplicate() as Image if image != null else null
-
-
-func _restore_configured_shell() -> void:
-	if (
-		is_instance_valid(_configured_shell)
-		and _original_shell_image != null
-		and not _original_shell_image.is_empty()
-	):
-		_configured_shell.texture = ImageTexture.create_from_image(
-			_original_shell_image.duplicate() as Image
-		)
-
-
-func _clear_render_nodes() -> void:
-	_subject_overlays.clear()
-	for child in get_children():
-		remove_child(child)
-		child.free()
-	_segments.clear()
-	_debug_root = null
-	set_process(false)
-
-
-func _release_build(
-	segments: Array[Dictionary],
-	debug_root: Node2D,
-) -> void:
-	for segment in segments:
-		var foreground := segment.get("foreground") as Node
-		if is_instance_valid(foreground):
-			foreground.free()
-	if is_instance_valid(debug_root):
-		debug_root.free()
-
-
-func _find_subjects() -> Array[Node2D]:
-	var subjects: Array[Node2D] = []
-	for candidate in get_tree().get_nodes_in_group(SUBJECT_GROUP):
-		if candidate is Node2D and candidate.is_visible_in_tree():
-			subjects.append(candidate as Node2D)
-	return subjects
 
 
 func _active_polygon_for(
@@ -472,22 +414,11 @@ func _alpha_for_active_foot(
 		active_polygon,
 	)
 	var fade_distance := maxf(float(segment.get("fade_distance_px")), 1.0)
-	var fade_weight := smoothstep(0.0, fade_distance, boundary_distance)
 	return lerpf(
 		1.0,
 		float(segment.get("minimum_alpha")),
-		fade_weight,
+		smoothstep(0.0, fade_distance, boundary_distance),
 	)
-
-
-func _reset_foreground(segment: Dictionary) -> void:
-	var foreground := segment.get("foreground") as CanvasItem
-	if not is_instance_valid(foreground):
-		return
-	foreground.z_index = int(
-		segment.get("default_z_index", DEFAULT_FOREGROUND_Z)
-	)
-	foreground.modulate.a = 1.0
 
 
 func _distance_to_polygon_boundary(
@@ -507,176 +438,180 @@ func _distance_to_polygon_boundary(
 	return nearest
 
 
-func _extract_foreground_image(
-	image: Image,
-	polygon: PackedVector2Array,
-	cutout_polygons: Array[PackedVector2Array],
-) -> Dictionary:
-	var bounds := Rect2(polygon[0], Vector2.ZERO)
-	for point in polygon:
-		bounds = bounds.expand(point)
-	var min_x := maxi(0, floori(bounds.position.x))
-	var min_y := maxi(0, floori(bounds.position.y))
-	var max_x := mini(image.get_width(), ceili(bounds.end.x))
-	var max_y := mini(image.get_height(), ceili(bounds.end.y))
-	if max_x <= min_x or max_y <= min_y:
-		return {}
-	var result := Image.create(
-		max_x - min_x,
-		max_y - min_y,
-		false,
-		Image.FORMAT_RGBA8,
+func _reset_foreground(segment: Dictionary) -> void:
+	var foreground := segment.get("foreground") as CanvasItem
+	if is_instance_valid(foreground):
+		foreground.z_index = int(
+			segment.get("default_z_index", DEFAULT_FOREGROUND_Z),
+		)
+		foreground.modulate.a = 1.0
+
+
+func _z_index_with_offset(z_index: int, offset: int) -> int:
+	return clampi(
+		z_index + offset,
+		RenderingServer.CANVAS_ITEM_Z_MIN,
+		RenderingServer.CANVAS_ITEM_Z_MAX,
 	)
-	result.fill(Color.TRANSPARENT)
-	for y in range(min_y, max_y):
-		for x in range(min_x, max_x):
-			var pixel_center := Vector2(x + 0.5, y + 0.5)
-			if not Geometry2D.is_point_in_polygon(pixel_center, polygon):
-				continue
-			var is_cutout := false
-			for cutout in cutout_polygons:
-				if Geometry2D.is_point_in_polygon(pixel_center, cutout):
-					is_cutout = true
-					break
-			if is_cutout:
-				continue
-			var color := image.get_pixel(x, y)
-			result.set_pixel(x - min_x, y - min_y, color)
-			color.a = 0.0
-			image.set_pixel(x, y, color)
-	return {
-		"image": result,
-		"canvas_origin": Vector2(min_x, min_y),
-	}
+
+
+func _validate_manifest(
+	data: Dictionary,
+	geometry: Dictionary,
+	geometry_path: String,
+	occlusion_path: String,
+	shell_path: String,
+) -> Dictionary:
+	if not _keys_equal(data, MANIFEST_KEYS) or not _exact_integer(
+		data.get("schema_version"),
+		1,
+	):
+		return {}
+	var canvas_size := _canvas_size(geometry.get("canvas_size_px"))
+	var room_id := _canonical_id(geometry.get("room_id"), MAX_ID_LENGTH)
+	var geometry_revision := _canonical_text_limited(
+		geometry.get("source_revision"),
+		MAX_REVISION_LENGTH,
+	)
+	if (
+		canvas_size == Vector2i.ZERO
+		or canvas_size.x * canvas_size.y > MAX_CANVAS_PIXELS
+		or _canvas_size(data.get("canvas_size_px")) != canvas_size
+		or _canonical_id(data.get("room_id"), MAX_ID_LENGTH) != room_id
+		or _canonical_text_limited(
+			data.get("source_geometry_revision"),
+			MAX_REVISION_LENGTH,
+		) != geometry_revision
+		or _canonical_text_limited(
+			data.get("source_occlusion_revision"),
+			MAX_REVISION_LENGTH,
+		).is_empty()
+		or _resource_path(data.get("source_shell_path")) != shell_path
+		or not _finite_pair(geometry.get("world_origin_px"))
+	):
+		return {}
+	if (
+		not _source_matches(
+			geometry_path,
+			data.get("source_geometry_sha256"),
+		)
+		or not _source_matches(
+			occlusion_path,
+			data.get("source_occlusion_sha256"),
+		)
+		or not _source_matches(shell_path, data.get("source_shell_sha256"))
+	):
+		return {}
+	var segment_values: Variant = data.get("segments")
+	if (
+		segment_values is not Array
+		or (segment_values as Array).is_empty()
+		or (segment_values as Array).size() > MAX_SEGMENTS
+	):
+		return {}
+	var ids := {}
+	var segments: Array[Dictionary] = []
+	var polygon_points := 0
+	for value: Variant in segment_values as Array:
+		if value is not Dictionary:
+			return {}
+		var segment := value as Dictionary
+		if not _keys_equal(segment, SEGMENT_KEYS):
+			return {}
+		var segment_id := _canonical_id(segment.get("id"), MAX_ID_LENGTH)
+		var texture_path := _resource_path(
+			segment.get("foreground_texture_path"),
+		)
+		var texture_size := _canvas_size(
+			segment.get("foreground_texture_size_px"),
+		)
+		if (
+			segment_id.is_empty()
+			or ids.has(segment_id)
+			or texture_path.is_empty()
+			or texture_size == Vector2i.ZERO
+			or not FileAccess.file_exists(texture_path)
+			or not _finite_pair(segment.get("foreground_canvas_origin_px"))
+			or not _texture_matches_size(texture_path, texture_size)
+			or not _valid_fade(segment)
+		):
+			return {}
+		var origin := _pair(segment.get("foreground_canvas_origin_px"))
+		if (
+			origin.x < 0.0
+			or origin.y < 0.0
+			or origin.x + texture_size.x > canvas_size.x
+			or origin.y + texture_size.y > canvas_size.y
+		):
+			return {}
+		ids[segment_id] = true
+		var reveal_values: Variant = segment.get("reveal_polygons_canvas_px")
+		if (
+			reveal_values is not Array
+			or (reveal_values as Array).is_empty()
+			or (reveal_values as Array).size() > MAX_POLYGONS_PER_SEGMENT
+		):
+			return {}
+		for polygon_value: Variant in reveal_values as Array:
+			var polygon := _polygon(polygon_value, canvas_size)
+			if not _valid_polygon(polygon):
+				return {}
+			polygon_points += polygon.size()
+			if polygon_points > MAX_TOTAL_POLYGON_POINTS:
+				return {}
+		segments.append(segment.duplicate(true))
+	return {"segments": segments}
+
+
+func _valid_fade(segment: Dictionary) -> bool:
+	return (
+		_finite_number(segment.get("fade_distance_px"))
+		and float(segment.get("fade_distance_px")) > 0.0
+		and _finite_number(segment.get("minimum_alpha"))
+		and float(segment.get("minimum_alpha")) >= 0.0
+		and float(segment.get("minimum_alpha")) <= 1.0
+	)
+
+
+func _source_matches(path: String, expected_value: Variant) -> bool:
+	var expected := _canonical_hash(expected_value)
+	return (
+		not expected.is_empty()
+		and FileAccess.file_exists(path)
+		and FileAccess.get_sha256(path) == expected
+	)
+
+
+func _texture_matches_size(path: String, expected_size: Vector2i) -> bool:
+	var texture := _load_texture(path)
+	return texture != null and Vector2i(texture.get_size()) == expected_size
+
+
+func _load_texture(path: String) -> Texture2D:
+	if ResourceLoader.exists(path, "Texture2D"):
+		var imported := ResourceLoader.load(path, "Texture2D") as Texture2D
+		if imported != null:
+			return imported
+	if not FileAccess.file_exists(path):
+		return null
+	var image := Image.new()
+	if image.load(ProjectSettings.globalize_path(path)) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
 
 
 func _load_data(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {}
 	var file := FileAccess.open(path, FileAccess.READ)
-	if file == null or file.get_length() <= 0:
-		return {}
-	if file.get_length() > MAX_JSON_BYTES:
-		file.close()
+	if file == null or file.get_length() <= 0 or file.get_length() > MAX_JSON_BYTES:
 		return {}
 	var text := file.get_as_text()
 	file.close()
 	if text.to_utf8_buffer().size() > MAX_JSON_BYTES:
 		return {}
-	var parser := JSON.new()
-	if parser.parse(text) != OK:
-		return {}
-	var parsed: Variant = parser.data
+	var parsed: Variant = JSON.parse_string(text)
 	return parsed as Dictionary if parsed is Dictionary else {}
-
-
-func _validate_data(
-	data: Dictionary,
-	canvas_size: Vector2i,
-	expected_room_id: String,
-) -> Dictionary:
-	if not _keys_equal(data, TOP_LEVEL_KEYS):
-		return {}
-	if not _exact_integer(data.get("schema_version"), 1):
-		return {}
-	if (
-		_canonical_id(data.get("room_id"), MAX_ID_LENGTH) != expected_room_id
-		or _canonical_text_limited(
-			data.get("source_revision"),
-			MAX_REVISION_LENGTH,
-		).is_empty()
-		or _canvas_size(data.get("canvas_size_px")) != canvas_size
-	):
-		return {}
-	var segments_value: Variant = data.get("segments")
-	if not segments_value is Array:
-		return {}
-	var values := segments_value as Array
-	if values.is_empty() or values.size() > MAX_SEGMENTS:
-		return {}
-	var segment_ids := {}
-	var segments: Array[Dictionary] = []
-	var total_polygon_points := 0
-	var total_extracted_pixels := 0
-	for value: Variant in values:
-		if not value is Dictionary:
-			return {}
-		var segment := value as Dictionary
-		if not _segment_keys_valid(segment):
-			return {}
-		var segment_id := _canonical_id(segment.get("id"), MAX_ID_LENGTH)
-		if segment_id.is_empty() or segment_ids.has(segment_id):
-			return {}
-		segment_ids[segment_id] = true
-		var foreground := _polygon(
-			segment.get("foreground_polygon_canvas_px"),
-			canvas_size,
-		)
-		if not _valid_polygon(foreground):
-			return {}
-		total_polygon_points += foreground.size()
-		total_extracted_pixels += _polygon_pixel_area(foreground)
-		if (
-			total_polygon_points > MAX_TOTAL_POLYGON_POINTS
-			or total_extracted_pixels > MAX_TOTAL_EXTRACTED_PIXELS
-		):
-			return {}
-		var reveal_values: Variant = segment.get("reveal_polygons_canvas_px")
-		if not reveal_values is Array:
-			return {}
-		if (
-			(reveal_values as Array).is_empty()
-			or (reveal_values as Array).size() > MAX_POLYGONS_PER_SEGMENT
-		):
-			return {}
-		for polygon_value: Variant in reveal_values as Array:
-			var reveal := _polygon(polygon_value, canvas_size)
-			if not _valid_polygon(reveal):
-				return {}
-			total_polygon_points += reveal.size()
-		var cutout_values: Variant = segment.get(
-			"foreground_cutout_polygons_canvas_px",
-			[],
-		)
-		if not cutout_values is Array:
-			return {}
-		if (cutout_values as Array).size() > MAX_POLYGONS_PER_SEGMENT:
-			return {}
-		for cutout_value: Variant in cutout_values as Array:
-			var cutout := _polygon(cutout_value, canvas_size)
-			if (
-				not _valid_polygon(cutout)
-				or not _polygon_strictly_inside(cutout, foreground)
-			):
-				return {}
-			total_polygon_points += cutout.size()
-		if total_polygon_points > MAX_TOTAL_POLYGON_POINTS:
-			return {}
-		if (
-			not _finite_number(segment.get("fade_distance_px"))
-			or float(segment.get("fade_distance_px")) <= 0.0
-			or float(segment.get("fade_distance_px")) > MAX_CANVAS_COMPONENT
-			or not _finite_number(segment.get("minimum_alpha"))
-			or float(segment.get("minimum_alpha")) < 0.0
-			or float(segment.get("minimum_alpha")) > 1.0
-		):
-			return {}
-		segments.append(segment.duplicate(true))
-	return {"segments": segments}
-
-
-func _segment_keys_valid(segment: Dictionary) -> bool:
-	for key_value: Variant in segment:
-		var key := String(key_value)
-		if (
-			not SEGMENT_REQUIRED_KEYS.has(key)
-			and not SEGMENT_OPTIONAL_KEYS.has(key)
-		):
-			return false
-	for key in SEGMENT_REQUIRED_KEYS:
-		if not segment.has(key):
-			return false
-	return true
 
 
 func _valid_polygon(polygon: PackedVector2Array) -> bool:
@@ -685,47 +620,12 @@ func _valid_polygon(polygon: PackedVector2Array) -> bool:
 	var seen_points := {}
 	for index in range(polygon.size()):
 		var point := polygon[index]
-		if (
-			seen_points.has(point)
-			or point == polygon[(index + 1) % polygon.size()]
-		):
+		if seen_points.has(point) or point == polygon[(index + 1) % polygon.size()]:
 			return false
 		seen_points[point] = true
 	return (
 		absf(_signed_area(polygon)) > 0.0001
 		and not Geometry2D.triangulate_polygon(polygon).is_empty()
-	)
-
-
-func _polygon_strictly_inside(
-	inner: PackedVector2Array,
-	outer: PackedVector2Array,
-) -> bool:
-	for point in inner:
-		if not Geometry2D.is_point_in_polygon(point, outer):
-			return false
-	for inner_index in range(inner.size()):
-		var inner_start := inner[inner_index]
-		var inner_end := inner[(inner_index + 1) % inner.size()]
-		for outer_index in range(outer.size()):
-			var intersection: Variant = Geometry2D.segment_intersects_segment(
-				inner_start,
-				inner_end,
-				outer[outer_index],
-				outer[(outer_index + 1) % outer.size()],
-			)
-			if intersection != null:
-				return false
-	return true
-
-
-func _polygon_pixel_area(polygon: PackedVector2Array) -> int:
-	var bounds := Rect2(polygon[0], Vector2.ZERO)
-	for point in polygon:
-		bounds = bounds.expand(point)
-	return (
-		maxi(0, ceili(bounds.end.x) - floori(bounds.position.x))
-		* maxi(0, ceili(bounds.end.y) - floori(bounds.position.y))
 	)
 
 
@@ -738,17 +638,11 @@ func _signed_area(polygon: PackedVector2Array) -> float:
 	return area * 0.5
 
 
-func _polygon(
-	value: Variant,
-	canvas_size: Vector2i,
-) -> PackedVector2Array:
+func _polygon(value: Variant, canvas_size: Vector2i) -> PackedVector2Array:
 	var points := PackedVector2Array()
-	if not value is Array:
+	if value is not Array or (value as Array).size() > MAX_POLYGON_POINTS:
 		return points
-	var values := value as Array
-	if values.size() > MAX_POLYGON_POINTS:
-		return points
-	for point_value: Variant in values:
+	for point_value: Variant in value as Array:
 		if not _finite_pair(point_value):
 			return PackedVector2Array()
 		var point := _pair(point_value)
@@ -764,7 +658,7 @@ func _polygon(
 
 
 func _canvas_size(value: Variant) -> Vector2i:
-	if not value is Array or (value as Array).size() != 2:
+	if value is not Array or (value as Array).size() != 2:
 		return Vector2i.ZERO
 	var pair := value as Array
 	if not _positive_integer(pair[0]) or not _positive_integer(pair[1]):
@@ -811,7 +705,7 @@ func _exact_integer(value: Variant, expected: int) -> bool:
 
 
 func _canonical_text(value: Variant) -> String:
-	if not value is String:
+	if value is not String:
 		return ""
 	var text := value as String
 	return text if not text.is_empty() and text == text.strip_edges() else ""
@@ -829,6 +723,23 @@ func _canonical_id(value: Variant, max_length: int) -> String:
 func _canonical_text_limited(value: Variant, max_length: int) -> String:
 	var text := _canonical_text(value)
 	return text if text.length() <= max_length else ""
+
+
+func _canonical_hash(value: Variant) -> String:
+	var text := _canonical_text(value)
+	if text.length() != 64 or text.to_lower() != text:
+		return ""
+	for character in text:
+		if not character in "0123456789abcdef":
+			return ""
+	return text
+
+
+func _resource_path(value: Variant) -> String:
+	var path := _canonical_text(value)
+	if not path.begins_with("res://") and not path.begins_with("user://"):
+		return ""
+	return path if path.simplify_path() == path else ""
 
 
 func _keys_equal(value: Dictionary, expected: Array) -> bool:

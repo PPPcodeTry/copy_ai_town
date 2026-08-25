@@ -867,6 +867,20 @@ func get_visible_resident_names() -> Array[String]:
 	return result
 
 
+func get_active_occlusion_subjects() -> Array[Node2D]:
+	var result: Array[Node2D] = []
+	for body_value: Variant in _bodies.values():
+		var body := body_value as Node2D
+		if (
+			is_instance_valid(body)
+			and body.visible
+			and body.has_method("get_space_id")
+			and String(body.get_space_id()) == _active_space_id
+		):
+			result.append(body)
+	return result
+
+
 func get_visible_badge_names() -> Array[String]:
 	return []
 

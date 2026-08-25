@@ -512,6 +512,7 @@ func _ready() -> void:
 	_set_preset("elder_man")
 	_focus_player()
 	_sync_player_visual()
+	call_deferred("_prewarm_nearest_interior")
 
 
 func _exit_tree() -> void:
@@ -567,6 +568,7 @@ func _process(delta: float) -> void:
 	_update_environment_test(delta)
 	_update_cafe_depth_order()
 	_update_cafe_furniture_placement_preview()
+	_refresh_active_interior_occlusion()
 
 
 func _physics_process(delta: float) -> void:
@@ -775,34 +777,8 @@ func _build_water_animation() -> void:
 
 
 func _build_interior_portals() -> void:
-	for interior_id_value in INTERIOR_DEFINITIONS:
-		var interior_id := str(interior_id_value)
-		var definition := INTERIOR_DEFINITIONS[interior_id] as Dictionary
-		var room := INTERIOR_ROOM_SCENE.instantiate() as Node2D
-		room.configure(str(definition["shell_path"]),
-			definition["entry_point"] as Vector2,
-			definition["exit_point"] as Vector2,
-			str(definition.get("geometry_path", "")),
-			str(definition.get("occlusion_path", "")),
-			str(definition.get("furniture_manifest_path", "")),
-			str(definition.get("layout_path", "")))
-		room.name = str(definition["node_name"])
-		room.position = definition["origin"] as Vector2
-		room.visible = false
-		add_child(room)
-		_interior_roots[interior_id] = room
-
-		var exit_marker := room.get_node("IndoorExitPoint") as Marker2D
-		var exit_portal := _create_auto_portal(
-			_interior_exit_portal_name(interior_id),
-			room.position + exit_marker.position,
-			DOOR_THRESHOLD_TRIGGER_SIZE
-		)
-		add_child(exit_portal)
-		exit_portal.body_entered.connect(_exit_interior.bind(interior_id))
-
-	var cafe_room := _interior_roots["cafe"] as Node2D
-	_interior_root = cafe_room
+	_interior_roots.clear()
+	_interior_root = null
 	_cafe_layout = null
 	_library_layout = null
 	_town_hall_layout = null
@@ -818,6 +794,87 @@ func _build_interior_portals() -> void:
 		)
 		add_child(exterior_portal)
 		exterior_portal.body_entered.connect(_enter_interior.bind(portal_id))
+
+
+func _ensure_interior_room(interior_id: String) -> InteriorRoom:
+	var cached := _interior_roots.get(interior_id) as InteriorRoom
+	if is_instance_valid(cached):
+		return cached
+	var definition := INTERIOR_DEFINITIONS.get(interior_id, {}) as Dictionary
+	if definition.is_empty():
+		return null
+	var room := INTERIOR_ROOM_SCENE.instantiate() as InteriorRoom
+	if room == null:
+		return null
+	room.configure(
+		str(definition["shell_path"]),
+		definition["entry_point"] as Vector2,
+		definition["exit_point"] as Vector2,
+		str(definition.get("geometry_path", "")),
+		str(definition.get("occlusion_path", "")),
+		str(definition.get("furniture_manifest_path", "")),
+		str(definition.get("layout_path", "")),
+	)
+	if (
+		(not str(definition.get("occlusion_path", "")).is_empty()
+		and not room.has_wall_occlusion())
+		or (
+			not str(definition.get("furniture_manifest_path", "")).is_empty()
+			and not room.has_furniture_runtime()
+		)
+	):
+		room.free()
+		push_error("Interior could not be configured: %s" % interior_id)
+		return null
+	room.name = str(definition["node_name"])
+	room.position = definition["origin"] as Vector2
+	room.visible = false
+	add_child(room)
+	_interior_roots[interior_id] = room
+	var exit_marker := room.get_node("IndoorExitPoint") as Marker2D
+	var exit_portal := _create_auto_portal(
+		_interior_exit_portal_name(interior_id),
+		room.position + exit_marker.position,
+		DOOR_THRESHOLD_TRIGGER_SIZE,
+	)
+	add_child(exit_portal)
+	exit_portal.body_entered.connect(_exit_interior.bind(interior_id))
+	return room
+
+
+func _prewarm_nearest_interior() -> void:
+	# 先让正式 Town 完成世界启动和第一帧提交，再准备玩家出生点最近的房间。
+	# 只预热一个房间；其余房间仍在首次需要时创建并缓存。
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not is_inside_tree() or _is_inside_interior() or _portal_transition_active:
+		return
+	var nearest_interior_id := ""
+	var nearest_distance_squared := INF
+	for portal_spec in EXTERIOR_INTERIOR_PORTALS:
+		var distance_squared := _player.position.distance_squared_to(
+			portal_spec.get("door", _player.position) as Vector2,
+		)
+		if distance_squared < nearest_distance_squared:
+			nearest_distance_squared = distance_squared
+			nearest_interior_id = String(portal_spec.get("interior_id", ""))
+	if not nearest_interior_id.is_empty():
+		_ensure_interior_room(nearest_interior_id)
+
+
+func _interior_occlusion_subjects() -> Array[Node2D]:
+	var subjects: Array[Node2D] = []
+	if is_instance_valid(_player_occlusion_foot_point):
+		subjects.append(_player_occlusion_foot_point)
+	return subjects
+
+
+func _refresh_active_interior_occlusion() -> void:
+	if not _is_inside_interior() or not is_instance_valid(_interior_root):
+		return
+	_interior_root.update_wall_occlusion_subjects(
+		_interior_occlusion_subjects(),
+	)
 
 func _interior_exit_portal_name(interior_id: String) -> String:
 	if interior_id == "cafe":
@@ -985,8 +1042,7 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 		return
 	var interior_id := str(portal_spec["interior_id"])
 	var definition := INTERIOR_DEFINITIONS.get(interior_id, {}) as Dictionary
-	var room := _interior_roots.get(interior_id) as Node2D
-	if definition.is_empty() or room == null:
+	if definition.is_empty():
 		push_error("Interior is not available: %s" % interior_id)
 		return
 
@@ -995,6 +1051,13 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 	_player.velocity = Vector2.ZERO
 	await _fade_portal_to_black()
 	if not is_inside_tree():
+		return
+	var room := _ensure_interior_room(interior_id)
+	if room == null:
+		_restore_portal_visual_state(previous_visual_state)
+		await _fade_portal_from_black()
+		if is_inside_tree():
+			_portal_transition_active = false
 		return
 
 	_outdoor_zoom_index = _zoom_index
