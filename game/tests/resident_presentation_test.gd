@@ -15,6 +15,9 @@ extends "res://tests/support/TownWorldTestCase.gd"
 const RESIDENT_MOVEMENT_PROJECTION := preload(
 	"res://world/runtime/presentation/TownResidentMovementProjection.gd"
 )
+const INTERIOR_OCCLUSION_CONTROLLER := preload(
+	"res://world/maps/town/interiors/InteriorOcclusionController.gd"
+)
 
 class FakeWorld:
 	extends RefCounted
@@ -1572,6 +1575,31 @@ func _test_presentation_registry_and_spaces() -> void:
 		and occlusion_membership_events[-1] == occlusion_subjects,
 		"space changes publish the cached active occlusion membership once",
 	)
+	var mutable_snapshot := presentation.get_active_occlusion_subjects()
+	mutable_snapshot.clear()
+	_expect_equal(
+		presentation.get_active_occlusion_subjects().size(),
+		1,
+		"occlusion subject snapshots cannot mutate the presentation cache",
+	)
+	var occlusion_controller := INTERIOR_OCCLUSION_CONTROLLER.new()
+	root.add_child(occlusion_controller)
+	_expect_equal(
+		occlusion_controller.bind_resident_presentation(presentation),
+		true,
+		"occlusion controller binds the resident presentation",
+	)
+	_expect_equal(
+		occlusion_controller.bind_resident_presentation(presentation),
+		true,
+		"occlusion controller can safely rebind the same presentation",
+	)
+	_expect_equal(
+		presentation.get_active_occlusion_subjects().size(),
+		1,
+		"rebinding cannot clear the presentation occlusion cache",
+	)
+	occlusion_controller.queue_free()
 	if indoor_body != null:
 		_expect_equal(
 			indoor_body.position,

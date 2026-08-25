@@ -38,6 +38,7 @@ var _configuration_index := 0
 var _configuration_layout: Dictionary = {}
 var _configuration_active := false
 var _configuration_failed := false
+var _occupied_scan_state: Dictionary = {}
 
 
 func configure(manifest_path: String, layout_path: String) -> bool:
@@ -247,19 +248,10 @@ func get_errors() -> PackedStringArray:
 
 
 func get_occupied_room_cells() -> Array[Vector2i]:
-	var occupied := {}
-	for item in _items:
-		var asset_id := str(item.get_meta("asset_id", ""))
-		var direction := str(item.get_meta("direction", "down"))
-		if not _definitions.has(asset_id):
-			continue
-		var definition := _definitions[asset_id] as Dictionary
-		for polygon in GEOMETRY.rotated_ground_contact_polygons(definition, direction):
-			var translated := PackedVector2Array()
-			for point in polygon:
-				translated.append(point + item.position)
-			for cell in _cells_overlapping_polygon(translated):
-				occupied[cell] = true
+	begin_occupied_room_cell_scan()
+	while not bool(continue_occupied_room_cell_scan(16).get("complete", false)):
+		pass
+	var occupied := get_scanned_occupied_room_cell_lookup()
 	var result: Array[Vector2i] = []
 	for cell_value in occupied.keys():
 		result.append(cell_value as Vector2i)
@@ -267,6 +259,147 @@ func get_occupied_room_cells() -> Array[Vector2i]:
 		return a.y < b.y or (a.y == b.y and a.x < b.x)
 	)
 	return result
+
+
+func begin_occupied_room_cell_scan() -> void:
+	_occupied_scan_state = {
+		"phase": "item",
+		"item_cursor": 0,
+		"polygons": [],
+		"polygon_cursor": 0,
+		"scan_cell": Vector2i.ZERO,
+		"scan_first_x": 0,
+		"scan_last": Vector2i.ZERO,
+		"polygon": PackedVector2Array(),
+		"occupied": {},
+		"occupied_cells": [],
+		"complete": false,
+	}
+
+
+# 单个 work item 最多解析一个家具（资产多边形上限为 64 点）、准备一个
+# 多边形，或测试一个 32px 格；调用方可据本帧余量决定本批工作数。
+func continue_occupied_room_cell_scan(max_work_items: int) -> Dictionary:
+	if _occupied_scan_state.is_empty():
+		begin_occupied_room_cell_scan()
+	var work_limit := clampi(max_work_items, 1, 16)
+	var processed := 0
+	while (
+		processed < work_limit
+		and not bool(_occupied_scan_state.get("complete", false))
+	):
+		match String(_occupied_scan_state.get("phase", "")):
+			"item":
+				var item_cursor := int(_occupied_scan_state.get("item_cursor", 0))
+				if item_cursor >= _items.size():
+					_occupied_scan_state["complete"] = true
+					continue
+				var item := _items[item_cursor]
+				var asset_id := str(item.get_meta("asset_id", ""))
+				if not _definitions.has(asset_id):
+					_occupied_scan_state["item_cursor"] = item_cursor + 1
+					processed += 1
+					continue
+				var definition := _definitions[asset_id] as Dictionary
+				_occupied_scan_state["polygons"] = (
+					GEOMETRY.rotated_ground_contact_polygons(
+						definition,
+						str(item.get_meta("direction", "down")),
+					)
+				)
+				_occupied_scan_state["polygon_cursor"] = 0
+				_occupied_scan_state["phase"] = "polygon"
+				processed += 1
+			"polygon":
+				var polygons := _occupied_scan_state.get("polygons", []) as Array
+				var polygon_cursor := int(
+					_occupied_scan_state.get("polygon_cursor", 0),
+				)
+				if polygon_cursor >= polygons.size():
+					_occupied_scan_state["item_cursor"] = int(
+						_occupied_scan_state.get("item_cursor", 0),
+					) + 1
+					_occupied_scan_state["phase"] = "item"
+					continue
+				var item := _items[int(_occupied_scan_state.get("item_cursor", 0))]
+				var translated := PackedVector2Array()
+				for point in polygons[polygon_cursor] as PackedVector2Array:
+					translated.append(point + item.position)
+				if translated.size() < 3:
+					_occupied_scan_state["polygon_cursor"] = polygon_cursor + 1
+					processed += 1
+					continue
+				var bounds := Rect2(translated[0], Vector2.ZERO)
+				for point in translated:
+					bounds = bounds.expand(point)
+				var first := Vector2i(
+					floori(bounds.position.x / GRID_SIZE),
+					floori(bounds.position.y / GRID_SIZE),
+				)
+				var last := Vector2i(
+					ceili(bounds.end.x / GRID_SIZE) - 1,
+					ceili(bounds.end.y / GRID_SIZE) - 1,
+				)
+				_occupied_scan_state["polygon"] = translated
+				_occupied_scan_state["scan_cell"] = first
+				_occupied_scan_state["scan_first_x"] = first.x
+				_occupied_scan_state["scan_last"] = last
+				_occupied_scan_state["phase"] = "cell"
+				processed += 1
+			"cell":
+				var cell := _occupied_scan_state.get("scan_cell") as Vector2i
+				var last := _occupied_scan_state.get("scan_last") as Vector2i
+				var top_left := Vector2(cell) * GRID_SIZE
+				var cell_polygon := PackedVector2Array([
+					top_left,
+					top_left + Vector2(GRID_SIZE, 0.0),
+					top_left + Vector2(GRID_SIZE, GRID_SIZE),
+					top_left + Vector2(0.0, GRID_SIZE),
+				])
+				for intersection in Geometry2D.intersect_polygons(
+					_occupied_scan_state.get("polygon") as PackedVector2Array,
+					cell_polygon,
+				):
+					if _polygon_area(intersection) > 0.01:
+						var occupied := _occupied_scan_state.get(
+							"occupied",
+							{},
+						) as Dictionary
+						if not occupied.has(cell):
+							occupied[cell] = true
+							(_occupied_scan_state.get(
+								"occupied_cells",
+								[],
+							) as Array).append(cell)
+						break
+				if cell.x >= last.x:
+					if cell.y >= last.y:
+						_occupied_scan_state["polygon_cursor"] = int(
+							_occupied_scan_state.get("polygon_cursor", 0),
+						) + 1
+						_occupied_scan_state["phase"] = "polygon"
+					else:
+						_occupied_scan_state["scan_cell"] = Vector2i(
+							int(_occupied_scan_state.get("scan_first_x", cell.x)),
+							cell.y + 1,
+						)
+				else:
+					_occupied_scan_state["scan_cell"] = cell + Vector2i.RIGHT
+				processed += 1
+			_:
+				_occupied_scan_state["complete"] = true
+	return {
+		"complete": bool(_occupied_scan_state.get("complete", false)),
+		"processed": processed,
+	}
+
+
+func get_scanned_occupied_room_cell_lookup() -> Dictionary:
+	return _occupied_scan_state.get("occupied", {}) as Dictionary
+
+
+func get_scanned_occupied_room_cells() -> Array:
+	return _occupied_scan_state.get("occupied_cells", []) as Array
 
 
 func create_agent_prop_projection(
@@ -771,6 +904,7 @@ func _clear_scene_nodes() -> void:
 	_visual_effect_count = 0
 	_ground_shadow_count = 0
 	_occlusion_layer = null
+	_occupied_scan_state.clear()
 
 
 func _clear_runtime() -> void:

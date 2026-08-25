@@ -78,7 +78,8 @@ func has_pending_refresh() -> bool:
 
 
 func _on_resident_subjects_changed(subjects: Array[Node2D]) -> void:
-	_resident_subjects = subjects
+	_resident_subjects = []
+	_resident_subjects.assign(subjects)
 	_dirty = true
 
 

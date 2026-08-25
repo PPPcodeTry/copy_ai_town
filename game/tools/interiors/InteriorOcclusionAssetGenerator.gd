@@ -1,5 +1,8 @@
 extends RefCounted
 
+const OCCLUSION_MANIFEST := preload(
+	"res://world/maps/town/interiors/InteriorOcclusionManifest.gd"
+)
 const SCHEMA_VERSION := 2
 const RUNTIME_DIRECTORY := "wall_occlusion_runtime"
 const MANIFEST_NAME := "wall_occlusion_runtime.json"
@@ -80,6 +83,8 @@ func _stage_room(
 	var generated_segments: Array[Dictionary] = []
 	var staged_assets: Array[Dictionary] = []
 	var ids := {}
+	var manifest_validator := OCCLUSION_MANIFEST.new() as InteriorOcclusionManifest
+	var reveal_polygon_points := 0
 	for segment_value: Variant in segment_values as Array:
 		if segment_value is not Dictionary:
 			return _failure("%s contains an invalid segment" % room_id)
@@ -92,6 +97,17 @@ func _stage_room(
 		):
 			return _failure("%s contains an invalid or duplicate segment" % room_id)
 		ids[segment_id] = true
+		var occlusion_fields := manifest_validator.validate_segment_occlusion_fields(
+			segment,
+			canvas,
+			reveal_polygon_points,
+		)
+		if occlusion_fields.get("ok") != true:
+			return _failure(
+				"%s segment %s fields are invalid (%s)"
+				% [room_id, segment_id, String(occlusion_fields.get("code", ""))],
+			)
+		reveal_polygon_points = int(occlusion_fields.get("polygon_points", 0))
 		var foreground := _polygon(
 			segment.get("foreground_polygon_canvas_px"),
 			canvas,
@@ -173,6 +189,7 @@ func _stage_room(
 
 func _publish(staged_rooms: Array[Dictionary], run_id: String) -> Dictionary:
 	var segment_count := 0
+	var created_assets: Array[String] = []
 	for room in staged_rooms:
 		var runtime_root := String(room.get("room_root")).path_join(
 			RUNTIME_DIRECTORY,
@@ -180,24 +197,46 @@ func _publish(staged_rooms: Array[Dictionary], run_id: String) -> Dictionary:
 		if DirAccess.make_dir_recursive_absolute(
 			ProjectSettings.globalize_path(runtime_root),
 		) != OK:
-			return _failure("runtime output directory could not be created")
+			return _abort_publish(
+				"runtime output directory could not be created",
+				created_assets,
+				staged_rooms,
+			)
 		for asset_value: Variant in room.get("assets", []) as Array:
 			var asset := asset_value as Dictionary
 			var final_path := String(asset.get("final_path"))
 			var expected_hash := String(asset.get("sha256"))
 			if FileAccess.file_exists(final_path):
 				if FileAccess.get_sha256(final_path) != expected_hash:
-					return _failure("content-addressed texture digest collision")
+					return _abort_publish(
+						"content-addressed texture digest collision",
+						created_assets,
+						staged_rooms,
+					)
 				continue
 			var temp_path := "%s.%s.tmp" % [final_path, run_id]
 			if not _copy_file(String(asset.get("staged_path")), temp_path):
-				return _failure("generated texture could not be published")
+				_remove_file(temp_path)
+				return _abort_publish(
+					"generated texture could not be published",
+					created_assets,
+					staged_rooms,
+				)
 			if FileAccess.get_sha256(temp_path) != expected_hash:
 				_remove_file(temp_path)
-				return _failure("published texture digest does not match")
+				return _abort_publish(
+					"published texture digest does not match",
+					created_assets,
+					staged_rooms,
+				)
 			if not _rename_file(temp_path, final_path):
 				_remove_file(temp_path)
-				return _failure("generated texture could not be committed")
+				return _abort_publish(
+					"generated texture could not be committed",
+					created_assets,
+					staged_rooms,
+				)
+			created_assets.append(final_path)
 		segment_count += (room.get("assets", []) as Array).size()
 	# Prepare every manifest beside its final location before switching any room.
 	for room in staged_rooms:
@@ -207,8 +246,11 @@ func _publish(staged_rooms: Array[Dictionary], run_id: String) -> Dictionary:
 		]
 		room["temp_manifest_path"] = temp_manifest
 		if not _copy_file(String(room.get("staged_manifest_path")), temp_manifest):
-			_cleanup_manifest_temps(staged_rooms)
-			return _failure("generated manifest could not be prepared")
+			return _abort_publish(
+				"generated manifest could not be prepared",
+				created_assets,
+				staged_rooms,
+			)
 	var switched: Array[Dictionary] = []
 	for room in staged_rooms:
 		var final_manifest := String(room.get("final_manifest_path"))
@@ -216,9 +258,12 @@ func _publish(staged_rooms: Array[Dictionary], run_id: String) -> Dictionary:
 		var backup_manifest := "%s.%s.backup" % [final_manifest, run_id]
 		var had_previous := FileAccess.file_exists(final_manifest)
 		if had_previous and not _rename_file(final_manifest, backup_manifest):
-			_rollback_manifests(switched)
-			_cleanup_manifest_temps(staged_rooms)
-			return _failure("previous manifest could not be backed up")
+			return _abort_publish(
+				"previous manifest could not be backed up",
+				created_assets,
+				staged_rooms,
+				switched,
+			)
 		var switch_state := {
 			"final": final_manifest,
 			"backup": backup_manifest,
@@ -227,9 +272,12 @@ func _publish(staged_rooms: Array[Dictionary], run_id: String) -> Dictionary:
 		if not _rename_file(temp_manifest, final_manifest):
 			if had_previous:
 				_rename_file(backup_manifest, final_manifest)
-			_rollback_manifests(switched)
-			_cleanup_manifest_temps(staged_rooms)
-			return _failure("generated manifest could not be committed")
+			return _abort_publish(
+				"generated manifest could not be committed",
+				created_assets,
+				staged_rooms,
+				switched,
+			)
 		switched.append(switch_state)
 	for state in switched:
 		if bool(state.get("had_previous")):
@@ -237,6 +285,21 @@ func _publish(staged_rooms: Array[Dictionary], run_id: String) -> Dictionary:
 	for room in staged_rooms:
 		_remove_unreferenced_resources(room)
 	return {"ok": true, "segment_count": segment_count}
+
+
+func _abort_publish(
+	message: String,
+	created_assets: Array[String],
+	staged_rooms: Array[Dictionary],
+	switched_manifests: Array[Dictionary] = [],
+) -> Dictionary:
+	if not switched_manifests.is_empty():
+		_rollback_manifests(switched_manifests)
+	_cleanup_manifest_temps(staged_rooms)
+	for path in created_assets:
+		_remove_file(path)
+		_remove_file(path + ".import")
+	return _failure(message)
 
 
 func _rollback_manifests(switched: Array[Dictionary]) -> void:

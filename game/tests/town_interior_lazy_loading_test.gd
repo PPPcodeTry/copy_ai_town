@@ -186,10 +186,36 @@ func _run() -> void:
 	var max_room_wall_usec := 0
 	var slowest_stage := ""
 	var slowest_stage_usec := 0
+	var max_stage_work_items := 0
+	var all_collision_scans_are_batched := true
+	var all_navigation_scans_are_batched := true
+	var all_furniture_filters_are_batched := true
+	var all_navigation_lookups_are_batched := true
 	for room_profile_value: Variant in (
 		build_profile.get("rooms", {}) as Dictionary
 	).values():
 		var room_profile := room_profile_value as Dictionary
+		var stage_calls := room_profile.get("stage_calls", {}) as Dictionary
+		max_stage_work_items = maxi(
+			max_stage_work_items,
+			int(room_profile.get("max_stage_work_items", 0)),
+		)
+		all_collision_scans_are_batched = (
+			all_collision_scans_are_batched
+			and int(stage_calls.get("collision", 0)) > 1
+		)
+		all_navigation_scans_are_batched = (
+			all_navigation_scans_are_batched
+			and int(stage_calls.get("navigation", 0)) > 1
+		)
+		all_furniture_filters_are_batched = (
+			all_furniture_filters_are_batched
+			and int(stage_calls.get("furniture_navigation", 0)) > 1
+		)
+		all_navigation_lookups_are_batched = (
+			all_navigation_lookups_are_batched
+			and int(stage_calls.get("furniture_navigation_lookup", 0)) > 1
+		)
 		max_room_cpu_usec = maxi(
 			max_room_cpu_usec,
 			int(room_profile.get("cpu_usec", 0)),
@@ -225,6 +251,26 @@ func _run() -> void:
 	_expect(
 		int(build_profile.get("max_stage_usec", 0)) <= MAX_BLOCKING_FRAME_USEC,
 		"no individual preparation stage can hide a long synchronous pause",
+	)
+	_expect(
+		max_stage_work_items <= 16,
+		"every preparation call respects the conservative 16-item batch ceiling",
+	)
+	_expect(
+		all_collision_scans_are_batched,
+		"every room advances collision preparation across multiple bounded batches",
+	)
+	_expect(
+		all_navigation_scans_are_batched,
+		"every room advances navigation preparation across multiple bounded batches",
+	)
+	_expect(
+		all_furniture_filters_are_batched,
+		"every room advances furniture navigation across multiple bounded batches",
+	)
+	_expect(
+		all_navigation_lookups_are_batched,
+		"every room advances the final navigation lookup across multiple bounded batches",
 	)
 	await _finish(town, {
 		"startup_msec": startup_msec,

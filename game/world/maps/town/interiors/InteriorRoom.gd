@@ -12,6 +12,8 @@ const FURNITURE_RUNTIME_SCRIPT := preload(
 const GEOMETRY_LOAD_TASK := preload(
 	"res://world/maps/town/interiors/InteriorGeometryLoadTask.gd"
 )
+const PREPARATION_WORK_ITEM_RESERVE_USEC := 500
+const MAX_PREPARATION_WORK_ITEMS := 16
 enum PreparationStage {
 	IDLE,
 	SHELL_REQUEST,
@@ -27,6 +29,7 @@ enum PreparationStage {
 	FURNITURE_BEGIN,
 	FURNITURE_INSTANCE,
 	FURNITURE_NAVIGATION,
+	FURNITURE_NAVIGATION_LOOKUP,
 	COMPLETE,
 	FAILED,
 }
@@ -98,11 +101,17 @@ func begin_preparation(
 	return true
 
 
-func prepare_next_stage() -> Dictionary:
+func prepare_next_stage(remaining_budget_usec: int = 8000) -> Dictionary:
 	if is_preparation_complete() or has_preparation_failed():
 		return _preparation_result("idle", 0)
 	var started_usec := Time.get_ticks_usec()
 	var stage_name := "unknown"
+	var work_item_limit := clampi(
+		remaining_budget_usec / PREPARATION_WORK_ITEM_RESERVE_USEC,
+		1,
+		MAX_PREPARATION_WORK_ITEMS,
+	)
+	var work_items := 1
 	match _preparation_stage:
 		PreparationStage.SHELL_REQUEST:
 			stage_name = "shell_request"
@@ -110,26 +119,28 @@ func prepare_next_stage() -> Dictionary:
 		PreparationStage.SHELL_WAIT:
 			stage_name = "shell_wait"
 			_prepare_shell_wait()
+			if _preparation_stage == PreparationStage.SHELL_WAIT:
+				work_items = 0
 		PreparationStage.GEOMETRY_REQUEST:
 			stage_name = "geometry_request"
 			_prepare_geometry_request()
 		PreparationStage.GEOMETRY_WAIT:
 			stage_name = "geometry_wait"
 			_prepare_geometry_wait()
+			if _preparation_stage == PreparationStage.GEOMETRY_WAIT:
+				work_items = 0
 		PreparationStage.GEOMETRY_APPLY:
 			stage_name = "geometry_apply"
 			_apply_geometry()
 		PreparationStage.COLLISION:
 			stage_name = "collision"
-			_build_wall_collision()
-			_preparation_stage = PreparationStage.NAVIGATION
+			work_items = _prepare_wall_collision(work_item_limit)
 		PreparationStage.NAVIGATION:
 			stage_name = "navigation"
-			_prepare_navigation()
+			work_items = _prepare_navigation(work_item_limit)
 		PreparationStage.NAVIGATION_LOOKUP:
 			stage_name = "navigation_lookup"
-			_rebuild_navigation_lookup()
-			_preparation_stage = PreparationStage.OCCLUSION_BEGIN
+			work_items = _continue_navigation_lookup(work_item_limit)
 		PreparationStage.OCCLUSION_BEGIN:
 			stage_name = "occlusion_begin"
 			_prepare_occlusion_begin()
@@ -144,10 +155,17 @@ func prepare_next_stage() -> Dictionary:
 			_prepare_furniture_instance()
 		PreparationStage.FURNITURE_NAVIGATION:
 			stage_name = "furniture_navigation"
-			_apply_furniture_navigation_blockers()
-			_finish_preparation()
+			work_items = _prepare_furniture_navigation(work_item_limit)
+		PreparationStage.FURNITURE_NAVIGATION_LOOKUP:
+			stage_name = "furniture_navigation_lookup"
+			work_items = _continue_navigation_lookup(work_item_limit)
 	var elapsed_usec := Time.get_ticks_usec() - started_usec
-	return _preparation_result(stage_name, elapsed_usec)
+	return _preparation_result(
+		stage_name,
+		elapsed_usec,
+		work_items,
+		work_item_limit,
+	)
 
 
 func is_preparation_complete() -> bool:
@@ -268,23 +286,39 @@ func _apply_geometry() -> void:
 	_preparation_stage = PreparationStage.COLLISION
 
 
-func _prepare_navigation() -> void:
+func _prepare_navigation(max_work_items: int) -> int:
 	var entry_point := _preparation_config.get("entry_point") as Vector2
 	var exit_point := _preparation_config.get("exit_point") as Vector2
 	if not _geometry_data.is_empty():
-		_navigation_grid_data = ROOM_GEOMETRY.navigation_grid_from_loaded_geometry(
-			_geometry_data,
-			entry_point,
-			exit_point
-		)
+		if not _preparation_config.has("navigation_scan"):
+			_preparation_config["navigation_scan"] = (
+				ROOM_GEOMETRY.begin_navigation_grid_scan(
+					_geometry_data,
+					entry_point,
+					exit_point,
+				)
+			)
+		var result := ROOM_GEOMETRY.continue_navigation_grid_scan(
+			_preparation_config.get("navigation_scan") as Dictionary,
+			max_work_items,
+		) as Dictionary
+		if result.get("complete") != true:
+			return int(result.get("processed", 0))
+		_preparation_config.erase("navigation_scan")
+		if result.get("failed") == true:
+			_fail_preparation("Interior navigation grid could not be built")
+			return int(result.get("processed", 0))
+		_navigation_grid_data = result.get("data", {}) as Dictionary
 	else:
+		# 旧壳配置仅用于兼容工具；正式十间室内全部走已验证几何的游标扫描。
 		_navigation_grid_data = FLOOR_PROFILES.build_navigation_grid_data(
 			_floor_profile_id,
 			entry_point,
 			exit_point
 		)
 	_base_navigation_grid_data = _navigation_grid_data.duplicate(true)
-	_preparation_stage = PreparationStage.NAVIGATION_LOOKUP
+	_preparation_stage = PreparationStage.OCCLUSION_BEGIN
+	return 1
 
 
 func _prepare_occlusion_begin() -> void:
@@ -346,7 +380,10 @@ func _prepare_furniture_begin() -> void:
 			return
 		_preparation_stage = PreparationStage.FURNITURE_INSTANCE
 		return
-	_finish_preparation()
+	_begin_navigation_lookup(
+		PreparationStage.NAVIGATION_LOOKUP,
+		PreparationStage.COMPLETE,
+	)
 
 
 func _prepare_furniture_instance() -> void:
@@ -359,6 +396,8 @@ func _prepare_furniture_instance() -> void:
 		)
 		return
 	if result.get("complete") == true:
+		_furniture_runtime.begin_occupied_room_cell_scan()
+		_preparation_config["furniture_navigation_phase"] = "occupancy"
 		_preparation_stage = PreparationStage.FURNITURE_NAVIGATION
 
 
@@ -374,13 +413,20 @@ func _fail_preparation(message: String) -> void:
 	push_error(message)
 
 
-func _preparation_result(stage_name: String, elapsed_usec: int) -> Dictionary:
+func _preparation_result(
+	stage_name: String,
+	elapsed_usec: int,
+	work_items: int = 0,
+	work_item_limit: int = 0,
+) -> Dictionary:
 	return {
 		"ok": not has_preparation_failed(),
 		"complete": is_preparation_complete(),
 		"failed": has_preparation_failed(),
 		"stage": stage_name,
 		"elapsed_usec": elapsed_usec,
+		"work_items": work_items,
+		"work_item_limit": work_item_limit,
 		"waiting": (
 			(
 				stage_name == "shell_wait"
@@ -639,25 +685,88 @@ func _draw() -> void:
 	)
 
 
-func _build_wall_collision() -> void:
+func _prepare_wall_collision(max_work_items: int) -> int:
+	var processed := 0
+	if not _preparation_config.has("collision_rects"):
+		if not _geometry_data.is_empty():
+			if not _preparation_config.has("collision_scan"):
+				_preparation_config["collision_scan"] = (
+					ROOM_GEOMETRY.begin_boundary_collision_scan(_geometry_data)
+				)
+			var result := ROOM_GEOMETRY.continue_boundary_collision_scan(
+				_preparation_config.get("collision_scan") as Dictionary,
+				max_work_items,
+			) as Dictionary
+			processed += int(result.get("processed", 0))
+			if result.get("complete") != true:
+				return processed
+			_preparation_config.erase("collision_scan")
+			_preparation_config["collision_rects"] = result.get("rects", []) as Array
+		else:
+			# 旧壳配置仅用于兼容工具；正式室内使用上面的游标扫描。
+			_preparation_config["collision_rects"] = (
+				FLOOR_PROFILES.get_boundary_collision_rects(_floor_profile_id)
+			)
+		_preparation_config["collision_cursor"] = 0
+	var collision_rects := _preparation_config.get("collision_rects", []) as Array
+	var cursor := int(_preparation_config.get("collision_cursor", 0))
 	var wall := get_node("WallCollision") as StaticBody2D
-	for child in wall.get_children():
-		child.free()
-	var index := 0
-	var collision_rects: Array[Rect2] = (
-		ROOM_GEOMETRY.boundary_collision_rects_from_loaded_geometry(_geometry_data)
-		if not _geometry_data.is_empty()
-		else FLOOR_PROFILES.get_boundary_collision_rects(_floor_profile_id)
-	)
-	for rect in collision_rects:
+	while cursor < collision_rects.size() and processed < max_work_items:
+		var rect := collision_rects[cursor] as Rect2
 		var collision := CollisionShape2D.new()
-		collision.name = "WallSection_%02d" % index
+		collision.name = "WallSection_%02d" % cursor
 		collision.position = rect.get_center()
 		var shape := RectangleShape2D.new()
 		shape.size = rect.size
 		collision.shape = shape
 		wall.add_child(collision)
-		index += 1
+		cursor += 1
+		processed += 1
+	_preparation_config["collision_cursor"] = cursor
+	if cursor >= collision_rects.size():
+		_preparation_config.erase("collision_rects")
+		_preparation_config.erase("collision_cursor")
+		_preparation_stage = PreparationStage.NAVIGATION
+	return processed
+
+
+func _begin_navigation_lookup(stage: PreparationStage, next_stage: PreparationStage) -> void:
+	_walkable_cell_lookup = {}
+	_preparation_config["navigation_lookup_cells"] = (
+		_navigation_grid_data.get("walkable_cells", []) as Array
+	)
+	_preparation_config["navigation_lookup_cursor"] = 0
+	_preparation_config["navigation_lookup_next_stage"] = next_stage
+	_preparation_stage = stage
+
+
+func _continue_navigation_lookup(max_work_items: int) -> int:
+	var cells := _preparation_config.get("navigation_lookup_cells", []) as Array
+	var cursor := int(_preparation_config.get("navigation_lookup_cursor", 0))
+	var processed := 0
+	while cursor < cells.size() and processed < max_work_items:
+		var serialized_cell := cells[cursor] as Array
+		if serialized_cell.size() >= 2:
+			_walkable_cell_lookup[Vector2i(
+				int(serialized_cell[0]),
+				int(serialized_cell[1]),
+			)] = true
+		cursor += 1
+		processed += 1
+	_preparation_config["navigation_lookup_cursor"] = cursor
+	if cursor >= cells.size():
+		var next_stage := int(_preparation_config.get(
+			"navigation_lookup_next_stage",
+			PreparationStage.COMPLETE,
+		)) as PreparationStage
+		_preparation_config.erase("navigation_lookup_cells")
+		_preparation_config.erase("navigation_lookup_cursor")
+		_preparation_config.erase("navigation_lookup_next_stage")
+		if next_stage == PreparationStage.COMPLETE:
+			_finish_preparation()
+		else:
+			_preparation_stage = next_stage
+	return processed
 
 
 func _rebuild_navigation_lookup() -> void:
@@ -668,6 +777,116 @@ func _rebuild_navigation_lookup() -> void:
 				int(serialized_cell[0]),
 				int(serialized_cell[1])
 			)] = true
+
+
+func _prepare_furniture_navigation(max_work_items: int) -> int:
+	var phase := String(_preparation_config.get(
+		"furniture_navigation_phase",
+		"occupancy",
+	))
+	if phase == "occupancy":
+		var occupancy_result := (
+			_furniture_runtime.continue_occupied_room_cell_scan(max_work_items)
+			as Dictionary
+		)
+		var processed := int(occupancy_result.get("processed", 0))
+		if occupancy_result.get("complete") != true:
+			return processed
+		_preparation_config["furniture_blocked_cells"] = (
+			_furniture_runtime.get_scanned_occupied_room_cells()
+		)
+		_preparation_config["furniture_blocked_lookup"] = (
+			_furniture_runtime.get_scanned_occupied_room_cell_lookup()
+		)
+		_preparation_config["furniture_filtered_walkable"] = []
+		_preparation_config["furniture_walkable_cursor"] = 0
+		_preparation_config["furniture_navigation_phase"] = "walkable"
+		return processed
+	if phase == "walkable":
+		var source_walkable := (
+			_navigation_grid_data.get("walkable_cells", []) as Array
+		)
+		var cursor := int(_preparation_config.get("furniture_walkable_cursor", 0))
+		var filtered := _preparation_config.get(
+			"furniture_filtered_walkable",
+			[],
+		) as Array
+		var blocked := _preparation_config.get(
+			"furniture_blocked_lookup",
+			{},
+		) as Dictionary
+		var processed := 0
+		while cursor < source_walkable.size() and processed < max_work_items:
+			var serialized_cell := source_walkable[cursor] as Array
+			var cell := Vector2i(int(serialized_cell[0]), int(serialized_cell[1]))
+			if not blocked.has(cell):
+				filtered.append(serialized_cell)
+			cursor += 1
+			processed += 1
+		_preparation_config["furniture_walkable_cursor"] = cursor
+		if cursor >= source_walkable.size():
+			_preparation_config["furniture_wall_lookup"] = {}
+			_preparation_config["furniture_wall_cursor"] = 0
+			_preparation_config["furniture_navigation_phase"] = "walls"
+		return processed
+	if phase == "walls":
+		var wall_cells := _navigation_grid_data.get("wall_cells", []) as Array
+		var cursor := int(_preparation_config.get("furniture_wall_cursor", 0))
+		var wall_lookup := _preparation_config.get(
+			"furniture_wall_lookup",
+			{},
+		) as Dictionary
+		var processed := 0
+		while cursor < wall_cells.size() and processed < max_work_items:
+			var serialized_cell := wall_cells[cursor] as Array
+			wall_lookup[Vector2i(
+				int(serialized_cell[0]),
+				int(serialized_cell[1]),
+			)] = true
+			cursor += 1
+			processed += 1
+		_preparation_config["furniture_wall_cursor"] = cursor
+		if cursor >= wall_cells.size():
+			_preparation_config["furniture_blocked_cursor"] = 0
+			_preparation_config["furniture_navigation_phase"] = "blocked"
+		return processed
+	var blocked_cells := _preparation_config.get(
+		"furniture_blocked_cells",
+		[],
+	) as Array
+	var cursor := int(_preparation_config.get("furniture_blocked_cursor", 0))
+	var wall_cells := _navigation_grid_data.get("wall_cells", []) as Array
+	var wall_lookup := _preparation_config.get("furniture_wall_lookup", {}) as Dictionary
+	var processed := 0
+	while cursor < blocked_cells.size() and processed < max_work_items:
+		var cell := blocked_cells[cursor] as Vector2i
+		if not wall_lookup.has(cell):
+			wall_lookup[cell] = true
+			wall_cells.append([cell.x, cell.y])
+		cursor += 1
+		processed += 1
+	_preparation_config["furniture_blocked_cursor"] = cursor
+	if cursor >= blocked_cells.size():
+		_navigation_grid_data["walkable_cells"] = _preparation_config.get(
+			"furniture_filtered_walkable",
+			[],
+		) as Array
+		for key in [
+			"furniture_navigation_phase",
+			"furniture_blocked_cells",
+			"furniture_blocked_lookup",
+			"furniture_filtered_walkable",
+			"furniture_walkable_cursor",
+			"furniture_wall_lookup",
+			"furniture_wall_cursor",
+			"furniture_blocked_cursor",
+		]:
+			_preparation_config.erase(key)
+		_begin_navigation_lookup(
+			PreparationStage.FURNITURE_NAVIGATION_LOOKUP,
+			PreparationStage.COMPLETE,
+		)
+	return processed
 
 
 func _apply_furniture_navigation_blockers() -> void:

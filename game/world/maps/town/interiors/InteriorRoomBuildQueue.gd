@@ -5,6 +5,7 @@ signal room_prepared(interior_id: String, room: InteriorRoom, profile: Dictionar
 signal room_failed(interior_id: String, error: String, profile: Dictionary)
 
 const FRAME_BUDGET_USEC := 8000
+const MIN_STAGE_REMAINING_USEC := InteriorRoom.PREPARATION_WORK_ITEM_RESERVE_USEC
 const ROOM_SCENE := preload(
 	"res://world/maps/town/interiors/InteriorRoom.tscn"
 )
@@ -60,6 +61,8 @@ func request(
 		"max_stage_usec": 0,
 		"stage_count": 0,
 		"stages": {},
+		"stage_calls": {},
+		"max_stage_work_items": 0,
 	}
 	if priority:
 		_order.push_front(interior_id)
@@ -94,13 +97,18 @@ func _process(_delta: float) -> void:
 		return
 	var frame_started_usec := Time.get_ticks_usec()
 	while not _order.is_empty():
+		var remaining_budget_usec := (
+			FRAME_BUDGET_USEC - (Time.get_ticks_usec() - frame_started_usec)
+		)
+		if remaining_budget_usec < MIN_STAGE_REMAINING_USEC:
+			break
 		var interior_id := _order[0]
 		var job := _jobs.get(interior_id, {}) as Dictionary
 		var room := job.get("room") as InteriorRoom
 		if not is_instance_valid(room):
 			_finish_failed(interior_id, "interior room disappeared")
 		else:
-			var result := room.prepare_next_stage() as Dictionary
+			var result := room.prepare_next_stage(remaining_budget_usec) as Dictionary
 			var stage_usec := int(result.get("elapsed_usec", 0))
 			job["cpu_usec"] = int(job.get("cpu_usec", 0)) + stage_usec
 			job["max_stage_usec"] = maxi(
@@ -113,6 +121,12 @@ func _process(_delta: float) -> void:
 			stages[stage_name] = maxi(
 				int(stages.get(stage_name, 0)),
 				stage_usec,
+			)
+			var stage_calls := job.get("stage_calls", {}) as Dictionary
+			stage_calls[stage_name] = int(stage_calls.get(stage_name, 0)) + 1
+			job["max_stage_work_items"] = maxi(
+				int(job.get("max_stage_work_items", 0)),
+				int(result.get("work_items", 0)),
 			)
 			_max_stage_usec = maxi(_max_stage_usec, stage_usec)
 			if result.get("failed") == true:
@@ -158,6 +172,8 @@ func _final_profile(interior_id: String) -> Dictionary:
 		"max_stage_usec": int(job.get("max_stage_usec", 0)),
 		"stage_count": int(job.get("stage_count", 0)),
 		"stages": (job.get("stages", {}) as Dictionary).duplicate(),
+		"stage_calls": (job.get("stage_calls", {}) as Dictionary).duplicate(),
+		"max_stage_work_items": int(job.get("max_stage_work_items", 0)),
 	}
 
 

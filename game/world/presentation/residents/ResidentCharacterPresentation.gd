@@ -875,7 +875,9 @@ func get_visible_resident_names() -> Array[String]:
 
 
 func get_active_occlusion_subjects() -> Array[Node2D]:
-	return _active_occlusion_subjects
+	var snapshot: Array[Node2D] = []
+	snapshot.assign(_active_occlusion_subjects)
+	return snapshot
 
 
 func get_visible_badge_names() -> Array[String]:
@@ -1245,7 +1247,7 @@ func _refresh_active_occlusion_subjects() -> void:
 	if next_subjects == _active_occlusion_subjects:
 		return
 	_active_occlusion_subjects = next_subjects
-	occlusion_subjects_changed.emit(_active_occlusion_subjects)
+	occlusion_subjects_changed.emit(get_active_occlusion_subjects())
 
 
 func _record_diagnostic(

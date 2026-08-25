@@ -222,8 +222,6 @@ func validate_next_segment() -> Dictionary:
 		return _abort_validation("TEXTURE_SIZE_MISMATCH", "segment texture size does not match")
 	if not _finite_pair(segment.get("foreground_canvas_origin_px")):
 		return _abort_validation("TEXTURE_ORIGIN_INVALID", "segment texture origin is invalid")
-	if not _valid_fade(segment):
-		return _abort_validation("FADE_INVALID", "segment fade values are invalid")
 	var origin := _pair(segment.get("foreground_canvas_origin_px"))
 	if (
 		origin.x < 0.0
@@ -233,20 +231,17 @@ func validate_next_segment() -> Dictionary:
 	):
 		return _abort_validation("TEXTURE_BOUNDS_INVALID", "segment texture exceeds the room canvas")
 	_pending_ids[segment_id] = true
-	var reveal_values: Variant = segment.get("reveal_polygons_canvas_px")
-	if (
-		reveal_values is not Array
-		or (reveal_values as Array).is_empty()
-		or (reveal_values as Array).size() > MAX_POLYGONS_PER_SEGMENT
-	):
-		return _abort_validation("REVEAL_POLYGONS_INVALID", "segment reveal polygons are invalid")
-	for polygon_value: Variant in reveal_values as Array:
-		var polygon := _polygon(polygon_value, _pending_canvas_size)
-		if not _valid_polygon(polygon):
-			return _abort_validation("REVEAL_POLYGON_INVALID", "segment reveal polygon is invalid")
-		_pending_polygon_points += polygon.size()
-		if _pending_polygon_points > MAX_TOTAL_POLYGON_POINTS:
-			return _abort_validation("POLYGON_LIMIT_EXCEEDED", "generated polygons exceed the limit")
+	var occlusion_fields := validate_segment_occlusion_fields(
+		segment,
+		_pending_canvas_size,
+		_pending_polygon_points,
+	)
+	if occlusion_fields.get("ok") != true:
+		return _abort_validation(
+			String(occlusion_fields.get("code", "SEGMENT_INVALID")),
+			String(occlusion_fields.get("error", "segment fields are invalid")),
+		)
+	_pending_polygon_points = int(occlusion_fields.get("polygon_points", 0))
 	var validated_segment := segment.duplicate(true)
 	_validated_segments.append(validated_segment)
 	_pending_segment_index += 1
@@ -262,6 +257,40 @@ func validate_next_segment() -> Dictionary:
 
 func get_validated_segments() -> Array[Dictionary]:
 	return _validated_segments.duplicate(true)
+
+
+func validate_segment_occlusion_fields(
+	segment: Dictionary,
+	canvas_size: Vector2i,
+	accumulated_polygon_points: int = 0,
+) -> Dictionary:
+	if not _valid_fade(segment):
+		return _failure("FADE_INVALID", "segment fade values are invalid")
+	var reveal_values: Variant = segment.get("reveal_polygons_canvas_px")
+	if (
+		reveal_values is not Array
+		or (reveal_values as Array).is_empty()
+		or (reveal_values as Array).size() > MAX_POLYGONS_PER_SEGMENT
+	):
+		return _failure(
+			"REVEAL_POLYGONS_INVALID",
+			"segment reveal polygons are invalid",
+		)
+	var polygon_points := accumulated_polygon_points
+	for polygon_value: Variant in reveal_values as Array:
+		var polygon := _polygon(polygon_value, canvas_size)
+		if not _valid_polygon(polygon):
+			return _failure(
+				"REVEAL_POLYGON_INVALID",
+				"segment reveal polygon is invalid",
+			)
+		polygon_points += polygon.size()
+		if polygon_points > MAX_TOTAL_POLYGON_POINTS:
+			return _failure(
+				"POLYGON_LIMIT_EXCEEDED",
+				"generated polygons exceed the limit",
+			)
+	return {"ok": true, "polygon_points": polygon_points}
 
 
 func _abort_validation(code: String, error: String) -> Dictionary:

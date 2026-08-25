@@ -62,6 +62,91 @@ func _run() -> void:
 		"v1",
 		"failed batch cannot publish room A's staged v2 metadata",
 	)
+	_create_room_fixture("room_b", "v1")
+	_create_room_fixture("room_a", "v2")
+	var invalid_polygon := _read_json(
+		ROOMS_ROOT.path_join("room_a/wall_occlusion.json"),
+	)
+	var invalid_polygon_segment := (
+		(invalid_polygon.get("segments") as Array)[0] as Dictionary
+	)
+	invalid_polygon_segment["reveal_polygons_canvas_px"] = [[
+		[0, 0], [16, 16], [0, 16], [16, 0],
+	]]
+	_write_json(
+		ROOMS_ROOT.path_join("room_a/wall_occlusion.json"),
+		invalid_polygon,
+	)
+	var invalid_polygon_result := generator.generate(ROOMS_ROOT, ROOM_IDS) as Dictionary
+	_expect_equal(
+		invalid_polygon_result.get("ok"),
+		false,
+		"an invalid reveal polygon is rejected before publication",
+	)
+	_expect_equal(
+		FileAccess.get_file_as_string(manifest_a_path),
+		previous_manifest_text,
+		"an invalid reveal polygon keeps the previous manifest",
+	)
+	_create_room_fixture("room_a", "v2")
+	var extreme_fade := _read_json(
+		ROOMS_ROOT.path_join("room_a/wall_occlusion.json"),
+	)
+	var extreme_fade_segment := (
+		(extreme_fade.get("segments") as Array)[0] as Dictionary
+	)
+	extreme_fade_segment["fade_distance_px"] = 70000
+	_write_json(
+		ROOMS_ROOT.path_join("room_a/wall_occlusion.json"),
+		extreme_fade,
+	)
+	var extreme_fade_result := generator.generate(ROOMS_ROOT, ROOM_IDS) as Dictionary
+	_expect_equal(
+		extreme_fade_result.get("ok"),
+		false,
+		"an extreme fade value is rejected before publication",
+	)
+	_expect_equal(
+		FileAccess.get_file_as_string(manifest_a_path),
+		previous_manifest_text,
+		"an extreme fade value keeps the previous manifest",
+	)
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	var staging_root := TEST_ROOT.path_join("publish_failure_staging")
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(staging_root))
+	var staged_b := generator.call(
+		"_stage_room",
+		ROOMS_ROOT,
+		"room_b",
+		staging_root,
+	) as Dictionary
+	var staged_b_asset := (staged_b.get("assets") as Array)[0] as Dictionary
+	var collision_path := String(staged_b_asset.get("final_path"))
+	_write_text(collision_path, "digest collision")
+	var staged_a := generator.call(
+		"_stage_room",
+		ROOMS_ROOT,
+		"room_a",
+		staging_root,
+	) as Dictionary
+	var staged_a_asset := (staged_a.get("assets") as Array)[0] as Dictionary
+	var new_a_texture_path := String(staged_a_asset.get("final_path"))
+	var publish_failure := generator.generate(ROOMS_ROOT, ROOM_IDS) as Dictionary
+	_expect_equal(
+		publish_failure.get("ok"),
+		false,
+		"a content-address collision aborts publication",
+	)
+	_expect(
+		not FileAccess.file_exists(new_a_texture_path),
+		"publication rollback removes assets created by the failed run",
+	)
+	_expect_equal(
+		FileAccess.get_file_as_string(manifest_a_path),
+		previous_manifest_text,
+		"publication failure keeps the previous manifest",
+	)
 	_remove_test_root()
 	await process_frame
 	await process_frame
@@ -76,7 +161,11 @@ func _create_room_fixture(room_id: String, revision: String) -> void:
 	)
 	var shell_path := shell_directory.path_join("room_shell.png")
 	var image := Image.create(16, 16, false, Image.FORMAT_RGBA8)
-	image.fill(Color(0.7, 0.4, 0.2, 1.0))
+	image.fill(
+		Color(0.7, 0.4, 0.2, 1.0)
+		if revision == "v1"
+		else Color(0.2, 0.5, 0.8, 1.0)
+	)
 	image.save_png(ProjectSettings.globalize_path(shell_path))
 	_write_json(room_root.path_join("room_geometry.json"), {
 		"room_id": room_id,
