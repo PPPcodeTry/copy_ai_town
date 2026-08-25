@@ -467,11 +467,10 @@ func _read_checked_resident_payload(
 		return {"ok": false, "errors": ["Agent 快照居民载荷缺失"]}
 	var payload := file.get_buffer(file.get_length())
 	file = null
-	if (
-		payload.size() != int(expected_length)
-		or _sha256(payload) != String(expected_sha256)
-	):
-		return {"ok": false, "errors": ["Agent 快照居民载荷校验失败"]}
+	if payload.size() != int(expected_length):
+		return {"ok": false, "errors": ["Agent 快照居民 byte_length 不一致"]}
+	if _sha256(payload) != String(expected_sha256):
+		return {"ok": false, "errors": ["Agent 快照居民 SHA-256 不一致"]}
 	return {"ok": true, "fileName": file_name, "payload": payload}
 
 
