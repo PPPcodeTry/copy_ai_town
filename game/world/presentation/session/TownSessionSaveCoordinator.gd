@@ -1448,50 +1448,19 @@ func inspect_incomplete(slot_id: String) -> Dictionary:
 					"SESSION_SAVE_JOURNAL_STATE_INVALID",
 					false,
 				)
-		var classification := "pre_agent_cleanup"
-		var error_code := "SESSION_SAVE_INCOMPLETE_CANDIDATE"
-		if kind == "save":
-			if state in [
-				"agent_commit_started",
-				"agent_commit_uncertain",
-			]:
-				classification = "agent_commit_uncertain"
-				error_code = "SESSION_SAVE_AGENT_COMMIT_UNCERTAIN"
-			elif [
-				"agent_committed",
-				"world_committed",
-				"agent_orphan_isolated",
-			].has(state):
-				classification = "agent_orphan_isolated"
-				error_code = "SESSION_SAVE_AGENT_ORPHAN_ISOLATED"
-		elif kind == "restore":
-			if state in ["restore_agent_started", "restore_agent_commit_started"]:
-				classification = "restore_agent_uncertain"
-				error_code = "SESSION_CONTINUE_AGENT_COMMIT_UNCERTAIN"
-			elif state in ["restore_agent_committed", "restore_world_committed"]:
-				classification = "restore_partial_commit"
-				error_code = "SESSION_CONTINUE_PARTIAL_COMMIT"
-			elif state == "transaction_failed":
-				var restore_failure_stage := String(
-					(payload_value as Dictionary).get("stage", ""),
-				)
-				if restore_failure_stage == "agent_commit":
-					classification = "restore_agent_uncertain"
-					error_code = "SESSION_CONTINUE_AGENT_COMMIT_UNCERTAIN"
-				elif restore_failure_stage in [
-					"world_commit_after_agent",
-					"post_commit_validation",
-				]:
-					classification = "restore_partial_commit"
-					error_code = "SESSION_CONTINUE_PARTIAL_COMMIT"
+		var classified := TownSaveJournalStates.classify_incomplete(
+			kind,
+			state,
+			payload_value as Dictionary,
+		)
 		items.append({
 			"context": (
 				context_value as Dictionary
 			).duplicate(true),
 			"kind": kind,
 			"state": state,
-			"classification": classification,
-			"errorCode": error_code,
+			"classification": String(classified.get("classification", "")),
+			"errorCode": String(classified.get("errorCode", "")),
 			"retryable": false,
 		})
 	return {

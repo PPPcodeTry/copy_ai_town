@@ -651,8 +651,13 @@ func _inspect_recovery_case(
 		"recoverable",
 		"最新损坏且旧完整配对存在时分类为可修复",
 	)
+	var inspection_report := (
+		slot.get("inspectionReport", {}) as Dictionary
+	).duplicate(true)
+	var diagnostic_id := String(inspection_report.get("diagnosticId", ""))
+	inspection_report.erase("diagnosticId")
 	_expect_equal(
-		slot.get("inspectionReport"),
+		inspection_report,
 		{
 			"version": 1,
 			"slotId": slot_id,
@@ -664,6 +669,7 @@ func _inspect_recovery_case(
 		},
 		"只读检查报告只保留制定计划所需的证据",
 	)
+	_expect(diagnostic_id.begins_with("SAVE-"), "只读检查报告提供稳定诊断编号")
 	var plan := slot.get("recoveryPlan", {}) as Dictionary
 	_expect_equal(
 		plan.get("action"),
@@ -710,6 +716,11 @@ func _verify_recovery_publication(
 	var receipt := repaired.get("repairReceipt", {}) as Dictionary
 	_expect_equal(receipt.get("sourceSaveRevision"), 1, "修复回执记录实际恢复来源")
 	_expect_equal(receipt.get("publishedSaveRevision"), 3, "修复不覆盖原档而是发布修订 3")
+	_expect_equal(
+		receipt.get("rebuiltDerivedData"),
+		["manifest_index", "session_config_projection", "startup_summary"],
+		"安全修复会通过正式发布重建索引、配置投影和启动摘要",
+	)
 	var repeated := service.call(
 		"execute_recovery_plan",
 		plan,

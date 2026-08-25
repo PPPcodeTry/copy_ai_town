@@ -603,6 +603,60 @@
       "func": "_inspect_manifest",
       "call": "string:.call( \"read_reference\", _required_string(world_log.get(\"snapshot_ref\")), _required_string(world_log.get(\"snapshot_sha256\")), )",
       "reason": "启动目录通过已校验的存档 Store 契约读取 world log 引用；方法名固定，不来自存档或外部输入。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "inspect",
+      "call": "string:.call(\"list_incomplete\", slot_id)",
+      "reason": "事务协调服务调用配置时逐项验证过的 Store 契约；方法名固定，不来自存档或外部输入。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "inspect",
+      "call": "string:.call(\"list_published\", slot_id)",
+      "reason": "事务协调服务调用配置时逐项验证过的 Store 契约；方法名固定，不来自存档或外部输入。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "inspect",
+      "call": "string:.call( \"load_snapshot\", context, )",
+      "reason": "事务协调服务调用配置时验证过的 Agent Store 契约；方法名固定，不来自存档或外部输入。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "execute",
+      "call": "string:.call(\"begin_slot_transaction\", slot_id)",
+      "reason": "事务协调执行器通过固定 Store 契约取得槽位锁，避免诊断与执行之间发生并发变化。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "_release_and_return",
+      "call": "string:.call(\"end_slot_transaction\", lease_token)",
+      "reason": "事务协调执行器在所有出口通过固定 Store 契约释放已取得的槽位锁。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "execute",
+      "call": "string:.call( \"write_intent_stage\", item.get(\"context\", {}) as Dictionary, kind, String(item.get(\"intentId\", \"\")), \"save_reconciled\" if kind == \"save\" else \"restore_reconciled\", { \"diagnosticId\": String(plan.get(\"diagnosticId\", \"\")), \"previousState\": String(item.get(\"state\", \"\")), \"resolution\": String(item.get(\"resolution\", \"\")), }, )",
+      "reason": "事务协调执行器只向固定 Store 契约追加已登记的协调终态；状态由受控 save/restore 类型二选一。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "execute",
+      "call": "string:.call( \"read_latest_intent\", item.get(\"context\", {}) as Dictionary, kind, String(item.get(\"intentId\", \"\")), )",
+      "reason": "事务协调执行器通过固定 Store 契约确认计划项是否已经封口，从而安全续跑同一计划。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "_read_reference_value",
+      "call": "string:.call(\"read_reference\", reference, sha256)",
+      "reason": "事务协调服务通过固定 Store 契约校验 World、world log 与 session config 的引用和哈希。"
+    },
+    {
+      "path": "game/world/presentation/session/TownSaveReconciliationService.gd",
+      "func": "_published_pair_is_complete",
+      "call": "string:.call( \"read_world_log_snapshot\", String(world_log.get(\"snapshot_ref\", \"\")), String(world_log.get(\"snapshot_sha256\", \"\")), )",
+      "reason": "事务协调服务通过固定 Store 契约恢复分段 world log，并交给正式日志 Store 校验完整结构。"
     }
   ]
 }

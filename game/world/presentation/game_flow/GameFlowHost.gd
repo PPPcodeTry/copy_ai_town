@@ -35,6 +35,9 @@ const SESSION_SAVE_MANIFEST := preload(
 const STARTUP_SAVE_CATALOG := preload(
 	"res://world/presentation/session/TownStartupSaveCatalog.gd"
 )
+const SAVE_RECONCILIATION_SERVICE := preload(
+	"res://world/presentation/session/TownSaveReconciliationService.gd"
+)
 const AUDIO_DISPLAY_SETTINGS_SERVICE := preload(
 	"res://world/presentation/ui/TownAudioDisplaySettingsService.gd"
 )
@@ -2116,7 +2119,15 @@ func _on_startup_load_game_intent_requested(
 		"startup.close_load_game":
 			_close_startup_load_game()
 		"session.continue_slot":
-			_on_startup_intent_requested(intent, payload)
+			var selected_slot_id := String(payload.get("slotId", "")).strip_edges()
+			var selected_catalog := _startup_catalog_snapshot()
+			var selected_slot := _startup_slot_by_id(selected_catalog, selected_slot_id)
+			if bool(selected_slot.get("diagnosticAvailable", false)):
+				var diagnostic_discovery := _catalog_slot_discovery(selected_slot, false)
+				_close_startup_load_game()
+				_open_continue_recovery(diagnostic_discovery, "load_game")
+			else:
+				_on_startup_intent_requested(intent, payload)
 		"save.request_delete_slot":
 			if _startup_load_game_mode != "load":
 				_last_result = _failure(
@@ -2281,6 +2292,49 @@ func _on_new_game_overwrite_intent_requested(
 			_close_new_game_overwrite()
 			_open_startup_load_game("load")
 		"session.retry_restore", "session.confirm_recovery":
+			var pending_plan := (
+				_pending_new_game_discovery.get("recoveryPlan", {}) as Dictionary
+			)
+			if (
+				String(pending_plan.get("action", ""))
+				== SAVE_RECONCILIATION_SERVICE.RECONCILE_ACTION
+				and (
+					_pending_new_game_discovery.get("manifest", {}) as Dictionary
+				).is_empty()
+			):
+				var reconciliation_store := SESSION_SAVE_STORE.new()
+				var reconciliation := SAVE_RECONCILIATION_SERVICE.new()
+				var configured := reconciliation.configure(
+					reconciliation_store,
+					AGENT_SAVE_STORE.new(),
+				) as Dictionary
+				var reconciled := (
+					reconciliation.execute(pending_plan, {
+						"confirmed": true,
+						"planId": String(pending_plan.get("planId", "")),
+					}) as Dictionary
+					if configured.get("ok") == true
+					else configured
+				)
+				_last_result = reconciled.duplicate(true)
+				_close_new_game_overwrite()
+				if reconciled.get("ok") != true:
+					_publish_startup_action_failure(intent, reconciled)
+				else:
+					_refresh_startup_main_menu_view_models()
+				return
+			if String(pending_plan.get("action", "")) == (
+				SAVE_RECONCILIATION_SERVICE.EXPORT_ACTION
+			):
+				var exporter := SAVE_RECONCILIATION_SERVICE.new()
+				var exported := exporter.export_diagnostic(pending_plan) as Dictionary
+				_last_result = exported.duplicate(true)
+				_close_new_game_overwrite()
+				if exported.get("ok") != true:
+					_publish_startup_action_failure(intent, exported)
+				else:
+					_refresh_startup_main_menu_view_models()
+				return
 			var recovery_mode := _pending_save_handling_mode
 			var route_origin := _pending_save_handling_origin
 			var summary := (
@@ -2324,7 +2378,10 @@ func _rediagnose_continue_recovery() -> void:
 			inspected,
 		)
 		return
-	if bool(inspected.get("requiresRecoveryConfirmation", false)):
+	if (
+		bool(inspected.get("requiresRecoveryConfirmation", false))
+		or bool(inspected.get("diagnosticAvailable", false))
+	):
 		_open_continue_recovery(inspected, route_origin)
 		return
 	_close_new_game_overwrite()
@@ -5364,6 +5421,29 @@ func _on_formal_continue_provider_health_completed(
 	var recovery_plan := (
 		discovery.get("recoveryPlan", {}) as Dictionary
 	).duplicate(true)
+	var reconciliation_receipt: Dictionary = {}
+	if String(recovery_plan.get("action", "")) == (
+		SAVE_RECONCILIATION_SERVICE.RECONCILE_ACTION
+	):
+		if not bool(discovery.get("recoveryConfirmed", false)):
+			_discard_pending_runtime()
+			_publish_startup_result(
+				_failure("SESSION_SAVE_RECOVERY_CONFIRMATION_REQUIRED", false),
+			)
+			return
+		var reconciled := restore_service.execute_reconciliation_plan(
+			recovery_plan,
+			{
+				"confirmed": true,
+				"planId": String(recovery_plan.get("planId", "")),
+			},
+		) as Dictionary
+		if reconciled.get("ok") != true:
+			_discard_pending_runtime()
+			_publish_startup_result(reconciled)
+			return
+		reconciliation_receipt = reconciled.duplicate(true)
+		recovery_plan.clear()
 	var restored: Dictionary
 	if recovery_plan.is_empty():
 		restored = restore_service.restore_discovered_revision(
@@ -5392,6 +5472,8 @@ func _on_formal_continue_provider_health_completed(
 		_discard_pending_runtime()
 		_publish_startup_result(restored)
 		return
+	if not reconciliation_receipt.is_empty():
+		restored["reconciliationReceipt"] = reconciliation_receipt
 	var upgraded_on_restore := bool(restored.get("completedByUpgrade", false))
 	_advance_town_entry_loading(0.88, "正在布置小镇…")
 	if not upgraded_on_restore and runtime.has_method("complete_restored_session"):
@@ -6346,6 +6428,7 @@ func _startup_slot_projection(slot: Dictionary) -> Dictionary:
 		"state": String(slot.get("state", "empty")),
 		"recoveryState": String(slot.get("recoveryState", "none")),
 		"continueAvailable": bool(slot.get("continueAvailable", false)),
+		"diagnosticAvailable": bool(slot.get("diagnosticAvailable", false)),
 		"requiresRecoveryConfirmation": bool(
 			slot.get("requiresRecoveryConfirmation", false),
 		),
@@ -6932,7 +7015,10 @@ func _discover_startup_slot(slot_id: String, include_config := false) -> Diction
 	var slot := _startup_slot_by_id(catalog, slot_id)
 	if slot.is_empty():
 		return _failure("STARTUP_SAVE_SLOT_ID_INVALID", false)
-	if not bool(slot.get("continueAvailable", false)):
+	if (
+		not bool(slot.get("continueAvailable", false))
+		and not bool(slot.get("diagnosticAvailable", false))
+	):
 		var error_code := String(slot.get("errorCode", "")).strip_edges()
 		if error_code.is_empty():
 			error_code = "SESSION_SAVE_NO_PUBLISHED_REVISION"
@@ -6955,7 +7041,18 @@ func _discover_startup_slot_for_overwrite(slot_id: String) -> Dictionary:
 func _catalog_slot_discovery(slot: Dictionary, include_config: bool) -> Dictionary:
 	var manifest := (slot.get("manifest", {}) as Dictionary).duplicate(true)
 	var summary := (slot.get("summary", {}) as Dictionary).duplicate(true)
-	if manifest.is_empty() or summary.is_empty():
+	var diagnostic_only := bool(slot.get("diagnosticAvailable", false))
+	if summary.is_empty() and diagnostic_only:
+		summary = {
+			"slotId": String(slot.get("slotId", "")),
+			"sessionId": "",
+			"saveRevision": int(slot.get("latestEvidenceRevision", 0)),
+			"savedAt": "",
+			"residentCount": 0,
+			"worldRevision": -1,
+			"day": 0,
+		}
+	if (manifest.is_empty() and not diagnostic_only) or summary.is_empty():
 		return _failure("SESSION_SAVE_NO_PUBLISHED_REVISION", false)
 	var result := {
 		"ok": true,
@@ -6968,6 +7065,7 @@ func _catalog_slot_discovery(slot: Dictionary, include_config: bool) -> Dictiona
 		"requiresRecoveryConfirmation": bool(
 			slot.get("requiresRecoveryConfirmation", false),
 		),
+		"diagnosticAvailable": bool(slot.get("diagnosticAvailable", false)),
 		"recoveryProgressRollback": bool(
 			slot.get("recoveryProgressRollback", false),
 		),

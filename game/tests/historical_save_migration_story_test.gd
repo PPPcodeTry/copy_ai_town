@@ -70,6 +70,16 @@ func _run() -> void:
 		return
 	_slot_id = "roundtrip-slot-%s" % _release_id
 	_session_id = "roundtrip-session-%s" % _release_id
+	var requested_slot_id := OS.get_environment(
+		"AI_TOWN_HISTORICAL_SLOT_ID",
+	).strip_edges()
+	var requested_session_id := OS.get_environment(
+		"AI_TOWN_HISTORICAL_SESSION_ID",
+	).strip_edges()
+	if not requested_slot_id.is_empty():
+		_slot_id = requested_slot_id
+	if not requested_session_id.is_empty():
+		_session_id = requested_session_id
 	if _release_id == "beta6":
 		_expect_ok(_mark_fixture_as_current_release(), "beta6 样本写入当前发行标记")
 	var store: RefCounted = STORE.new()

@@ -26,6 +26,10 @@ const COMPATIBILITY := preload(
 const HISTORICAL_UPGRADER := preload(
 	"res://world/presentation/session/TownHistoricalSaveUpgrader.gd"
 )
+const RECONCILIATION_SERVICE := preload(
+	"res://world/presentation/session/TownSaveReconciliationService.gd"
+)
+const AGENT_STORE := preload("res://agent/lifecycle/AgentSaveStore.gd")
 
 const FORMAL_WORLD_REQUIRED := "SESSION_SAVE_FORMAL_WORLD_REQUIRED"
 const SERVICE_NOT_CONFIGURED := "SESSION_SAVE_SERVICE_NOT_CONFIGURED"
@@ -342,7 +346,27 @@ func execute_recovery_plan(
 		"sourceSaveRevision": source_revision,
 		"damagedSaveRevision": damaged_revision,
 		"publishedSaveRevision": published_revision,
+		"rebuiltDerivedData": [
+			"manifest_index",
+			"session_config_projection",
+			"startup_summary",
+		],
 	}
+	_last_result = result.duplicate(true)
+	return result
+
+
+func execute_reconciliation_plan(
+	plan: Dictionary,
+	confirmation: Dictionary,
+) -> Dictionary:
+	if _store == null:
+		return _failure(SERVICE_NOT_CONFIGURED, false)
+	var service := RECONCILIATION_SERVICE.new()
+	var configured := service.configure(_store, AGENT_STORE.new()) as Dictionary
+	if configured.get("ok") != true:
+		return configured
+	var result := service.execute(plan, confirmation) as Dictionary
 	_last_result = result.duplicate(true)
 	return result
 

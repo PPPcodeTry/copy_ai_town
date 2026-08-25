@@ -1287,8 +1287,13 @@ func list_incomplete(slot_id_value: Variant) -> Dictionary:
 						return latest
 					if (
 						kind == "restore"
-						and latest.get("state") == "restore_completed"
+						and latest.get("state") in [
+							"restore_completed",
+							"restore_reconciled",
+						]
 					):
+						continue
+					if kind == "save" and latest.get("state") == "save_reconciled":
 						continue
 					records.append(
 						(latest.get("record", {}) as Dictionary).duplicate(true),

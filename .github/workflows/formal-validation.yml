@@ -124,3 +124,55 @@ jobs:
 
       - name: Source tree must stay clean after tests
         run: test -z "$(git status --porcelain)"
+
+  windows-save-recovery:
+    name: Windows save recovery (long path)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Enable Windows long paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@v4
+      - name: Download Godot
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "godot.zip"
+          $target = Join-Path $env:RUNNER_TEMP "godot"
+          Invoke-WebRequest `
+            -Uri "https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_win64.exe.zip" `
+            -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $target
+          $console = Get-ChildItem $target -Filter "*console.exe" | Select-Object -First 1
+          if (-not $console) { throw "Godot console executable not found" }
+          "GODOT_CONSOLE=$($console.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Import project
+        shell: pwsh
+        run: '& $env:GODOT_CONSOLE --headless --path game --import'
+      - name: Interrupted transaction and long-path regression
+        shell: pwsh
+        run: |
+          & $env:GODOT_CONSOLE --headless --path game --script res://tests/windows_directory_cleanup_test.gd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:GODOT_CONSOLE --headless --path game --script res://tests/save_reconciliation_test.gd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upgrade beta5 long-path fixture
+        shell: pwsh
+        run: |
+          $userRoot = Join-Path $env:APPDATA "Godot\app_userdata\我的ai小镇"
+          $fixture = "game/tests/fixtures/historical_saves/beta5-long-path"
+          if (Test-Path $userRoot) { Remove-Item -Recurse -Force $userRoot }
+          New-Item -ItemType Directory -Force -Path $userRoot | Out-Null
+          Copy-Item -Recurse -Force "$fixture\*" $userRoot
+          $suffix = "x" * 90
+          $env:AI_TOWN_HISTORICAL_FIXTURE_ID = "beta5"
+          $env:AI_TOWN_HISTORICAL_SLOT_ID = "roundtrip-slot-long-path-$suffix"
+          $env:AI_TOWN_HISTORICAL_SESSION_ID = "roundtrip-session-long-path-$suffix"
+          $env:AI_TOWN_PROVIDER_TEST_NO_NETWORK = "1"
+          try {
+            & $env:GODOT_CONSOLE --headless --path game --script res://tests/historical_save_migration_story_test.gd
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          finally {
+            if (Test-Path $userRoot) { Remove-Item -Recurse -Force $userRoot }
+          }

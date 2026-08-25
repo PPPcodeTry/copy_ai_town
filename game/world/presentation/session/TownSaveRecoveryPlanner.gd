@@ -5,6 +5,7 @@ extends RefCounted
 const INSPECTION_VERSION := 1
 const PLAN_VERSION := 1
 const REPUBLISH_ACTION := "restore_complete_pair_and_publish"
+const EXPORT_ACTION := "export_save_diagnostic"
 
 
 static func plan_id(
@@ -22,7 +23,7 @@ static func inspection_report(slot: Dictionary) -> Dictionary:
 		classification = "healthy"
 	elif String(slot.get("state", "")) == "empty":
 		classification = "empty"
-	return {
+	var report := {
 		"version": INSPECTION_VERSION,
 		"slotId": String(slot.get("slotId", "")),
 		"classification": classification,
@@ -35,18 +36,44 @@ static func inspection_report(slot: Dictionary) -> Dictionary:
 		),
 		"repairable": recovery_state == "older_complete_revision_available",
 	}
+	report["diagnosticId"] = _diagnostic_id(report)
+	return report
 
 
 static func recovery_plan(
 	slot: Dictionary,
 	report: Dictionary,
 ) -> Dictionary:
+	var reconciliation := slot.get("reconciliationPlan", {}) as Dictionary
+	if not reconciliation.is_empty():
+		return reconciliation.duplicate(true)
 	if (
 		String(report.get("classification", ""))
 		!= "older_complete_revision_available"
 		or not bool(report.get("repairable", false))
 	):
-		return {}
+		if String(report.get("classification", "")) in [
+			"healthy",
+			"empty",
+			"version_not_supported",
+		]:
+			return {}
+		return {
+			"version": PLAN_VERSION,
+			"planId": String(report.get("diagnosticId", "")),
+			"diagnosticId": String(report.get("diagnosticId", "")),
+			"action": EXPORT_ACTION,
+			"slotId": String(report.get("slotId", "")),
+			"repairable": false,
+			"confirmationRequired": false,
+			"items": [{
+				"classification": String(report.get("classification", "")),
+				"errorCode": String(report.get("errorCode", "")),
+				"latestEvidenceRevision": int(
+					report.get("latestEvidenceRevision", -1),
+				),
+			}],
+		}
 	var summary := slot.get("summary", {}) as Dictionary
 	var damage := slot.get("damageDetails", {}) as Dictionary
 	var slot_id := String(slot.get("slotId", ""))
@@ -72,3 +99,13 @@ static func recovery_plan(
 		"progressRollback": bool(damage.get("progressRollback", false)),
 		"confirmationRequired": true,
 	}
+
+
+static func _diagnostic_id(report: Dictionary) -> String:
+	return "SAVE-%s" % JSON.stringify({
+		"slotId": String(report.get("slotId", "")),
+		"classification": String(report.get("classification", "")),
+		"errorCode": String(report.get("errorCode", "")),
+		"latestEvidenceRevision": int(report.get("latestEvidenceRevision", -1)),
+		"latestCompleteRevision": int(report.get("latestCompleteRevision", -1)),
+	}).sha256_text().left(16).to_upper()

@@ -8,6 +8,9 @@ const SESSION_SAVE_MANIFEST := preload(
 const RECOVERY_PLANNER := preload(
 	"res://world/presentation/session/TownSaveRecoveryPlanner.gd"
 )
+const RECONCILIATION_SERVICE := preload(
+	"res://world/presentation/session/TownSaveReconciliationService.gd"
+)
 const COMPATIBILITY := preload(
 	"res://world/presentation/session/TownSaveCompatibilityRegistry.gd"
 )
@@ -627,6 +630,19 @@ func _inspect_slot(definition: Dictionary, profile_version: int) -> Dictionary:
 		return String(left.get("state", "")) < String(right.get("state", ""))
 	save_blockers.sort_custom(blocker_sort)
 	restore_blockers.sort_custom(blocker_sort)
+	var reconciliation_plan: Dictionary = {}
+	if _agent_store != null and not (record_values as Array).is_empty():
+		var reconciliation := RECONCILIATION_SERVICE.new()
+		var reconciliation_configured := reconciliation.configure(
+			_store,
+			_agent_store,
+		) as Dictionary
+		if reconciliation_configured.get("ok") != true:
+			return reconciliation_configured
+		var reconciliation_inspection := reconciliation.inspect(slot_id) as Dictionary
+		if reconciliation_inspection.get("ok") != true:
+			return reconciliation_inspection
+		reconciliation_plan = reconciliation_inspection.duplicate(true)
 
 	var latest_complete := (
 		complete_revisions[0].duplicate(true)
@@ -711,6 +727,17 @@ func _inspect_slot(definition: Dictionary, profile_version: int) -> Dictionary:
 		state = "healthy"
 		recovery_state = "current"
 		continue_available = true
+	if not reconciliation_plan.is_empty():
+		if bool(reconciliation_plan.get("repairable", false)) and not latest_complete.is_empty():
+			state = "recoverable"
+			continue_available = true
+			requires_confirmation = true
+		else:
+			state = "corrupt"
+			continue_available = false
+			requires_confirmation = false
+		if String(recovery_state) == "none":
+			recovery_state = "transaction_reconciliation_required"
 
 	var summary := {}
 	var manifest := {}
@@ -779,6 +806,11 @@ func _inspect_slot(definition: Dictionary, profile_version: int) -> Dictionary:
 		),
 		"saveBlockers": save_blockers,
 		"restoreBlockers": restore_blockers,
+		"reconciliationPlan": reconciliation_plan,
+		"diagnosticAvailable": (
+			String(reconciliation_plan.get("action", ""))
+			== RECONCILIATION_SERVICE.EXPORT_ACTION
+		),
 		"agentIntegrity": (
 			"version_only_read_only"
 			if (
@@ -796,9 +828,18 @@ func _inspect_slot(definition: Dictionary, profile_version: int) -> Dictionary:
 	}
 	var inspection_report := RECOVERY_PLANNER.inspection_report(slot)
 	slot["inspectionReport"] = inspection_report
-	slot["recoveryPlan"] = RECOVERY_PLANNER.recovery_plan(
+	var recovery_plan := RECOVERY_PLANNER.recovery_plan(
 		slot,
 		inspection_report,
+	)
+	slot["recoveryPlan"] = recovery_plan
+	slot["diagnosticAvailable"] = (
+		String(recovery_plan.get("action", ""))
+		== RECONCILIATION_SERVICE.EXPORT_ACTION
+		or (
+			not bool(slot.get("continueAvailable", false))
+			and not recovery_plan.is_empty()
+		)
 	)
 	return {
 		"ok": true,

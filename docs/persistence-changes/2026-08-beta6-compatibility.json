@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "decision": "migration",
-  "summary": "新增 beta1 至 beta5 通用升级链，并把安全坏档修复结果发布为新的完整修订。",
+  "summary": "新增 beta1 至 beta5 通用升级链、安全坏档发布、事务协调和不可修复诊断导出。",
   "affectedModules": [
     "session_manifest",
     "session_config",
@@ -23,7 +23,8 @@
   ],
   "tests": [
     "game/tests/historical_save_migration_story_test.gd",
-    "game/tests/town_save_compatibility_registry_test.gd"
+    "game/tests/town_save_compatibility_registry_test.gd",
+    "game/tests/save_reconciliation_test.gd"
   ],
   "docs": [
     "docs/持久化模块清单.md",
