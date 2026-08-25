@@ -28,7 +28,8 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_test_formal_generated_assets()
-	_test_multi_subject_state_refresh()
+	for room_id in ["cafe", "clinic", "home_template_b"]:
+		_test_multi_subject_state_refresh(room_id)
 	await process_frame
 	await process_frame
 	_finish()
@@ -49,6 +50,11 @@ func _test_formal_generated_assets() -> void:
 		_expect(not manifest.is_empty(), "%s has generated occlusion" % room_id)
 		if geometry.is_empty() or authored.is_empty() or manifest.is_empty():
 			continue
+		_expect_equal(
+			manifest.get("schema_version"),
+			2,
+			"%s uses the digest-bearing generated manifest schema" % room_id,
+		)
 		_expect_equal(
 			manifest.get("room_id"),
 			geometry.get("room_id"),
@@ -102,6 +108,12 @@ func _test_formal_generated_assets() -> void:
 				"%s generated segment %s has a texture"
 				% [room_id, segment.get("id")],
 			)
+			_expect_equal(
+				segment.get("foreground_texture_sha256"),
+				FileAccess.get_sha256(texture_path),
+				"%s generated segment %s keeps the texture digest"
+				% [room_id, segment.get("id")],
+			)
 		var shell := Sprite2D.new()
 		shell.texture = ResourceLoader.load(shell_path, "Texture2D") as Texture2D
 		_expect(shell.texture != null, "%s shell texture loads" % room_id)
@@ -142,6 +154,46 @@ func _test_formal_generated_assets() -> void:
 				occlusion.get_node_or_null(String(segment.get("id"))) != null,
 				"%s exposes generated segment %s" % [room_id, segment.get("id")],
 			)
+		var first_segment := generated_segments[0] as Dictionary
+		var first_reveal := (
+			first_segment.get("reveal_polygons_canvas_px") as Array
+		)[0] as Array
+		var subject := Node2D.new()
+		subject.z_index = 100
+		subject.position = _inside_polygon_point(first_reveal) - _pair(
+			geometry.get("world_origin_px"),
+		)
+		root.add_child(subject)
+		_expect(
+			bool(occlusion.update_for_subject(subject)),
+			"%s refreshes when a subject moves behind its foreground wall" % room_id,
+		)
+		var foreground := occlusion.get_node_or_null(
+			String(first_segment.get("id")),
+		) as Sprite2D
+		_expect_equal(
+			foreground.z_index if foreground != null else -1,
+			100 - WALL_Z_STEP,
+			"%s keeps the full wall behind the subject" % room_id,
+		)
+		var active_overlays := _visible_subject_overlays(occlusion)
+		_expect(
+			not active_overlays.is_empty()
+			and active_overlays[0].z_index == 100 + WALL_Z_STEP,
+			"%s raises the local wall slice in front of the subject" % room_id,
+		)
+		subject.position = Vector2(-100000.0, -100000.0)
+		_expect(
+			bool(occlusion.update_for_subject(subject)),
+			"%s refreshes when the subject leaves the reveal area" % room_id,
+		)
+		_expect_equal(
+			_visible_subject_overlays(occlusion).size(),
+			0,
+			"%s removes the front wall slice outside the reveal area" % room_id,
+		)
+		subject.free()
+		occlusion.update_for_subjects([])
 		occlusion.free()
 		shell.free()
 		configured_rooms += 1
@@ -152,8 +204,8 @@ func _test_formal_generated_assets() -> void:
 	)
 
 
-func _test_multi_subject_state_refresh() -> void:
-	var base := ROOM_BASE.path_join("cafe")
+func _test_multi_subject_state_refresh(room_id: String) -> void:
+	var base := ROOM_BASE.path_join(room_id)
 	var geometry_path := base.path_join("room_geometry.json")
 	var occlusion_path := base.path_join("wall_occlusion.json")
 	var manifest := _read_json(base.path_join("wall_occlusion_runtime.json"))
@@ -172,13 +224,13 @@ func _test_multi_subject_state_refresh() -> void:
 			occlusion_path,
 			shell_path,
 		)),
-		"multi-subject regression loads the cafe wall",
+		"%s multi-subject regression loads the wall" % room_id,
 	)
 	var first_segment := (manifest.get("segments") as Array)[0] as Dictionary
 	var first_reveal := (
 		first_segment.get("reveal_polygons_canvas_px") as Array
 	)[0] as Array
-	var foot := _polygon_average(first_reveal) - _pair(
+	var foot := _inside_polygon_point(first_reveal) - _pair(
 		geometry.get("world_origin_px"),
 	)
 	var first_subject := Node2D.new()
@@ -191,7 +243,7 @@ func _test_multi_subject_state_refresh() -> void:
 	root.add_child(second_subject)
 	_expect(
 		bool(occlusion.update_for_subjects([first_subject, second_subject])),
-		"the first two-person state refreshes wall occlusion",
+		"%s first two-person state refreshes wall occlusion" % room_id,
 	)
 	var foreground := occlusion.get_node_or_null(
 		String(first_segment.get("id")),
@@ -255,6 +307,20 @@ func _polygon_average(value: Array) -> Vector2:
 	for point_value: Variant in value:
 		total += _pair(point_value)
 	return total / float(value.size())
+
+
+func _inside_polygon_point(value: Array) -> Vector2:
+	var polygon := PackedVector2Array()
+	for point_value: Variant in value:
+		polygon.append(_pair(point_value))
+	var indices := Geometry2D.triangulate_polygon(polygon)
+	if indices.size() >= 3:
+		return (
+			polygon[indices[0]]
+			+ polygon[indices[1]]
+			+ polygon[indices[2]]
+		) / 3.0
+	return _polygon_average(value)
 
 
 func _pair(value: Variant) -> Vector2:

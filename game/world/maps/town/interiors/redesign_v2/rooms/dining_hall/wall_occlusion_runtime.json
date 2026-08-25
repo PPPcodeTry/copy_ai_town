@@ -4,7 +4,7 @@
     1254.0
   ],
   "room_id": "dining_hall",
-  "schema_version": 1,
+  "schema_version": 2,
   "segments": [
     {
       "fade_distance_px": 128.0,
@@ -12,7 +12,8 @@
         95,
         965
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dining_hall/wall_occlusion_runtime/south_main_left.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dining_hall/wall_occlusion_runtime/south_main_left-dccd4639a5f1.png",
+      "foreground_texture_sha256": "dccd4639a5f186e2ece04dfebae71e64d459f7b317a91b917befcaa0f1d1cb5d",
       "foreground_texture_size_px": [
         379,
         136
@@ -64,7 +65,8 @@
         572,
         965
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dining_hall/wall_occlusion_runtime/south_main_right.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dining_hall/wall_occlusion_runtime/south_main_right-c0735e3da6fa.png",
+      "foreground_texture_sha256": "c0735e3da6faf1e3867c96ed11fff09bc64a809899c8d56b6eb5518151d3aa07",
       "foreground_texture_size_px": [
         278,
         136
@@ -116,7 +118,8 @@
         846,
         949
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dining_hall/wall_occlusion_runtime/south_service.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dining_hall/wall_occlusion_runtime/south_service-399a0f54158c.png",
+      "foreground_texture_sha256": "399a0f54158c6b1a2266c3272cd5e239449fc6ef160d7bda357fb80e4032ac25",
       "foreground_texture_size_px": [
         309,
         149

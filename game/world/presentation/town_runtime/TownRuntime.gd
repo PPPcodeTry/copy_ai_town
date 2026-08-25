@@ -289,7 +289,6 @@ func _notification(what: int) -> void:
 
 
 func _process(delta: float) -> void:
-	_refresh_active_interior_occlusion()
 	var profile_started_usec := (
 		Time.get_ticks_usec() if _frame_profile_enabled else 0
 	)
@@ -382,15 +381,6 @@ func _process(delta: float) -> void:
 	if not _startup_completion_emitted:
 		_startup_completion_emitted = true
 		startup_completed.emit(get_startup_result())
-
-
-func _interior_occlusion_subjects() -> Array[Node2D]:
-	var subjects := super._interior_occlusion_subjects() as Array[Node2D]
-	if _resident_presentation != null:
-		subjects.append_array(
-			_resident_presentation.get_active_occlusion_subjects(),
-		)
-	return subjects
 
 
 # A1 探针:把本帧既有分项按渲染帧编号写入探针,adapter / HUD 段由各自宿主写入;
@@ -1976,6 +1966,10 @@ func _start_world() -> void:
 				)
 			)
 		)
+		return
+	if not _bind_interior_occlusion_presentation(_resident_presentation):
+		_world.stop()
+		_fail_start("居民遮挡事件绑定失败")
 		return
 	var animal_world_binding := _animal_presentation.bind_world_props(
 		_world,

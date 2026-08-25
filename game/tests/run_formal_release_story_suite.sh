@@ -27,8 +27,10 @@ slow_lane=(
 python3 "$script_dir/../../tools/guards/line_ratchet.py" --check
 
 checks=(
-	"res://tests/town_interior_lazy_loading_test.gd|TOWN_INTERIOR_LAZY_LOADING_PASS|94"
-	"res://tests/town_interior_wall_occlusion_cutout_test.gd|TOWN_INTERIOR_WALL_OCCLUSION_PASS|281"
+	"res://tests/town_interior_lazy_loading_test.gd|TOWN_INTERIOR_LAZY_LOADING_PASS|104"
+	"res://tests/town_interior_wall_occlusion_cutout_test.gd|TOWN_INTERIOR_WALL_OCCLUSION_PASS|419"
+	"res://tests/town_interior_occlusion_validation_test.gd|TOWN_INTERIOR_OCCLUSION_VALIDATION_PASS|30"
+	"res://tests/interior_occlusion_asset_generator_test.gd|INTERIOR_OCCLUSION_ASSET_GENERATOR_PASS|11"
 	"res://tests/town_world_agent_test.gd|TOWN_WORLD_AGENT_PASS"
 	"res://tests/town_world_foundation_test.gd|TOWN_WORLD_FOUNDATION_PASS|164"
 	"res://tests/town_conversation_test.gd|TOWN_CONVERSATION_PASS"

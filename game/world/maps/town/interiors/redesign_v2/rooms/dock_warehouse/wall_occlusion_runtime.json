@@ -4,7 +4,7 @@
     1178.0
   ],
   "room_id": "dock_warehouse",
-  "schema_version": 1,
+  "schema_version": 2,
   "segments": [
     {
       "fade_distance_px": 96.0,
@@ -12,7 +12,8 @@
         88,
         464
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/west_internal_wall_face.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/west_internal_wall_face-699adb2a07e4.png",
+      "foreground_texture_sha256": "699adb2a07e4af83bbdb9f622c894726c58556d11e3b9b85d3bc1508c6728756",
       "foreground_texture_size_px": [
         288,
         120
@@ -46,7 +47,8 @@
         344,
         416
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/west_column_face.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/west_column_face-7016ac9a1d61.png",
+      "foreground_texture_sha256": "7016ac9a1d6127ca096dad8669c3af7bbc9feedbb597ee26b3effa5baab22a3d",
       "foreground_texture_size_px": [
         32,
         224
@@ -80,7 +82,8 @@
         592,
         416
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/center_column_beam_face.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/center_column_beam_face-3b158fc3e809.png",
+      "foreground_texture_sha256": "3b158fc3e80944e5216ba90384867ad0e5cdb77a9c752c74d6825b09bdbbf54b",
       "foreground_texture_size_px": [
         40,
         456
@@ -114,7 +117,8 @@
         796,
         416
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/east_column_face.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/east_column_face-1d517704d47e.png",
+      "foreground_texture_sha256": "1d517704d47e603ff4b8b758d60ff2cf20db092322df9c4fd8ae8f26a35c8cae",
       "foreground_texture_size_px": [
         36,
         224
@@ -148,7 +152,8 @@
         880,
         576
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/main_annex_lower_divider_face.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/main_annex_lower_divider_face-ddb7e5804682.png",
+      "foreground_texture_sha256": "ddb7e58046824e20766231a91f8b997d50c005caee7750a924644633cc7ca32f",
       "foreground_texture_size_px": [
         48,
         480
@@ -200,7 +205,8 @@
         80,
         872
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/south_main_left_face.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/south_main_left_face-d3cc99aae8ed.png",
+      "foreground_texture_sha256": "d3cc99aae8ed788ae061e5d16538aa1227a133ce12b9b187c9ef6e431e3de27e",
       "foreground_texture_size_px": [
         360,
         184
@@ -234,7 +240,8 @@
         600,
         872
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/south_main_right_face.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/south_main_right_face-4b39621c6e84.png",
+      "foreground_texture_sha256": "4b39621c6e845f9da0979ac388a3b92eb953013aacc4cd6b9f84d5aa1866c9e9",
       "foreground_texture_size_px": [
         320,
         184
@@ -268,7 +275,8 @@
         920,
         888
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/south_annex_face.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/dock_warehouse/wall_occlusion_runtime/south_annex_face-ac57f7d2ff93.png",
+      "foreground_texture_sha256": "ac57f7d2ff9395b120f52d21a328554b271c183eb72d86e7b83e08ea8b0e5e81",
       "foreground_texture_size_px": [
         344,
         104

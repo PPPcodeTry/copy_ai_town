@@ -9,6 +9,27 @@ const WALL_OCCLUSION_SCRIPT := preload("res://world/maps/town/interiors/Interior
 const FURNITURE_RUNTIME_SCRIPT := preload(
 	"res://world/maps/town/interiors/InteriorFurnitureRuntime.gd"
 )
+const GEOMETRY_LOAD_TASK := preload(
+	"res://world/maps/town/interiors/InteriorGeometryLoadTask.gd"
+)
+enum PreparationStage {
+	IDLE,
+	SHELL_REQUEST,
+	SHELL_WAIT,
+	GEOMETRY_REQUEST,
+	GEOMETRY_WAIT,
+	GEOMETRY_APPLY,
+	COLLISION,
+	NAVIGATION,
+	NAVIGATION_LOOKUP,
+	OCCLUSION_BEGIN,
+	OCCLUSION_SEGMENT,
+	FURNITURE_BEGIN,
+	FURNITURE_INSTANCE,
+	FURNITURE_NAVIGATION,
+	COMPLETE,
+	FAILED,
+}
 
 var _floor_profile_id := ""
 var _geometry_path := ""
@@ -22,6 +43,9 @@ var _wall_occlusion: InteriorWallOcclusion
 var _furniture_manifest_path := ""
 var _furniture_layout_path := ""
 var _furniture_runtime: InteriorFurnitureRuntime
+var _preparation_stage := PreparationStage.IDLE
+var _preparation_config: Dictionary = {}
+var _preparation_error := ""
 
 
 func configure(
@@ -33,19 +57,201 @@ func configure(
 	furniture_manifest_path: String = "",
 	furniture_layout_path: String = ""
 ) -> void:
+	if not begin_preparation(
+		shell_path,
+		entry_point,
+		exit_point,
+		geometry_path,
+		occlusion_path,
+		furniture_manifest_path,
+		furniture_layout_path,
+	):
+		return
+	while not is_preparation_complete() and not has_preparation_failed():
+		prepare_next_stage()
+
+
+func begin_preparation(
+	shell_path: String,
+	entry_point: Vector2,
+	exit_point: Vector2,
+	geometry_path: String = "",
+	occlusion_path: String = "",
+	furniture_manifest_path: String = "",
+	furniture_layout_path: String = "",
+	threaded_shell_load: bool = false,
+) -> bool:
+	if _preparation_stage != PreparationStage.IDLE:
+		return false
+	_preparation_config = {
+		"shell_path": shell_path,
+		"entry_point": entry_point,
+		"exit_point": exit_point,
+		"geometry_path": geometry_path,
+		"occlusion_path": occlusion_path,
+		"furniture_manifest_path": furniture_manifest_path,
+		"furniture_layout_path": furniture_layout_path,
+		"threaded_shell_load": threaded_shell_load,
+	}
+	_preparation_error = ""
+	_preparation_stage = PreparationStage.SHELL_REQUEST
+	return true
+
+
+func prepare_next_stage() -> Dictionary:
+	if is_preparation_complete() or has_preparation_failed():
+		return _preparation_result("idle", 0)
+	var started_usec := Time.get_ticks_usec()
+	var stage_name := "unknown"
+	match _preparation_stage:
+		PreparationStage.SHELL_REQUEST:
+			stage_name = "shell_request"
+			_prepare_shell_request()
+		PreparationStage.SHELL_WAIT:
+			stage_name = "shell_wait"
+			_prepare_shell_wait()
+		PreparationStage.GEOMETRY_REQUEST:
+			stage_name = "geometry_request"
+			_prepare_geometry_request()
+		PreparationStage.GEOMETRY_WAIT:
+			stage_name = "geometry_wait"
+			_prepare_geometry_wait()
+		PreparationStage.GEOMETRY_APPLY:
+			stage_name = "geometry_apply"
+			_apply_geometry()
+		PreparationStage.COLLISION:
+			stage_name = "collision"
+			_build_wall_collision()
+			_preparation_stage = PreparationStage.NAVIGATION
+		PreparationStage.NAVIGATION:
+			stage_name = "navigation"
+			_prepare_navigation()
+		PreparationStage.NAVIGATION_LOOKUP:
+			stage_name = "navigation_lookup"
+			_rebuild_navigation_lookup()
+			_preparation_stage = PreparationStage.OCCLUSION_BEGIN
+		PreparationStage.OCCLUSION_BEGIN:
+			stage_name = "occlusion_begin"
+			_prepare_occlusion_begin()
+		PreparationStage.OCCLUSION_SEGMENT:
+			stage_name = "occlusion_segment"
+			_prepare_occlusion_segment()
+		PreparationStage.FURNITURE_BEGIN:
+			stage_name = "furniture_begin"
+			_prepare_furniture_begin()
+		PreparationStage.FURNITURE_INSTANCE:
+			stage_name = "furniture_instance"
+			_prepare_furniture_instance()
+		PreparationStage.FURNITURE_NAVIGATION:
+			stage_name = "furniture_navigation"
+			_apply_furniture_navigation_blockers()
+			_finish_preparation()
+	var elapsed_usec := Time.get_ticks_usec() - started_usec
+	return _preparation_result(stage_name, elapsed_usec)
+
+
+func is_preparation_complete() -> bool:
+	return _preparation_stage == PreparationStage.COMPLETE
+
+
+func has_preparation_failed() -> bool:
+	return _preparation_stage == PreparationStage.FAILED
+
+
+func get_preparation_error() -> String:
+	return _preparation_error
+
+
+func _prepare_shell_request() -> void:
 	var shell := get_node("RoomShell") as Sprite2D
+	var shell_path := String(_preparation_config.get("shell_path"))
+	if bool(_preparation_config.get("threaded_shell_load", false)):
+		if (
+			not ResourceLoader.exists(shell_path, "Texture2D")
+			or ResourceLoader.load_threaded_request(
+				shell_path,
+				"Texture2D",
+				true,
+			) != OK
+		):
+			_fail_preparation("Interior shell could not be queued: %s" % shell_path)
+			return
+		_preparation_stage = PreparationStage.SHELL_WAIT
+		return
 	shell.texture = _load_texture(shell_path)
 	if shell.texture == null:
-		push_error("Interior shell is missing: %s" % shell_path)
+		_fail_preparation("Interior shell is missing: %s" % shell_path)
+		return
+	_preparation_stage = PreparationStage.GEOMETRY_REQUEST
+
+
+func _prepare_shell_wait() -> void:
+	var shell_path := String(_preparation_config.get("shell_path"))
+	var status := ResourceLoader.load_threaded_get_status(shell_path)
+	if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+		return
+	if status != ResourceLoader.THREAD_LOAD_LOADED:
+		_fail_preparation("Interior shell threaded load failed: %s" % shell_path)
+		return
+	var shell := get_node("RoomShell") as Sprite2D
+	shell.texture = ResourceLoader.load_threaded_get(shell_path) as Texture2D
+	if shell.texture == null:
+		_fail_preparation("Interior shell is missing: %s" % shell_path)
+		return
+	_preparation_stage = PreparationStage.GEOMETRY_REQUEST
+
+
+func _prepare_geometry_request() -> void:
+	_geometry_path = String(_preparation_config.get("geometry_path"))
+	if (
+		bool(_preparation_config.get("threaded_shell_load", false))
+		and not _geometry_path.is_empty()
+	):
+		var task := GEOMETRY_LOAD_TASK.new() as InteriorGeometryLoadTask
+		_preparation_config["geometry_task"] = task
+		_preparation_config["geometry_task_id"] = WorkerThreadPool.add_task(
+			task.run.bind(_geometry_path),
+			false,
+			"Load interior geometry",
+		)
+		_preparation_stage = PreparationStage.GEOMETRY_WAIT
+		return
+	_geometry_data = ROOM_GEOMETRY.load_geometry(_geometry_path)
+	_preparation_stage = PreparationStage.GEOMETRY_APPLY
+
+func _prepare_geometry_wait() -> void:
+	var task_id := int(_preparation_config.get("geometry_task_id", -1))
+	if task_id < 0:
+		_fail_preparation("Interior room geometry task is missing")
+		return
+	if not WorkerThreadPool.is_task_completed(task_id):
+		return
+	WorkerThreadPool.wait_for_task_completion(task_id)
+	var task := (
+		_preparation_config.get("geometry_task") as InteriorGeometryLoadTask
+	)
+	_geometry_data = task.take_result()
+	_preparation_config.erase("geometry_task_id")
+	_preparation_config.erase("geometry_task")
+	_preparation_stage = PreparationStage.GEOMETRY_APPLY
+
+
+func _apply_geometry() -> void:
+	var shell := get_node("RoomShell") as Sprite2D
+	var shell_path := String(_preparation_config.get("shell_path"))
+	var entry_point := _preparation_config.get("entry_point") as Vector2
+	var exit_point := _preparation_config.get("exit_point") as Vector2
 	shell.position = Vector2.ZERO
-	_geometry_path = geometry_path
-	_geometry_data = ROOM_GEOMETRY.load_geometry(geometry_path)
-	if not geometry_path.is_empty() and _geometry_data.is_empty():
-		push_error("Interior room geometry is missing: %s" % geometry_path)
+	if not _geometry_path.is_empty() and _geometry_data.is_empty():
+		_fail_preparation("Interior room geometry is missing: %s" % _geometry_path)
+		return
 	if not _geometry_data.is_empty():
-		shell.position = ROOM_GEOMETRY.shell_position(_geometry_data)
-		entry_point = ROOM_GEOMETRY.get_primary_entry_point(_geometry_data)
-		exit_point = ROOM_GEOMETRY.get_primary_exit_point(_geometry_data)
+		var setup := ROOM_GEOMETRY.room_setup_from_loaded_geometry(
+			_geometry_data,
+		) as Dictionary
+		shell.position = setup.get("shell_position") as Vector2
+		entry_point = setup.get("entry_point") as Vector2
+		exit_point = setup.get("exit_point") as Vector2
 	(get_node("IndoorEntryPoint") as Marker2D).position = entry_point
 	(get_node("IndoorExitPoint") as Marker2D).position = exit_point
 	if not _geometry_data.is_empty():
@@ -53,11 +259,20 @@ func configure(
 	else:
 		_floor_profile_id = FLOOR_PROFILES.profile_id_from_shell_path(shell_path)
 		if not FLOOR_PROFILES.has_profile(_floor_profile_id):
-			push_error("Interior floor profile is missing: %s" % _floor_profile_id)
+			_fail_preparation(
+				"Interior floor profile is missing: %s" % _floor_profile_id,
+			)
 			return
-	_build_wall_collision()
+	_preparation_config["entry_point"] = entry_point
+	_preparation_config["exit_point"] = exit_point
+	_preparation_stage = PreparationStage.COLLISION
+
+
+func _prepare_navigation() -> void:
+	var entry_point := _preparation_config.get("entry_point") as Vector2
+	var exit_point := _preparation_config.get("exit_point") as Vector2
 	if not _geometry_data.is_empty():
-		_navigation_grid_data = ROOM_GEOMETRY.build_navigation_grid_data(
+		_navigation_grid_data = ROOM_GEOMETRY.navigation_grid_from_loaded_geometry(
 			_geometry_data,
 			entry_point,
 			exit_point
@@ -69,23 +284,47 @@ func configure(
 			exit_point
 		)
 	_base_navigation_grid_data = _navigation_grid_data.duplicate(true)
-	_rebuild_navigation_lookup()
-	_occlusion_path = _resolve_occlusion_path(geometry_path, occlusion_path)
+	_preparation_stage = PreparationStage.NAVIGATION_LOOKUP
+
+
+func _prepare_occlusion_begin() -> void:
+	var shell := get_node("RoomShell") as Sprite2D
+	var configured_path := String(_preparation_config.get("occlusion_path"))
+	_occlusion_path = _resolve_occlusion_path(_geometry_path, configured_path)
 	if not _occlusion_path.is_empty() and not _geometry_data.is_empty():
 		_wall_occlusion = WALL_OCCLUSION_SCRIPT.new() as InteriorWallOcclusion
 		add_child(_wall_occlusion)
-		if not bool(_wall_occlusion.configure(
+		if not bool(_wall_occlusion.begin_configuration(
 			shell,
 			_geometry_data,
 			_geometry_path,
 			_occlusion_path,
-			shell_path,
+			String(_preparation_config.get("shell_path")),
 		)):
 			_wall_occlusion.queue_free()
 			_wall_occlusion = null
-	_furniture_manifest_path = furniture_manifest_path
-	_furniture_layout_path = furniture_layout_path
-	if not furniture_manifest_path.is_empty() and not furniture_layout_path.is_empty():
+			_fail_preparation("Interior wall occlusion could not be loaded")
+			return
+		_preparation_stage = PreparationStage.OCCLUSION_SEGMENT
+		return
+	_preparation_stage = PreparationStage.FURNITURE_BEGIN
+
+
+func _prepare_occlusion_segment() -> void:
+	var result := _wall_occlusion.continue_configuration() as Dictionary
+	if result.get("failed") == true:
+		_fail_preparation("Interior wall occlusion segment could not be loaded")
+		return
+	if result.get("complete") == true:
+		_preparation_stage = PreparationStage.FURNITURE_BEGIN
+
+
+func _prepare_furniture_begin() -> void:
+	_furniture_manifest_path = String(
+		_preparation_config.get("furniture_manifest_path"),
+	)
+	_furniture_layout_path = String(_preparation_config.get("furniture_layout_path"))
+	if not _furniture_manifest_path.is_empty() and not _furniture_layout_path.is_empty():
 		_furniture_runtime = FURNITURE_RUNTIME_SCRIPT.new() as InteriorFurnitureRuntime
 		_furniture_runtime.name = "FurnitureRuntime"
 		add_child(_furniture_runtime)
@@ -93,14 +332,67 @@ func configure(
 			"layout_changed",
 			_on_furniture_layout_changed
 		)
-		if not bool(_furniture_runtime.configure(furniture_manifest_path,
-			furniture_layout_path)):
-			push_error("Interior furniture layout could not be loaded: %s" % furniture_layout_path)
+		if not bool(_furniture_runtime.begin_configuration(
+			_furniture_manifest_path,
+			_furniture_layout_path,
+		)):
+			var details := PackedStringArray()
 			for error in _furniture_runtime.get_errors() as PackedStringArray:
-				push_error("Interior furniture: %s" % error)
-		else:
-			_apply_furniture_navigation_blockers()
+				details.append(error)
+			_fail_preparation(
+				"Interior furniture layout could not be loaded: %s (%s)"
+				% [_furniture_layout_path, "; ".join(details)],
+			)
+			return
+		_preparation_stage = PreparationStage.FURNITURE_INSTANCE
+		return
+	_finish_preparation()
+
+
+func _prepare_furniture_instance() -> void:
+	var result := _furniture_runtime.continue_configuration() as Dictionary
+	if result.get("failed") == true:
+		var details := _furniture_runtime.get_errors() as PackedStringArray
+		_fail_preparation(
+			"Interior furniture instance could not be loaded: %s"
+			% "; ".join(details),
+		)
+		return
+	if result.get("complete") == true:
+		_preparation_stage = PreparationStage.FURNITURE_NAVIGATION
+
+
+func _finish_preparation() -> void:
 	queue_redraw()
+	_preparation_config.clear()
+	_preparation_stage = PreparationStage.COMPLETE
+
+
+func _fail_preparation(message: String) -> void:
+	_preparation_error = message
+	_preparation_stage = PreparationStage.FAILED
+	push_error(message)
+
+
+func _preparation_result(stage_name: String, elapsed_usec: int) -> Dictionary:
+	return {
+		"ok": not has_preparation_failed(),
+		"complete": is_preparation_complete(),
+		"failed": has_preparation_failed(),
+		"stage": stage_name,
+		"elapsed_usec": elapsed_usec,
+		"waiting": (
+			(
+				stage_name == "shell_wait"
+				and _preparation_stage == PreparationStage.SHELL_WAIT
+			)
+			or (
+				stage_name == "geometry_wait"
+				and _preparation_stage == PreparationStage.GEOMETRY_WAIT
+			)
+		),
+		"error": _preparation_error,
+	}
 
 
 func get_floor_profile_id() -> String:
@@ -353,7 +645,7 @@ func _build_wall_collision() -> void:
 		child.free()
 	var index := 0
 	var collision_rects: Array[Rect2] = (
-		ROOM_GEOMETRY.get_boundary_collision_rects(_geometry_data)
+		ROOM_GEOMETRY.boundary_collision_rects_from_loaded_geometry(_geometry_data)
 		if not _geometry_data.is_empty()
 		else FLOOR_PROFILES.get_boundary_collision_rects(_floor_profile_id)
 	)

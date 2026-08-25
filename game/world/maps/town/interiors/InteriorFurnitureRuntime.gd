@@ -33,26 +33,88 @@ var _ground_shadow_count := 0
 var _debug_visible := false
 var _layout_state: Dictionary = {}
 var _pixel_light_texture: Texture2D
+var _configuration_instances: Array = []
+var _configuration_index := 0
+var _configuration_layout: Dictionary = {}
+var _configuration_active := false
+var _configuration_failed := false
 
 
 func configure(manifest_path: String, layout_path: String) -> bool:
+	if not begin_configuration(manifest_path, layout_path):
+		return false
+	while _configuration_active:
+		continue_configuration()
+	return not _configuration_failed
+
+
+func begin_configuration(manifest_path: String, layout_path: String) -> bool:
 	_clear_runtime()
+	_configuration_instances.clear()
+	_configuration_index = 0
+	_configuration_layout.clear()
+	_configuration_active = false
+	_configuration_failed = false
 	_manifest_path = manifest_path
 	var manifest := _load_json(manifest_path)
 	var layout := _load_json(layout_path)
 	if manifest.is_empty() or layout.is_empty():
+		_configuration_failed = true
 		return false
 	# 住宅模板会由多个正式 home_xx 空间共享同一份资产目录，因此布局 room_id
 	# 可以是具体住宅 ID，不要求与模板目录 ID 完全相同。
 	_load_definitions(manifest)
 	if not _errors.is_empty():
+		_configuration_failed = true
 		return false
-	var result := apply_layout(layout, false)
-	if result.get("ok") != true:
-		_errors = result.get("errors", PackedStringArray()) as PackedStringArray
+	var errors := _validate_layout(layout, false)
+	if not errors.is_empty():
+		_errors = errors
+		_configuration_failed = true
 		return false
+	_configuration_layout = layout.duplicate(true)
+	_configuration_instances = (
+		(_configuration_layout.get("instances", []) as Array).duplicate(true)
+	)
+	_configuration_instances.sort_custom(
+		func(left: Variant, right: Variant) -> bool:
+			return str((left as Dictionary).get("instance_id", "")) < str(
+				(right as Dictionary).get("instance_id", ""),
+			)
+	)
+	_configuration_layout["instances"] = _configuration_instances.duplicate(true)
+	_clear_scene_nodes()
+	_errors.clear()
+	_occlusion_layer = RUNTIME_OCCLUSION.new() as Node2D
+	_occlusion_layer.name = "FurnitureFootpointOcclusion"
+	_occlusion_layer.set("z_step", 1)
 	_layout_path = layout_path
+	_configuration_active = true
 	return true
+
+
+func continue_configuration() -> Dictionary:
+	if not _configuration_active:
+		return {
+			"ok": not _configuration_failed,
+			"complete": not _configuration_failed,
+			"failed": _configuration_failed,
+		}
+	if _configuration_index < _configuration_instances.size():
+		_build_instance(
+			_configuration_instances[_configuration_index] as Dictionary,
+		)
+		_configuration_index += 1
+		if not _errors.is_empty():
+			_configuration_active = false
+			_configuration_failed = true
+			return {"ok": false, "complete": false, "failed": true}
+		return {"ok": true, "complete": false, "failed": false}
+	add_child(_occlusion_layer)
+	_layout_state = _configuration_layout
+	set_debug_visible(_debug_visible)
+	_configuration_active = false
+	return {"ok": true, "complete": true, "failed": false}
 
 
 func set_layout_path(layout_path: String) -> bool:
@@ -292,7 +354,10 @@ func set_debug_visible(value: bool) -> void:
 			debug_root.visible = value
 
 
-func _validate_layout(layout: Dictionary) -> PackedStringArray:
+func _validate_layout(
+	layout: Dictionary,
+	validate_textures: bool = true,
+) -> PackedStringArray:
 	var errors := PackedStringArray()
 	var instances_value: Variant = layout.get("instances")
 	if not instances_value is Array:
@@ -329,7 +394,7 @@ func _validate_layout(layout: Dictionary) -> PackedStringArray:
 		var sprite_path := str(
 			(definition.get("visual_sprite", {}) as Dictionary).get(direction, "")
 		)
-		if _load_texture(sprite_path) == null:
+		if validate_textures and _load_texture(sprite_path) == null:
 			errors.append("%s 贴图无法加载：%s" % [instance_id, sprite_path])
 		if GEOMETRY.ground_contact_collision_shapes(definition, direction).is_empty():
 			errors.append("%s 没有连续碰撞形状" % instance_id)

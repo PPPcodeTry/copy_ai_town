@@ -4,7 +4,7 @@
     1254.0
   ],
   "room_id": "workshop",
-  "schema_version": 1,
+  "schema_version": 2,
   "segments": [
     {
       "fade_distance_px": 96.0,
@@ -12,7 +12,8 @@
         115,
         920
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/south_main_left.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/south_main_left-cdd77e73ed8f.png",
+      "foreground_texture_sha256": "cdd77e73ed8f40516a74a34a37eb53e6ebcee6aa8af7623fedf9d454c88cfb5d",
       "foreground_texture_size_px": [
         375,
         172
@@ -82,7 +83,8 @@
         606,
         920
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/south_main_right.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/south_main_right-6cb1b37fc85b.png",
+      "foreground_texture_sha256": "6cb1b37fc85b109bf48c5e3ffb5f6c4ab15a4ff903cf9365bed0fb3a718a288c",
       "foreground_texture_size_px": [
         301,
         172
@@ -152,7 +154,8 @@
         907,
         920
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/south_annex.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/south_annex-a7bea17ad814.png",
+      "foreground_texture_sha256": "a7bea17ad81491a20aaa8a1a0b9a20e9c5a77f173f1a9e1939c5df5545ec18a4",
       "foreground_texture_size_px": [
         254,
         168
@@ -186,7 +189,8 @@
         868,
         495
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/annex_divider_north.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/annex_divider_north-fe9a71562cc5.png",
+      "foreground_texture_sha256": "fe9a71562cc58fb2c709c052b16d85265e982908b6d916f2cde560a82f436a21",
       "foreground_texture_size_px": [
         41,
         246
@@ -220,7 +224,8 @@
         868,
         848
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/annex_divider_south.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/workshop/wall_occlusion_runtime/annex_divider_south-d445c9325fdf.png",
+      "foreground_texture_sha256": "d445c9325fdfa1fb56df7d726f2f936dae8b0069b86e9b5242f443bda77c0912",
       "foreground_texture_size_px": [
         41,
         108

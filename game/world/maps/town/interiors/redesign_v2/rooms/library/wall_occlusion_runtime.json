@@ -4,7 +4,7 @@
     1182.0
   ],
   "room_id": "library",
-  "schema_version": 1,
+  "schema_version": 2,
   "segments": [
     {
       "fade_distance_px": 96.0,
@@ -12,7 +12,8 @@
         76,
         958
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/library/wall_occlusion_runtime/south_west_foreground.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/library/wall_occlusion_runtime/south_west_foreground-689cdf6d957e.png",
+      "foreground_texture_sha256": "689cdf6d957e86ff7c1153c63fc754fb7fad9cd735840d6ffea1e49a114470fb",
       "foreground_texture_size_px": [
         514,
         169
@@ -64,7 +65,8 @@
         741,
         958
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/library/wall_occlusion_runtime/south_east_foreground.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/library/wall_occlusion_runtime/south_east_foreground-4e62ab700ff0.png",
+      "foreground_texture_sha256": "4e62ab700ff05abb38734249e8a17055f151cf4940a3a1c7ff6a59275d05f90c",
       "foreground_texture_size_px": [
         514,
         169

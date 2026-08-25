@@ -1510,6 +1510,28 @@ func _test_presentation_registry_and_spaces() -> void:
 	var world := FakeWorld.new()
 	var presentation = RESIDENT_PRESENTATION.new()
 	root.add_child(presentation)
+	var occlusion_membership_events: Array[Array] = []
+	var occlusion_state_events: Array[Node2D] = []
+	_expect(
+		presentation.has_signal("occlusion_subjects_changed"),
+		"resident presentation publishes occlusion membership changes",
+	)
+	_expect(
+		presentation.has_signal("occlusion_subject_state_changed"),
+		"resident presentation publishes movement and visibility changes",
+	)
+	if presentation.has_signal("occlusion_subjects_changed"):
+		presentation.connect(
+			"occlusion_subjects_changed",
+			func(subjects: Array[Node2D]) -> void:
+				occlusion_membership_events.append(subjects),
+		)
+	if presentation.has_signal("occlusion_subject_state_changed"):
+		presentation.connect(
+			"occlusion_subject_state_changed",
+			func(subject: Node2D) -> void:
+				occlusion_state_events.append(subject),
+		)
 	var selected_residents: Array[Dictionary] = []
 	presentation.resident_selected.connect(
 		func(resident_id: String, resident_name: String) -> void:
@@ -1545,11 +1567,24 @@ func _test_presentation_registry_and_spaces() -> void:
 		indoor_body,
 		"active-space occlusion subjects come directly from the resident layer",
 	)
+	_expect(
+		not occlusion_membership_events.is_empty()
+		and occlusion_membership_events[-1] == occlusion_subjects,
+		"space changes publish the cached active occlusion membership once",
+	)
 	if indoor_body != null:
 		_expect_equal(
 			indoor_body.position,
 			Vector2(1060.0, 2070.0),
 			"indoor relocation applies the host-provided space origin",
+		)
+		var state_event_count := occlusion_state_events.size()
+		indoor_body.position += Vector2.ONE
+		await process_frame
+		_expect_equal(
+			occlusion_state_events.size(),
+			state_event_count + 1,
+			"one visible resident transform emits one occlusion dirty event",
 		)
 	world.all_states_query_count = 0
 	world.movement_query_count = 0

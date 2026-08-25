@@ -365,6 +365,15 @@ static func shell_position(value: Variant) -> Vector2:
 	return _shell_position_unchecked(geometry)
 
 
+# 仅接收 load_geometry 已验证的结果，供分帧构建避免重复扫描整份 floor_cells。
+static func room_setup_from_loaded_geometry(geometry: Dictionary) -> Dictionary:
+	return {
+		"shell_position": _shell_position_unchecked(geometry),
+		"entry_point": _get_primary_entry_point_unchecked(geometry),
+		"exit_point": _get_primary_exit_point_unchecked(geometry),
+	}
+
+
 static func _shell_position_unchecked(geometry: Dictionary) -> Vector2:
 	var canvas := _point(geometry.get("canvas_size_px", [0, 0]))
 	var world_origin := _point(geometry.get("world_origin_px", [0, 0]))
@@ -501,6 +510,12 @@ static func get_boundary_collision_rects(value: Variant) -> Array[Rect2]:
 	return _get_boundary_collision_rects_unchecked(geometry)
 
 
+static func boundary_collision_rects_from_loaded_geometry(
+	geometry: Dictionary,
+) -> Array[Rect2]:
+	return _get_boundary_collision_rects_unchecked(geometry)
+
+
 static func _get_boundary_collision_rects_unchecked(
 	geometry: Dictionary
 ) -> Array[Rect2]:
@@ -542,6 +557,30 @@ static func build_navigation_grid_data(
 		return {}
 	var entry_point := entry_value as Vector2
 	var exit_point := exit_value as Vector2
+	return _build_navigation_grid_data_unchecked(
+		geometry,
+		entry_point,
+		exit_point,
+	)
+
+
+static func navigation_grid_from_loaded_geometry(
+	geometry: Dictionary,
+	entry_point: Vector2,
+	exit_point: Vector2,
+) -> Dictionary:
+	return _build_navigation_grid_data_unchecked(
+		geometry,
+		entry_point,
+		exit_point,
+	)
+
+
+static func _build_navigation_grid_data_unchecked(
+	geometry: Dictionary,
+	entry_point: Vector2,
+	exit_point: Vector2,
+) -> Dictionary:
 	var walkable_cells := _get_walkable_cells_unchecked(geometry)
 	if walkable_cells.is_empty():
 		return {}

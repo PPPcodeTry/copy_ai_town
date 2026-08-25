@@ -9,6 +9,8 @@ signal resident_body_space_changed(
 	previous_space_id: String,
 	space_id: String,
 )
+signal occlusion_subjects_changed(subjects: Array[Node2D])
+signal occlusion_subject_state_changed(subject: Node2D)
 signal presentation_diagnostic(diagnostic: Dictionary)
 signal resident_selected(resident_id: String, resident_name: String)
 
@@ -31,6 +33,7 @@ var _active_space_id := "town_outdoor"
 var _active_space_origin := Vector2.ZERO
 var _last_world_revision := -1
 var _bodies: Dictionary = {}
+var _active_occlusion_subjects: Array[Node2D] = []
 var _diagnostics: Array[Dictionary] = []
 var _resident_id_by_name: Dictionary = {}
 var _resident_name_by_id: Dictionary = {}
@@ -109,6 +112,7 @@ func unbind_world() -> void:
 		if is_instance_valid(body):
 			body.queue_free()
 	_bodies.clear()
+	_refresh_active_occlusion_subjects()
 
 
 func prepare_resident_replacement(resident_id: String) -> Dictionary:
@@ -350,6 +354,7 @@ func sync_from_world(force_relocate: bool = false) -> Dictionary:
 		_resident_name_by_id.erase(resident_id)
 		resident_body_removed.emit(resident_id)
 	_last_world_revision = world_revision
+	_refresh_active_occlusion_subjects()
 	return {
 		"ok": true,
 		"status": "confirmed",
@@ -650,6 +655,7 @@ func _apply_prepared_identity_state(
 		body.presentation_diagnostic.connect(_on_body_diagnostic)
 		body.resident_pressed.connect(_on_resident_pressed)
 		body.visible_space_changed.connect(_on_body_visible_space_changed)
+		body.occlusion_state_changed.connect(_on_body_occlusion_state_changed)
 	var motion_configured: Dictionary = body.configure_motion(
 		RESIDENT_BODY.DEFAULT_MOTION_SPEED,
 		catch_up_distance,
@@ -807,6 +813,7 @@ func set_active_space(space_id: String, space_origin: Vector2) -> Dictionary:
 		body.set_space_active(
 			String(body.get_space_id()) == _active_space_id
 		)
+	_refresh_active_occlusion_subjects()
 	return sync_result
 
 
@@ -868,17 +875,7 @@ func get_visible_resident_names() -> Array[String]:
 
 
 func get_active_occlusion_subjects() -> Array[Node2D]:
-	var result: Array[Node2D] = []
-	for body_value: Variant in _bodies.values():
-		var body := body_value as Node2D
-		if (
-			is_instance_valid(body)
-			and body.visible
-			and body.has_method("get_space_id")
-			and String(body.get_space_id()) == _active_space_id
-		):
-			result.append(body)
-	return result
+	return _active_occlusion_subjects
 
 
 func get_visible_badge_names() -> Array[String]:
@@ -1217,6 +1214,38 @@ func _on_body_visible_space_changed(
 		previous_space_id,
 		space_id,
 	)
+	_refresh_active_occlusion_subjects()
+
+
+func _on_body_occlusion_state_changed(subject: Node2D) -> void:
+	if not is_instance_valid(subject) or not subject.has_method("get_space_id"):
+		return
+	var should_be_active := (
+		subject.visible
+		and String(subject.get_space_id()) == _active_space_id
+	)
+	var is_active := _active_occlusion_subjects.has(subject)
+	if should_be_active != is_active:
+		_refresh_active_occlusion_subjects()
+	elif should_be_active:
+		occlusion_subject_state_changed.emit(subject)
+
+
+func _refresh_active_occlusion_subjects() -> void:
+	var next_subjects: Array[Node2D] = []
+	for body_value: Variant in _bodies.values():
+		var body := body_value as Node2D
+		if (
+			is_instance_valid(body)
+			and body.visible
+			and body.has_method("get_space_id")
+			and String(body.get_space_id()) == _active_space_id
+		):
+			next_subjects.append(body)
+	if next_subjects == _active_occlusion_subjects:
+		return
+	_active_occlusion_subjects = next_subjects
+	occlusion_subjects_changed.emit(_active_occlusion_subjects)
 
 
 func _record_diagnostic(

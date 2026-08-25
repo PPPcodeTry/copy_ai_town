@@ -14,6 +14,7 @@ signal visible_space_changed(
 signal presentation_diagnostic(diagnostic: Dictionary)
 signal resident_pressed(resident_id: String, resident_name: String)
 signal death_dissolve_finished(resident_id: String)
+signal occlusion_state_changed(subject: Node2D)
 
 const CHARACTER_RIG := preload(
 	"res://world/presentation/residents/ResidentFrozenWhitebodyRig.gd"
@@ -148,8 +149,20 @@ var _death_finished_emitted := false
 
 func _ready() -> void:
 	_ensure_built()
+	set_notify_transform(true)
 	set_physics_process(_automatic_motion)
 	set_process(false)
+
+
+func _notification(what: int) -> void:
+	if (
+		is_node_ready()
+		and (
+			what == NOTIFICATION_TRANSFORM_CHANGED
+			or what == NOTIFICATION_VISIBILITY_CHANGED
+		)
+	):
+		occlusion_state_changed.emit(self)
 
 
 func _process(delta: float) -> void:

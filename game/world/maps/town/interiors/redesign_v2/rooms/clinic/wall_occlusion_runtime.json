@@ -4,7 +4,7 @@
     1254.0
   ],
   "room_id": "clinic",
-  "schema_version": 1,
+  "schema_version": 2,
   "segments": [
     {
       "fade_distance_px": 96.0,
@@ -12,7 +12,8 @@
         343,
         423
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/inner_left.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/inner_left-5d09bfe686f9.png",
+      "foreground_texture_sha256": "5d09bfe686f9eb792f6a49752591b43b4d06206578a0072272d2104860d3cc16",
       "foreground_texture_size_px": [
         154,
         127
@@ -46,7 +47,8 @@
         746,
         423
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/inner_right.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/inner_right-9e43f6ba488c.png",
+      "foreground_texture_sha256": "9e43f6ba488ce8dfcb9e1eb4209f9d8b49ec1516802db4de56672c32174f32ca",
       "foreground_texture_size_px": [
         154,
         127
@@ -80,7 +82,8 @@
         291,
         758
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/separator_left.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/separator_left-8b51ce8a09f1.png",
+      "foreground_texture_sha256": "8b51ce8a09f125a83499f0e54e59a64f65f57f402d1782c9ffc0af07d935bc63",
       "foreground_texture_size_px": [
         35,
         188
@@ -114,7 +117,8 @@
         928,
         758
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/separator_right.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/separator_right-c81887cfd03d.png",
+      "foreground_texture_sha256": "c81887cfd03dea03e562f629d66c7938ebf605a44b0250dd02d04a7a850e42fb",
       "foreground_texture_size_px": [
         35,
         188
@@ -148,7 +152,8 @@
         58,
         930
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/south_left_wing.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/south_left_wing-8aa0099d9d3d.png",
+      "foreground_texture_sha256": "8aa0099d9d3d157b4bdfb24e63cf9a5ea55fa276677e677e9c06379e1268b3d2",
       "foreground_texture_size_px": [
         251,
         143
@@ -182,7 +187,8 @@
         292,
         998
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/south_center_left.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/south_center_left-a22d3c94d1bf.png",
+      "foreground_texture_sha256": "a22d3c94d1bf6cf5e09423ca8614a6e3c478f4982f7dd92d0c892bc286cfb0aa",
       "foreground_texture_size_px": [
         260,
         157
@@ -234,7 +240,8 @@
         700,
         998
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/south_center_right.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/south_center_right-e379c7ded576.png",
+      "foreground_texture_sha256": "e379c7ded576c691d306d8a2e7b3a5102c2ba484acdf2e450abf41286b624c23",
       "foreground_texture_size_px": [
         262,
         157
@@ -286,7 +293,8 @@
         944,
         930
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/south_right_wing.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/clinic/wall_occlusion_runtime/south_right_wing-50909cb0890f.png",
+      "foreground_texture_sha256": "50909cb0890ff103f4cc8b7eabe6aabc8b08764815b18d9a6b32efe1a507658b",
       "foreground_texture_size_px": [
         254,
         143

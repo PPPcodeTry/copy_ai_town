@@ -4,7 +4,7 @@
     1199.0
   ],
   "room_id": "home_template_b",
-  "schema_version": 1,
+  "schema_version": 2,
   "segments": [
     {
       "fade_distance_px": 64.0,
@@ -12,7 +12,8 @@
         83,
         620
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_left_front.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_left_front-3c3f46a85dcf.png",
+      "foreground_texture_sha256": "3c3f46a85dcf4df30dd6d5fa822a528a4d3b1823f0dc4ce8a8e2e5ae7a061864",
       "foreground_texture_size_px": [
         308,
         97
@@ -46,7 +47,8 @@
         390,
         765
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_central_left_front.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_central_left_front-62c31a0dabbc.png",
+      "foreground_texture_sha256": "62c31a0dabbc3615c63e4bf1c5140e5767ba68e90d83e16e18f447711cd5fe22",
       "foreground_texture_size_px": [
         177,
         102
@@ -98,7 +100,8 @@
         747,
         765
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_central_right_front.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_central_right_front-6620b97091f3.png",
+      "foreground_texture_sha256": "6620b97091f38632fdac7758192b8ab8f4c8de5b06f40e9b024181e41f5f59a9",
       "foreground_texture_size_px": [
         149,
         102
@@ -150,7 +153,8 @@
         925,
         765
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_front.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_front-580c0145e23f.png",
+      "foreground_texture_sha256": "580c0145e23fbc183bea03e5e5151a244d23c11fb76ccb75d616c98b9a98ecc8",
       "foreground_texture_size_px": [
         308,
         102
@@ -184,7 +188,8 @@
         897,
         489
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_divider_upper.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_divider_upper-5bbc0fa4b85f.png",
+      "foreground_texture_sha256": "5bbc0fa4b85fc02a9d81763be4d872e5a69dfedd8146b107065cb569169d872e",
       "foreground_texture_size_px": [
         28,
         101
@@ -218,7 +223,8 @@
         897,
         724
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_divider_lower.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_divider_lower-bd91a81a7559.png",
+      "foreground_texture_sha256": "bd91a81a755920c12eabf52a4ac493b150e37631552b4f2e47b98c8af062c7bf",
       "foreground_texture_size_px": [
         28,
         41
@@ -252,7 +258,8 @@
         925,
         489
       ],
-      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_partition.png",
+      "foreground_texture_path": "res://world/maps/town/interiors/redesign_v2/rooms/home_template_b/wall_occlusion_runtime/fg_right_partition-9846b54bcbf1.png",
+      "foreground_texture_sha256": "9846b54bcbf11ad66a021b07c9a937813c87fdaac84e560f3aa88dd2165ff9c8",
       "foreground_texture_size_px": [
         283,
         120

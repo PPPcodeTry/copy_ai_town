@@ -17,7 +17,12 @@ const MAP_RUNTIME_LAYER_LOADER_SCRIPT := preload("res://world/runtime/MapRuntime
 const MOBILE_UI_PROFILE := preload("res://ui/mobile/MobileUiProfile.gd")
 const RUNTIME_LAYER_WATCH_GENERATED_FILES := false
 const RUNTIME_LAYER_PRINT_RELOAD_MESSAGES := false
-const INTERIOR_ROOM_SCENE := preload("res://world/maps/town/interiors/InteriorRoom.tscn")
+const INTERIOR_ROOM_BUILD_QUEUE := preload(
+	"res://world/maps/town/interiors/InteriorRoomBuildQueue.gd"
+)
+const INTERIOR_OCCLUSION_CONTROLLER := preload(
+	"res://world/maps/town/interiors/InteriorOcclusionController.gd"
+)
 const PAPER_DOLL_64_SPRITE_SCRIPT := preload("res://characters/paper_doll/PaperDoll64Sprite.gd")
 # The formal player avatar uses the 64px PaperDoll atlas. Keep its in-map
 # visible height near two thirds of a town door so it reads as a walkable
@@ -475,6 +480,8 @@ var _zoom_index := DEFAULT_ZOOM_INDEX
 var _outdoor_zoom_index := DEFAULT_ZOOM_INDEX
 var _interior_root: InteriorRoom
 var _interior_roots: Dictionary = {}
+var _interior_build_queue: Node
+var _interior_occlusion_controller: Node
 var _active_interior_id := ""
 var _active_exterior_portal_id := ""
 var _blocked_exterior_reentry_portal_id := ""
@@ -568,7 +575,6 @@ func _process(delta: float) -> void:
 	_update_environment_test(delta)
 	_update_cafe_depth_order()
 	_update_cafe_furniture_placement_preview()
-	_refresh_active_interior_occlusion()
 
 
 func _physics_process(delta: float) -> void:
@@ -593,6 +599,10 @@ func _physics_process(delta: float) -> void:
 	_capture_player_blocking_normals(input_vector * PLAYER_SPEED)
 	_clamp_player_position()
 	var moved_distance := _player.position.distance_to(previous_position)
+	if moved_distance > 0.0 and is_instance_valid(_interior_occlusion_controller):
+		_interior_occlusion_controller.mark_subject_dirty(
+			_player_occlusion_foot_point,
+		)
 	if _player_sprite != null:
 		_player_sprite.set_motion(input_vector, moved_distance)
 		var current_frame_column := _player_sprite.frame_coords.x
@@ -784,6 +794,14 @@ func _build_interior_portals() -> void:
 	_town_hall_layout = null
 	_clinic_layout = null
 	_active_furniture_layout = null
+	_interior_build_queue = INTERIOR_ROOM_BUILD_QUEUE.new()
+	_interior_build_queue.name = "InteriorRoomBuildQueue"
+	_interior_build_queue.room_prepared.connect(_on_interior_room_prepared)
+	_interior_build_queue.room_failed.connect(_on_interior_room_failed)
+	add_child(_interior_build_queue)
+	_interior_occlusion_controller = INTERIOR_OCCLUSION_CONTROLLER.new()
+	_interior_occlusion_controller.name = "InteriorOcclusionController"
+	add_child(_interior_occlusion_controller)
 
 	for portal_spec in EXTERIOR_INTERIOR_PORTALS:
 		var portal_id := str(portal_spec["id"])
@@ -796,36 +814,39 @@ func _build_interior_portals() -> void:
 		exterior_portal.body_entered.connect(_enter_interior.bind(portal_id))
 
 
-func _ensure_interior_room(interior_id: String) -> InteriorRoom:
+func _prepare_interior_room(interior_id: String) -> InteriorRoom:
 	var cached := _interior_roots.get(interior_id) as InteriorRoom
 	if is_instance_valid(cached):
 		return cached
 	var definition := INTERIOR_DEFINITIONS.get(interior_id, {}) as Dictionary
-	if definition.is_empty():
+	if definition.is_empty() or not is_instance_valid(_interior_build_queue):
 		return null
-	var room := INTERIOR_ROOM_SCENE.instantiate() as InteriorRoom
-	if room == null:
-		return null
-	room.configure(
-		str(definition["shell_path"]),
-		definition["entry_point"] as Vector2,
-		definition["exit_point"] as Vector2,
-		str(definition.get("geometry_path", "")),
-		str(definition.get("occlusion_path", "")),
-		str(definition.get("furniture_manifest_path", "")),
-		str(definition.get("layout_path", "")),
-	)
 	if (
-		(not str(definition.get("occlusion_path", "")).is_empty()
-		and not room.has_wall_occlusion())
-		or (
-			not str(definition.get("furniture_manifest_path", "")).is_empty()
-			and not room.has_furniture_runtime()
-		)
+		not _interior_build_queue.is_pending(interior_id)
+		and not _interior_build_queue.request(interior_id, definition, true)
 	):
-		room.free()
-		push_error("Interior could not be configured: %s" % interior_id)
 		return null
+	while is_inside_tree() and _interior_build_queue.is_pending(interior_id):
+		await get_tree().process_frame
+	return _interior_roots.get(interior_id) as InteriorRoom
+
+
+func _on_interior_room_prepared(
+	interior_id: String,
+	room: InteriorRoom,
+	_profile: Dictionary,
+) -> void:
+	if not is_instance_valid(room) or not is_inside_tree():
+		if is_instance_valid(room):
+			room.free()
+		return
+	if _interior_roots.has(interior_id):
+		room.free()
+		return
+	var definition := INTERIOR_DEFINITIONS.get(interior_id, {}) as Dictionary
+	if definition.is_empty():
+		room.free()
+		return
 	room.name = str(definition["node_name"])
 	room.position = definition["origin"] as Vector2
 	room.visible = false
@@ -839,7 +860,14 @@ func _ensure_interior_room(interior_id: String) -> InteriorRoom:
 	)
 	add_child(exit_portal)
 	exit_portal.body_entered.connect(_exit_interior.bind(interior_id))
-	return room
+
+
+func _on_interior_room_failed(
+	interior_id: String,
+	error: String,
+	_profile: Dictionary,
+) -> void:
+	push_error("Interior could not be prepared: %s (%s)" % [interior_id, error])
 
 
 func _prewarm_nearest_interior() -> void:
@@ -858,22 +886,22 @@ func _prewarm_nearest_interior() -> void:
 		if distance_squared < nearest_distance_squared:
 			nearest_distance_squared = distance_squared
 			nearest_interior_id = String(portal_spec.get("interior_id", ""))
-	if not nearest_interior_id.is_empty():
-		_ensure_interior_room(nearest_interior_id)
+	if (
+		not nearest_interior_id.is_empty()
+		and not _interior_roots.has(nearest_interior_id)
+		and not _interior_build_queue.is_pending(nearest_interior_id)
+	):
+		_interior_build_queue.request(
+			nearest_interior_id,
+			INTERIOR_DEFINITIONS.get(nearest_interior_id, {}) as Dictionary,
+			true,
+		)
 
 
-func _interior_occlusion_subjects() -> Array[Node2D]:
-	var subjects: Array[Node2D] = []
-	if is_instance_valid(_player_occlusion_foot_point):
-		subjects.append(_player_occlusion_foot_point)
-	return subjects
-
-
-func _refresh_active_interior_occlusion() -> void:
-	if not _is_inside_interior() or not is_instance_valid(_interior_root):
-		return
-	_interior_root.update_wall_occlusion_subjects(
-		_interior_occlusion_subjects(),
+func _bind_interior_occlusion_presentation(presentation: Node) -> bool:
+	return (
+		is_instance_valid(_interior_occlusion_controller)
+		and _interior_occlusion_controller.bind_resident_presentation(presentation)
 	)
 
 func _interior_exit_portal_name(interior_id: String) -> String:
@@ -1052,7 +1080,7 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 	await _fade_portal_to_black()
 	if not is_inside_tree():
 		return
-	var room := _ensure_interior_room(interior_id)
+	var room := await _prepare_interior_room(interior_id)
 	if room == null:
 		_restore_portal_visual_state(previous_visual_state)
 		await _fade_portal_from_black()
@@ -1099,10 +1127,14 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 	if prepared.get("ok") != true:
 		room.visible = false
 		_restore_portal_visual_state(previous_visual_state)
+		_interior_occlusion_controller.set_active_room(
+			_interior_root if _is_inside_interior() else null,
+		)
 		await _fade_portal_from_black()
 		if is_inside_tree():
 			_portal_transition_active = false
 		return
+	_interior_occlusion_controller.set_active_room(room)
 	await _fade_portal_from_black()
 	if not is_inside_tree():
 		return
@@ -1138,6 +1170,7 @@ func _exit_interior(body: Node2D, interior_id: String) -> void:
 	_active_exterior_portal_id = ""
 	_inside_furniture_room = false
 	_interior_root = null
+	_interior_occlusion_controller.set_active_room(null)
 	_set_camera_limits(Rect2(Vector2.ZERO, MAP_SIZE))
 	_set_zoom_index(return_zoom_index)
 	_weather_layer.visible = true
@@ -1156,6 +1189,9 @@ func _exit_interior(body: Node2D, interior_id: String) -> void:
 	var prepared := _on_portal_black_covering(false)
 	if prepared.get("ok") != true:
 		_restore_portal_visual_state(previous_visual_state)
+		_interior_occlusion_controller.set_active_room(
+			_interior_root if _is_inside_interior() else null,
+		)
 		await _fade_portal_from_black()
 		if is_inside_tree():
 			_portal_transition_active = false
@@ -1325,6 +1361,7 @@ func _build_player() -> void:
 	_player_occlusion_foot_point.z_as_relative = false
 	_player_occlusion_foot_point.add_to_group(PLAYER_OCCLUSION_SUBJECT_GROUP)
 	_player.add_child(_player_occlusion_foot_point)
+	_interior_occlusion_controller.bind_player(_player_occlusion_foot_point)
 	_player_feet_collision = CollisionShape2D.new()
 	_player_feet_collision.name = "FeetCollision"
 	_player_feet_collision.position = Vector2(0.0, -12.0)
