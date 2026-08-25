@@ -1645,6 +1645,11 @@ func _run_all() -> void:
 	await _scenario_session_production_composition()
 	await _scenario_hud_pause_clock()
 	_scenario_avatar_perception_only_refreshes_avatar_scope()
+	_expect_equal(
+		UiViewModel.player_reason("OCCUPATION_SERVICE_UNSTAFFED"),
+		"对应岗位当前无人可执行，这项服务已经暂停",
+		"职业服务暂停原因会转换成玩家可读反馈",
+	)
 	_finish_suite("TOWN_UI_RUNTIME_PASS")
 
 
@@ -5605,7 +5610,7 @@ func _test_resident_selection_runtime_contract() -> void:
 		confirm_button != null
 		and not confirm_button.disabled
 		and confirm_button.tooltip_text.contains("职业空缺")
-		and confirm_button.tooltip_text.contains("仍可继续创建小镇"),
+		and confirm_button.tooltip_text.contains("不会阻止开局"),
 		"职业空缺必须只显示非阻塞提醒，不能禁用居民名单确认",
 	)
 	var detail_sprite := selection.find_child(
@@ -5737,6 +5742,8 @@ func _resident_selection_view_model() -> Dictionary:
 			"source": "runtime",
 			"formalReady": true,
 			"internalPlaytest": false,
+			"selection_minimum": 1,
+			"selection_default": 15,
 			"selection_limit": 15,
 			"connection_label": "模型将在下一步分配",
 			"candidate_pool_revision": 1,
@@ -5748,7 +5755,7 @@ func _resident_selection_view_model() -> Dictionary:
 				"occupationId": "occupation_dining_operator",
 				"occupationLabel": "食堂主理人",
 				"workplacePlace": "公共食堂",
-				"vacancyEffect": "public_meal_service_pauses",
+				"vacancyEffect": "居民可在公共食堂自行做简餐",
 			}],
 			"resident_catalog_status": "formal",
 			"resident_catalog": [],
@@ -7256,6 +7263,77 @@ func _scenario_game_flow_resident_model_assignment_route() -> void:
 			"rejected floor deletion leaves the candidate list unchanged",
 		)
 	host.set("_resident_editor_saved_catalog", {"residents": []})
+	selection.call("_clear_selection")
+	await _wait_frames(2)
+	selection.call("_toggle_resident", 0)
+	await _wait_frames(2)
+	var one_resident_confirm := selection.find_child(
+		"ConfirmRosterButton",
+		true,
+		false,
+	) as Button
+	var one_resident_draft := (
+		selection.call("_build_current_roster_draft") as Dictionary
+	)
+	_expect_equal(
+		(one_resident_draft.get("slots", []) as Array).size(),
+		1,
+		"formal selection builds one occupied home for a one-resident town",
+	)
+	_expect(
+		one_resident_confirm != null and not one_resident_confirm.disabled,
+		"one selected resident can continue without filling all fifteen homes",
+	)
+	_expect(
+		one_resident_confirm != null
+		and one_resident_confirm.tooltip_text.contains(
+			"职业空缺不会阻止开局",
+		),
+		"one-resident confirmation explains vacancy behavior before opening",
+	)
+	var vacancy_notice := selection.find_child(
+		"PageNotice",
+		true,
+		false,
+	) as Label
+	_expect(
+		vacancy_notice != null
+		and vacancy_notice.visible
+		and vacancy_notice.text.contains("职业空缺不会阻止开局"),
+		"vacancy behavior is visible before the player confirms the roster",
+	)
+	if one_resident_confirm != null and not one_resident_confirm.disabled:
+		one_resident_confirm.pressed.emit()
+		await _wait_frames(3)
+		var one_resident_assignment_page := selection.get_node_or_null(
+			"ResidentModelAssignmentRoute",
+		) as Control
+		_expect(
+			one_resident_assignment_page != null,
+			"one-resident roster opens the production model assignment route",
+		)
+		if one_resident_assignment_page != null:
+			_expect_equal(
+				one_resident_assignment_page.get("_contract_error"),
+				"",
+				"model assignment screen accepts the one-resident ViewModel",
+			)
+		var one_resident_assignment_service: Variant = host.get(
+			"_resident_model_assignment_service",
+		)
+		if one_resident_assignment_service != null:
+			var one_resident_assignment_vm := one_resident_assignment_service.call(
+				"get_view_model",
+			) as Dictionary
+			_expect_equal(
+				(one_resident_assignment_vm.get("data", {}) as Dictionary).get(
+					"residentCount",
+				),
+				1,
+				"model assignment renders the actual one-resident set",
+			)
+		host.call("_reset_resident_model_assignment_session")
+		await _wait_frames(2)
 	selection.call("_apply_recommended_selection", false)
 	await _wait_frames(2)
 

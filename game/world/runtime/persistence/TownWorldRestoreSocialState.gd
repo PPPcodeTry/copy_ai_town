@@ -43,10 +43,6 @@ static func prepare(
 			public_places[place_name] = true
 		elif place_type == "住家":
 			home_places[place_name] = true
-	var resident_ids: Array[String] = []
-	for id_value: Variant in residents:
-		resident_ids.append(String(id_value))
-	resident_ids.sort()
 	var owners_value: Variant = state.get("owners")
 	if not owners_value is Dictionary:
 		errors.append("世界存档 owners 必须是对象")
@@ -56,7 +52,7 @@ static func prepare(
 		known_places,
 		public_places,
 		home_places,
-		resident_ids,
+		residents,
 		errors,
 	)
 	var home_owners: Dictionary = {}
@@ -288,9 +284,27 @@ static func _validate_saved_owners(
 	known_places: Dictionary,
 	public_places: Dictionary,
 	home_places: Dictionary,
-	resident_ids: Array[String],
+	residents: Dictionary,
 	errors: Array[String],
 ) -> void:
+	var resident_ids: Array[String] = []
+	var resident_by_home: Dictionary = {}
+	for resident_id_value: Variant in residents:
+		var resident_id := String(resident_id_value)
+		resident_ids.append(resident_id)
+		var resident := residents.get(resident_id, {}) as Dictionary
+		var home_name := String(
+			(resident.get("socialState", {}) as Dictionary).get("home", ""),
+		).strip_edges()
+		if not home_places.has(home_name):
+			errors.append(
+				"世界存档居民 %s 的住家不是合法住家：%s"
+				% [resident_id, home_name],
+			)
+		elif resident_by_home.has(home_name):
+			errors.append("世界存档住家被多名居民占用：%s" % home_name)
+		else:
+			resident_by_home[home_name] = resident_id
 	for place_name_value: Variant in owners:
 		if not place_name_value is String or not owners[place_name_value] is String:
 			errors.append("世界存档归属的地点与居民 ID 必须是文本")
@@ -303,10 +317,18 @@ static func _validate_saved_owners(
 		var owner_id := owner_value as String if owner_value is String else ""
 		if not resident_ids.has(owner_id):
 			errors.append("世界存档地点归属人不是当前居民：%s" % place_name)
+	for home_name_value: Variant in resident_by_home:
+		var home_name := String(home_name_value)
+		var resident_id := String(resident_by_home[home_name])
+		if (
+			not owners.has(home_name)
+			or String(owners.get(home_name, "")) != resident_id
+		):
+			errors.append("世界存档已入住住家缺少合法归属人：%s" % home_name)
 	for place_name_value: Variant in home_places:
 		var place_name := String(place_name_value)
-		if not owners.has(place_name):
-			errors.append("世界存档住家缺少归属人：%s" % place_name)
+		if owners.has(place_name) and not resident_by_home.has(place_name):
+			errors.append("世界存档空置住家不能分配归属人：%s" % place_name)
 
 
 static func _validate_saved_announcements(

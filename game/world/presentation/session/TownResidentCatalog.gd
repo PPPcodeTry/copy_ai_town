@@ -13,12 +13,15 @@ const MOVEMENT := preload(
 const INTERESTS := preload(
 	"res://world/data/town/TownInterestCatalog.gd"
 )
+const POPULATION_RULES := preload("res://world/runtime/TownPopulationRules.gd")
 const CATALOG_PATH := "res://world/data/town/resident_catalog.json"
 const WORLD_DATA_PATH := "res://world/data/town/town_world.json"
 const WORK_CHAIN_CATALOG_PATH := (
 	"res://world/data/town/work_chain_catalog.json"
 )
-const SELECTION_LIMIT := 15
+const MIN_SELECTION_COUNT := POPULATION_RULES.MIN_RESIDENT_COUNT
+const DEFAULT_SELECTION_COUNT := POPULATION_RULES.DEFAULT_RESIDENT_COUNT
+const SELECTION_LIMIT := POPULATION_RULES.MAX_RESIDENT_COUNT
 const EXPECTED_RESIDENT_COUNT := 16
 const MAX_SESSION_RESIDENT_COUNT := 128
 const RESIDENT_ID_PREFIX := "resident_"
@@ -315,6 +318,8 @@ static func build_view_model(
 		"source": "runtime",
 		"formalReady": true,
 		"internalPlaytest": false,
+		"selection_minimum": MIN_SELECTION_COUNT,
+		"selection_default": DEFAULT_SELECTION_COUNT,
 		"selection_limit": SELECTION_LIMIT,
 		"provider_id": provider_id,
 		"model_id": model_id,
@@ -422,7 +427,7 @@ static func update_confirmation_payload(
 		data["confirmation_payload"] = {}
 		return
 	var selected := selected_value as Array
-	if selected.size() != SELECTION_LIMIT:
+	if not POPULATION_RULES.supports_resident_count(selected.size()):
 		data["confirmation_payload"] = {}
 		return
 	var base_catalog := load_catalog()
@@ -505,7 +510,7 @@ static func update_confirmation_payload(
 		)
 		if selected_ids.has(catalog_id):
 			ordered_ids.append(catalog_id)
-	if ordered_ids.size() != SELECTION_LIMIT:
+	if ordered_ids.size() != selected.size():
 		data["confirmation_payload"] = {}
 		return
 	data["staffing_warnings"] = _occupation_staffing_warnings(
@@ -514,7 +519,7 @@ static func update_confirmation_payload(
 		world_data,
 	)
 	var slots: Array[Dictionary] = []
-	for index in SELECTION_LIMIT:
+	for index in ordered_ids.size():
 		slots.append({
 			"residentId": ordered_ids[index],
 			"spaceId": home_space_ids[index],
