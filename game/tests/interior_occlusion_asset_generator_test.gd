@@ -3,6 +3,9 @@ extends SceneTree
 const GENERATOR := preload(
 	"res://tools/interiors/InteriorOcclusionAssetGenerator.gd"
 )
+const PUBLISH_TRANSACTION := preload(
+	"res://tools/interiors/InteriorOcclusionPublishTransaction.gd"
+)
 const TEST_ROOT := "user://issue141_generator_atomic"
 const ROOMS_ROOT := TEST_ROOT + "/rooms"
 const ROOM_IDS: Array[String] = ["room_a", "room_b"]
@@ -147,10 +150,328 @@ func _run() -> void:
 		previous_manifest_text,
 		"publication failure keeps the previous manifest",
 	)
+	_test_second_manifest_commit_interruption()
+	_test_backup_rename_interruption()
+	_test_manifest_commit_interruption()
+	_test_rollback_remove_failure()
+	_test_backup_restore_failure()
+	_test_committed_backup_delete_failure()
+	_test_journal_record_failures()
+	_test_duplicate_room_ids()
 	_remove_test_root()
 	await process_frame
 	await process_frame
 	_finish()
+
+
+func _test_second_manifest_commit_interruption() -> void:
+	_prepare_published_revision("v1")
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	var interrupted := _faulted_generate("manifest_commit_rename", 2)
+	_expect_equal(
+		interrupted.get("ok"),
+		false,
+		"an interruption before the second manifest commit rejects the publish",
+	)
+	_expect_equal(
+		_manifest_revision("room_a"),
+		"v1",
+		"a reported second-manifest interruption is rolled back before return",
+	)
+	_expect(
+		FileAccess.file_exists(_manifest_path("room_b")),
+		"a reported interruption restores the second previous manifest",
+	)
+	_expect_equal(
+		interrupted.get("recovery_pending"),
+		false,
+		"a reported interruption leaves no recovery pending",
+	)
+	_expect_published_revision_is_consistent(
+		"v1",
+		"multi-manifest rollback leaves one complete previous version",
+	)
+
+
+func _test_backup_rename_interruption() -> void:
+	_prepare_published_revision("v1")
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	var interrupted := _faulted_generate("backup_rename_after")
+	_expect_equal(
+		interrupted.get("ok"),
+		false,
+		"an interruption immediately after backup rename rejects the publish",
+	)
+	_expect_equal(
+		_manifest_revision("room_a"),
+		"v1",
+		"a reported backup interruption restores the previous manifest before return",
+	)
+	_expect_published_revision_is_consistent(
+		"v1",
+		"backup recovery leaves one complete previous version",
+	)
+
+
+func _test_manifest_commit_interruption() -> void:
+	_prepare_published_revision("v1")
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	var interrupted := _faulted_generate("manifest_commit_rename_after")
+	_expect_equal(
+		interrupted.get("ok"),
+		false,
+		"an interruption after final manifest rename rejects the publish",
+	)
+	_expect_equal(
+		_manifest_revision("room_a"),
+		"v1",
+		"a reported final-rename interruption rolls back before return",
+	)
+	_expect_published_revision_is_consistent(
+		"v1",
+		"post-rename recovery leaves one complete previous version",
+	)
+
+
+func _test_rollback_remove_failure() -> void:
+	_prepare_interrupted_manifest_commit()
+	_write_text(ROOMS_ROOT.path_join("room_b/wall_occlusion.json"), "{}\n")
+	var failed_recovery := _faulted_generate("rollback_remove")
+	_expect_equal(
+		failed_recovery.get("recovery_pending"),
+		true,
+		"a failed rollback remove keeps the recovery transaction pending",
+	)
+	_expect_equal(
+		_recover_without_republishing(),
+		"v1",
+		"a later fresh generator can retry rollback remove",
+	)
+	_expect_published_revision_is_consistent(
+		"v1",
+		"retried rollback remove restores every manifest and texture",
+	)
+
+
+func _test_backup_restore_failure() -> void:
+	_prepare_interrupted_manifest_commit()
+	_write_text(ROOMS_ROOT.path_join("room_b/wall_occlusion.json"), "{}\n")
+	var failed_recovery := _faulted_generate("backup_restore_rename")
+	_expect_equal(
+		failed_recovery.get("recovery_pending"),
+		true,
+		"a failed backup restore keeps the recovery transaction pending",
+	)
+	_expect_equal(
+		_recover_without_republishing(),
+		"v1",
+		"a later fresh generator can retry backup restoration",
+	)
+	_expect_published_revision_is_consistent(
+		"v1",
+		"retried backup restoration restores every manifest and texture",
+	)
+
+
+func _test_committed_backup_delete_failure() -> void:
+	_prepare_published_revision("v1")
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	var interrupted := _interrupt_publish_direct("backup_delete")
+	_expect_equal(
+		interrupted.get("recovery_pending"),
+		true,
+		"a committed transaction remains recoverable when backup deletion fails",
+	)
+	_expect_equal(
+		_manifest_revision("room_a"),
+		"v2",
+		"a cleanup failure does not roll a committed manifest back",
+	)
+	_write_text(ROOMS_ROOT.path_join("room_b/wall_occlusion.json"), "{}\n")
+	var recovery_then_staging_failure := GENERATOR.new().generate(
+		ROOMS_ROOT,
+		ROOM_IDS,
+	) as Dictionary
+	_expect_equal(
+		recovery_then_staging_failure.get("ok"),
+		false,
+		"a fresh generator completes committed cleanup before staging",
+	)
+	_expect_equal(
+		_manifest_revision("room_a"),
+		"v2",
+		"roll-forward recovery preserves the committed manifest",
+	)
+	_expect_published_revision_is_consistent(
+		"v2",
+		"roll-forward recovery preserves one complete committed version",
+	)
+
+
+func _test_journal_record_failures() -> void:
+	_prepare_published_revision("v1")
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	var begin_failure := _faulted_generate("journal_record")
+	_expect_equal(
+		begin_failure.get("ok"),
+		false,
+		"a failed begin journal record rejects the publish",
+	)
+	_expect_equal(
+		_manifest_revision("room_a"),
+		"v1",
+		"no manifest changes before the begin record is durable",
+	)
+	var commit_failure := _faulted_generate("journal_record", 2)
+	_expect_equal(
+		commit_failure.get("ok"),
+		false,
+		"a failed commit journal record leaves an incomplete transaction",
+	)
+	_expect_equal(
+		commit_failure.get("recovery_pending"),
+		false,
+		"a failed commit record is rolled back before generate returns",
+	)
+	_expect_equal(
+		_manifest_revision("room_a"),
+		"v1",
+		"commit-record failure restores the previous manifests",
+	)
+	_expect_published_revision_is_consistent(
+		"v1",
+		"commit-record recovery leaves one complete previous version",
+	)
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	var partial_commit := _faulted_generate("journal_commit_partial")
+	_expect_equal(
+		partial_commit.get("ok"),
+		false,
+		"a truncated commit record rejects the publish",
+	)
+	_expect_equal(
+		partial_commit.get("recovery_pending"),
+		false,
+		"a truncated commit tail is treated as uncommitted and rolled back",
+	)
+	_expect_published_revision_is_consistent(
+		"v1",
+		"truncated commit recovery leaves one complete previous version",
+	)
+
+
+func _test_duplicate_room_ids() -> void:
+	_prepare_published_revision("v1")
+	var duplicate_ids: Array[String] = ["room_a", "room_a"]
+	var duplicate_result := GENERATOR.new().generate(
+		ROOMS_ROOT,
+		duplicate_ids,
+	) as Dictionary
+	_expect_equal(
+		duplicate_result.get("ok"),
+		false,
+		"duplicate room ids are rejected before a transaction starts",
+	)
+	_expect(
+		not FileAccess.file_exists(
+			ROOMS_ROOT.path_join(".wall_occlusion_publish.journal"),
+		),
+		"duplicate room ids cannot leave an unrecoverable journal",
+	)
+
+
+func _prepare_interrupted_manifest_commit() -> void:
+	_prepare_published_revision("v1")
+	_create_room_fixture("room_a", "v2")
+	_create_room_fixture("room_b", "v2")
+	_interrupt_publish_direct("manifest_commit_rename_after")
+
+
+func _interrupt_publish_direct(point: String, occurrence: int = 1) -> Dictionary:
+	var staging_root := TEST_ROOT.path_join(
+		"hard_interrupt_%d" % Time.get_ticks_usec(),
+	)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(staging_root))
+	var generator := GENERATOR.new()
+	var staged_rooms: Array[Dictionary] = []
+	for room_id in ROOM_IDS:
+		staged_rooms.append(
+			generator.call("_stage_room", ROOMS_ROOT, room_id, staging_root) as Dictionary,
+		)
+	var transaction := PUBLISH_TRANSACTION.new()
+	transaction.configure_fault(point, occurrence)
+	return transaction.publish(
+		ROOMS_ROOT,
+		staged_rooms,
+		"hard_interrupt_%d" % Time.get_ticks_usec(),
+	) as Dictionary
+
+
+func _prepare_published_revision(revision: String) -> void:
+	_remove_test_root()
+	for room_id in ROOM_IDS:
+		_create_room_fixture(room_id, revision)
+	GENERATOR.new().generate(ROOMS_ROOT, ROOM_IDS)
+
+
+func _faulted_generate(point: String, occurrence: int = 1) -> Dictionary:
+	var generator := GENERATOR.new()
+	generator.configure_publish_fault(point, occurrence)
+	return generator.generate(ROOMS_ROOT, ROOM_IDS) as Dictionary
+
+
+func _recover_without_republishing() -> String:
+	_write_text(ROOMS_ROOT.path_join("room_b/wall_occlusion.json"), "{}\n")
+	var recovery_then_staging_failure := GENERATOR.new().generate(
+		ROOMS_ROOT,
+		ROOM_IDS,
+	) as Dictionary
+	_expect_equal(
+		recovery_then_staging_failure.get("ok"),
+		false,
+		"recovery completes before deliberately invalid staging",
+	)
+	return _manifest_revision("room_a")
+
+
+func _manifest_path(room_id: String) -> String:
+	return ROOMS_ROOT.path_join(room_id).path_join("wall_occlusion_runtime.json")
+
+
+func _manifest_revision(room_id: String) -> String:
+	return String(_read_json(_manifest_path(room_id)).get("source_occlusion_revision", ""))
+
+
+func _expect_published_revision_is_consistent(
+	revision: String,
+	message: String,
+) -> void:
+	var consistent := true
+	for room_id in ROOM_IDS:
+		var manifest := _read_json(_manifest_path(room_id))
+		consistent = consistent and String(
+			manifest.get("source_occlusion_revision", ""),
+		) == revision
+		var segments_value: Variant = manifest.get("segments")
+		if segments_value is not Array or (segments_value as Array).is_empty():
+			consistent = false
+			continue
+		for segment_value: Variant in segments_value as Array:
+			var segment := segment_value as Dictionary
+			var texture_path := String(segment.get("foreground_texture_path", ""))
+			consistent = (
+				consistent
+				and FileAccess.file_exists(texture_path)
+				and FileAccess.get_sha256(texture_path)
+				== String(segment.get("foreground_texture_sha256", ""))
+			)
+	_expect(consistent, message)
 
 
 func _create_room_fixture(room_id: String, revision: String) -> void:

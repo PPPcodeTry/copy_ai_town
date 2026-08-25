@@ -19,6 +19,30 @@ const INTERIOR_OCCLUSION_CONTROLLER := preload(
 	"res://world/maps/town/interiors/InteriorOcclusionController.gd"
 )
 
+class TrackingInteriorRoom:
+	extends InteriorRoom
+
+	var upserted_subject_ids: Array[int] = []
+	var removed_subject_ids: Array[int] = []
+	var clear_count := 0
+
+	func upsert_wall_occlusion_subject(subject: Node2D) -> bool:
+		upserted_subject_ids.append(subject.get_instance_id())
+		return true
+
+	func remove_wall_occlusion_subject(subject_id: int) -> bool:
+		removed_subject_ids.append(subject_id)
+		return true
+
+	func clear_wall_occlusion_subjects() -> bool:
+		clear_count += 1
+		return true
+
+	func clear_calls() -> void:
+		upserted_subject_ids.clear()
+		removed_subject_ids.clear()
+
+
 class FakeWorld:
 	extends RefCounted
 
@@ -1514,10 +1538,17 @@ func _test_presentation_registry_and_spaces() -> void:
 	var presentation = RESIDENT_PRESENTATION.new()
 	root.add_child(presentation)
 	var occlusion_membership_events: Array[Array] = []
+	var occlusion_added_events: Array[Node2D] = []
+	var occlusion_removed_events: Array[int] = []
 	var occlusion_state_events: Array[Node2D] = []
 	_expect(
 		presentation.has_signal("occlusion_subjects_changed"),
 		"resident presentation publishes occlusion membership changes",
+	)
+	_expect(
+		presentation.has_signal("occlusion_subject_added")
+		and presentation.has_signal("occlusion_subject_removed"),
+		"resident presentation publishes incremental occlusion membership changes",
 	)
 	_expect(
 		presentation.has_signal("occlusion_subject_state_changed"),
@@ -1535,6 +1566,12 @@ func _test_presentation_registry_and_spaces() -> void:
 			func(subject: Node2D) -> void:
 				occlusion_state_events.append(subject),
 		)
+	presentation.occlusion_subject_added.connect(
+		func(subject: Node2D) -> void: occlusion_added_events.append(subject),
+	)
+	presentation.occlusion_subject_removed.connect(
+		func(subject_id: int) -> void: occlusion_removed_events.append(subject_id),
+	)
 	var selected_residents: Array[Dictionary] = []
 	presentation.resident_selected.connect(
 		func(resident_id: String, resident_name: String) -> void:
@@ -1571,9 +1608,12 @@ func _test_presentation_registry_and_spaces() -> void:
 		"active-space occlusion subjects come directly from the resident layer",
 	)
 	_expect(
-		not occlusion_membership_events.is_empty()
-		and occlusion_membership_events[-1] == occlusion_subjects,
-		"space changes publish the cached active occlusion membership once",
+		not occlusion_added_events.is_empty()
+		and occlusion_added_events[-1] == indoor_body
+		and not occlusion_removed_events.is_empty()
+		and occlusion_removed_events[-1]
+		== (outdoor_body as Node2D).get_instance_id(),
+		"space changes publish only the affected resident membership deltas",
 	)
 	var mutable_snapshot := presentation.get_active_occlusion_subjects()
 	mutable_snapshot.clear()
@@ -1599,7 +1639,20 @@ func _test_presentation_registry_and_spaces() -> void:
 		1,
 		"rebinding cannot clear the presentation occlusion cache",
 	)
-	occlusion_controller.queue_free()
+	occlusion_controller.set_process(false)
+	var tracking_room := TrackingInteriorRoom.new()
+	root.add_child(tracking_room)
+	occlusion_controller.set_active_room(tracking_room)
+	_expect(
+		occlusion_controller.process_pending(),
+		"activating a room consumes its initial resident membership",
+	)
+	_expect_equal(
+		tracking_room.upserted_subject_ids,
+		[indoor_body.get_instance_id()],
+		"initial room activation upserts only its visible resident",
+	)
+	tracking_room.clear_calls()
 	if indoor_body != null:
 		_expect_equal(
 			indoor_body.position,
@@ -1614,6 +1667,112 @@ func _test_presentation_registry_and_spaces() -> void:
 			state_event_count + 1,
 			"one visible resident transform emits one occlusion dirty event",
 		)
+		_expect(
+			occlusion_controller.process_pending(),
+			"one resident move consumes one incremental occlusion update",
+		)
+		_expect_equal(
+			tracking_room.upserted_subject_ids,
+			[indoor_body.get_instance_id()],
+			"moving one resident never resubmits the other residents",
+		)
+		tracking_room.clear_calls()
+		var membership_event_count := occlusion_membership_events.size()
+		indoor_body.set_space_active(false)
+		_expect(
+			occlusion_controller.process_pending(),
+			"hiding a resident consumes one removal",
+		)
+		_expect_equal(
+			tracking_room.removed_subject_ids,
+			[indoor_body.get_instance_id()],
+			"visibility changes remove only the hidden resident",
+		)
+		_expect_equal(
+			occlusion_membership_events.size(),
+			membership_event_count,
+			"hiding one resident does not rebuild the full membership array",
+		)
+		_expect_equal(
+			occlusion_removed_events[-1] if not occlusion_removed_events.is_empty() else -1,
+			indoor_body.get_instance_id(),
+			"hiding one resident emits only that subject removal",
+		)
+		tracking_room.clear_calls()
+		indoor_body.set_space_active(true)
+		_expect(
+			occlusion_controller.process_pending(),
+			"showing a resident consumes one upsert",
+		)
+		_expect_equal(
+			tracking_room.upserted_subject_ids,
+			[indoor_body.get_instance_id()],
+			"visibility changes upsert only the shown resident",
+		)
+		_expect_equal(
+			occlusion_membership_events.size(),
+			membership_event_count,
+			"showing one resident does not rebuild the full membership array",
+		)
+		_expect_equal(
+			occlusion_added_events[-1] if not occlusion_added_events.is_empty() else null,
+			indoor_body,
+			"showing one resident emits only that subject upsert",
+		)
+		tracking_room.clear_calls()
+		var outdoor_id := (outdoor_body as Node2D).get_instance_id()
+		var switched_outdoor := presentation.set_active_space(
+			"town_outdoor",
+			Vector2.ZERO,
+		)
+		_expect_equal(
+			switched_outdoor.get("ok"),
+			true,
+			"space switch succeeds for incremental occlusion coverage",
+		)
+		_expect(
+			occlusion_controller.process_pending(),
+			"space switch consumes membership deltas",
+		)
+		_expect_equal(
+			tracking_room.removed_subject_ids,
+			[indoor_body.get_instance_id()],
+			"space switch removes only the resident leaving the active room",
+		)
+		_expect_equal(
+			tracking_room.upserted_subject_ids,
+			[outdoor_id],
+			"space switch upserts only the resident entering the active room",
+		)
+		tracking_room.clear_calls()
+		var switched_indoor := presentation.set_active_space(
+			"indoor_clinic",
+			Vector2(1000.0, 2000.0),
+		)
+		_expect_equal(
+			switched_indoor.get("ok"),
+			true,
+			"space switch restores the indoor resident",
+		)
+		occlusion_controller.process_pending()
+		tracking_room.clear_calls()
+		var indoor_character := indoor_body as ResidentCharacterBody
+		_expect(
+			indoor_character != null
+			and indoor_character.set_occlusion_depth(117),
+			"resident exposes an explicit occlusion depth change",
+		)
+		_expect(
+			occlusion_controller.process_pending(),
+			"resident depth change consumes one incremental update",
+		)
+		_expect_equal(
+			tracking_room.upserted_subject_ids,
+			[indoor_body.get_instance_id()],
+			"depth changes upsert only the affected resident",
+		)
+	occlusion_controller.queue_free()
+	tracking_room.queue_free()
 	world.all_states_query_count = 0
 	world.movement_query_count = 0
 	world.update_state(

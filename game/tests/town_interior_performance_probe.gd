@@ -16,6 +16,10 @@ const UNIQUE_INTERIOR_PORTALS := {
 	"home_a": "home_01",
 	"home_b": "home_02",
 }
+const COLD_ENTRY_INTERIOR_ID := "workshop"
+const PREWARMED_ENTRY_INTERIOR_ID := "home_a"
+
+var _probe_failed := false
 
 
 func _initialize() -> void:
@@ -31,7 +35,7 @@ func _run() -> void:
 		_:
 			await _probe_startup_and_prewarm()
 	_prepare_audio_shutdown()
-	call_deferred("_quit_after_cleanup")
+	call_deferred("_quit_after_cleanup", 1 if _probe_failed else 0)
 
 
 func _probe_startup_and_prewarm() -> void:
@@ -39,6 +43,7 @@ func _probe_startup_and_prewarm() -> void:
 	var town := TOWN_BASE.new()
 	root.add_child(town)
 	var startup_usec := Time.get_ticks_usec() - started_usec
+	_enable_queue_profiling(town)
 	var initial_rooms := (town.get("_interior_roots") as Dictionary).size()
 	var longest_delayed_frame_usec := 0
 	for _index in 60:
@@ -92,8 +97,15 @@ func _probe_direct_room_build() -> void:
 		var elapsed_usec := Time.get_ticks_usec() - started_usec
 		total_usec += elapsed_usec
 		max_room_usec = maxi(max_room_usec, elapsed_usec)
-		if room.has_wall_occlusion() and room.has_furniture_runtime():
+		if (
+			room.has_wall_occlusion()
+			and room.has_furniture_runtime()
+		):
 			built_rooms += 1
+		else:
+			_mark_probe_failure(
+				"direct room build failed: %s" % String(interior_id_value),
+			)
 		room.free()
 	print(
 		"ISSUE141_PERF_ROOM_BUILD rooms=%d totalUsec=%d maxRoomUsec=%d staticMiB=%.1f peakStaticMiB=%.1f"
@@ -105,14 +117,42 @@ func _probe_direct_room_build() -> void:
 func _probe_entry_and_memory() -> void:
 	var town := TOWN_BASE.new()
 	root.add_child(town)
-	for _index in 60:
+	_enable_queue_profiling(town)
+	var prewarm_wait_frames := 0
+	while (
+		prewarm_wait_frames < 600
+		and not (town.get("_interior_roots") as Dictionary).has(
+			PREWARMED_ENTRY_INTERIOR_ID,
+		)
+	):
+		prewarm_wait_frames += 1
 		await process_frame
+	if not (town.get("_interior_roots") as Dictionary).has(
+		PREWARMED_ENTRY_INTERIOR_ID,
+	):
+		_mark_probe_failure("prewarmed room did not finish within 600 frames")
 	var player := town.get_node("Player") as CharacterBody2D
-	var first_entry_started_usec := Time.get_ticks_usec()
-	await town.call("_enter_interior", player, "cafe")
-	var first_entry_usec := Time.get_ticks_usec() - first_entry_started_usec
-	if String(town.get("_active_interior_id")) == "cafe":
-		await town.call("_exit_interior", player, "cafe")
+	var initial_roots := town.get("_interior_roots") as Dictionary
+	var cold_built_before := initial_roots.has(COLD_ENTRY_INTERIOR_ID)
+	var prewarmed_built_before := initial_roots.has(PREWARMED_ENTRY_INTERIOR_ID)
+	var cold_entry := await _measure_complete_entry(
+		town,
+		player,
+		COLD_ENTRY_INTERIOR_ID,
+		String(UNIQUE_INTERIOR_PORTALS[COLD_ENTRY_INTERIOR_ID]),
+	)
+	var reentry := await _measure_complete_entry(
+		town,
+		player,
+		COLD_ENTRY_INTERIOR_ID,
+		String(UNIQUE_INTERIOR_PORTALS[COLD_ENTRY_INTERIOR_ID]),
+	)
+	var prewarmed_entry := await _measure_complete_entry(
+		town,
+		player,
+		PREWARMED_ENTRY_INTERIOR_ID,
+		String(UNIQUE_INTERIOR_PORTALS[PREWARMED_ENTRY_INTERIOR_ID]),
+	)
 	for interior_id_value: Variant in UNIQUE_INTERIOR_PORTALS.keys():
 		var interior_id := String(interior_id_value)
 		var portal_id := String(UNIQUE_INTERIOR_PORTALS.get(interior_id))
@@ -120,6 +160,8 @@ func _probe_entry_and_memory() -> void:
 		await town.call("_enter_interior", player, portal_id)
 		if String(town.get("_active_interior_id")) == interior_id:
 			await town.call("_exit_interior", player, interior_id)
+		else:
+			_mark_probe_failure("all-room entry failed: %s" % interior_id)
 	for _index in 10:
 		await process_frame
 	var queue := town.get_node_or_null("InteriorRoomBuildQueue")
@@ -141,9 +183,17 @@ func _probe_entry_and_memory() -> void:
 			int(profile.get("wall_usec", 0)),
 		)
 	print(
-		"ISSUE141_PERF_ENTRY firstCompleteEntryUsec=%d rooms=%d queueMaxRoomCpuUsec=%d queueMaxRoomWallUsec=%d staticMiB=%.1f peakStaticMiB=%.1f"
+		"ISSUE141_PERF_ENTRY coldInterior=%s coldBuiltBefore=%d coldFirstEntryUsec=%d prewarmedInterior=%s prewarmedBuiltBefore=%d prewarmWaitFrames=%d prewarmedEntryUsec=%d reentryInterior=%s reentryUsec=%d rooms=%d queueMaxRoomCpuUsec=%d queueMaxRoomWallUsec=%d staticMiB=%.1f peakStaticMiB=%.1f"
 		% [
-			first_entry_usec,
+			COLD_ENTRY_INTERIOR_ID,
+			int(cold_built_before),
+			int(cold_entry.get("elapsed_usec", 0)),
+			PREWARMED_ENTRY_INTERIOR_ID,
+			int(prewarmed_built_before),
+			prewarm_wait_frames,
+			int(prewarmed_entry.get("elapsed_usec", 0)),
+			COLD_ENTRY_INTERIOR_ID,
+			int(reentry.get("elapsed_usec", 0)),
 			(town.get("_interior_roots") as Dictionary).size(),
 			max_room_cpu_usec,
 			max_room_wall_usec,
@@ -156,6 +206,31 @@ func _probe_entry_and_memory() -> void:
 	await process_frame
 
 
+func _measure_complete_entry(
+	town: Node,
+	player: CharacterBody2D,
+	interior_id: String,
+	portal_id: String,
+) -> Dictionary:
+	town.set("_blocked_exterior_reentry_portal_id", "")
+	var started_usec := Time.get_ticks_usec()
+	await town.call("_enter_interior", player, portal_id)
+	var elapsed_usec := Time.get_ticks_usec() - started_usec
+	var entered := String(town.get("_active_interior_id")) == interior_id
+	if entered:
+		await town.call("_exit_interior", player, interior_id)
+	var exited := String(town.get("_active_interior_id")).is_empty()
+	if not entered or not exited:
+		_mark_probe_failure("complete entry failed: %s" % interior_id)
+	return {"ok": entered and exited, "elapsed_usec": elapsed_usec}
+
+
+func _enable_queue_profiling(town: Node) -> void:
+	var queue := town.get_node_or_null("InteriorRoomBuildQueue")
+	if queue != null and queue.has_method("set_profiling_enabled"):
+		queue.call("set_profiling_enabled", true)
+
+
 func _static_mib() -> float:
 	return float(Performance.get_monitor(Performance.MEMORY_STATIC)) / 1048576.0
 
@@ -164,11 +239,16 @@ func _peak_static_mib() -> float:
 	return float(Performance.get_monitor(Performance.MEMORY_STATIC_MAX)) / 1048576.0
 
 
-func _quit_after_cleanup() -> void:
+func _mark_probe_failure(message: String) -> void:
+	_probe_failed = true
+	push_error(message)
+
+
+func _quit_after_cleanup(exit_code: int) -> void:
 	await process_frame
 	await process_frame
 	await create_timer(0.2).timeout
-	quit(0)
+	quit(exit_code)
 
 
 func _prepare_audio_shutdown() -> void:

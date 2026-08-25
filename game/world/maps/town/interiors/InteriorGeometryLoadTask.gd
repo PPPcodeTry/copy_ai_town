@@ -11,8 +11,13 @@ var _result: Dictionary = {}
 
 func run(path: String) -> void:
 	var loaded := ROOM_GEOMETRY.load_geometry(path)
+	var setup := (
+		ROOM_GEOMETRY.room_setup_from_loaded_geometry(loaded)
+		if not loaded.is_empty()
+		else {}
+	)
 	_mutex.lock()
-	_result = loaded
+	_result = {"geometry": loaded, "setup": setup}
 	_mutex.unlock()
 
 

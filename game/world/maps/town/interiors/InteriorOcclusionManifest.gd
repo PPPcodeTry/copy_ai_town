@@ -41,6 +41,11 @@ var _pending_segment_index := 0
 var _pending_ids: Dictionary = {}
 var _pending_polygon_points := 0
 var _validated_segments: Array[Dictionary] = []
+var _file_only_texture_validation := false
+
+
+func set_file_only_texture_validation(enabled: bool) -> void:
+	_file_only_texture_validation = enabled
 
 
 func load_validated(
@@ -328,6 +333,14 @@ func _source_matches(path: String, expected_value: Variant) -> bool:
 
 
 func _texture_matches_size(path: String, expected_size: Vector2i) -> bool:
+	if _file_only_texture_validation:
+		if not FileAccess.file_exists(path):
+			return false
+		var image := Image.new()
+		return (
+			image.load(ProjectSettings.globalize_path(path)) == OK
+			and image.get_size() == expected_size
+		)
 	var texture := _load_texture(path)
 	return texture != null and Vector2i(texture.get_size()) == expected_size
 

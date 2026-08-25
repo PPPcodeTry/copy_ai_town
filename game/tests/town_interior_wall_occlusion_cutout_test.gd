@@ -28,7 +28,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	_test_formal_generated_assets()
-	for room_id in ["cafe", "clinic", "home_template_b"]:
+	for room_id in ROOMS:
 		_test_multi_subject_state_refresh(room_id)
 	await process_frame
 	await process_frame
@@ -154,44 +154,66 @@ func _test_formal_generated_assets() -> void:
 				occlusion.get_node_or_null(String(segment.get("id"))) != null,
 				"%s exposes generated segment %s" % [room_id, segment.get("id")],
 			)
-		var first_segment := generated_segments[0] as Dictionary
-		var first_reveal := (
-			first_segment.get("reveal_polygons_canvas_px") as Array
-		)[0] as Array
 		var subject := Node2D.new()
 		subject.z_index = 100
-		subject.position = _inside_polygon_point(first_reveal) - _pair(
-			geometry.get("world_origin_px"),
-		)
 		root.add_child(subject)
-		_expect(
-			bool(occlusion.update_for_subject(subject)),
-			"%s refreshes when a subject moves behind its foreground wall" % room_id,
-		)
-		var foreground := occlusion.get_node_or_null(
-			String(first_segment.get("id")),
-		) as Sprite2D
-		_expect_equal(
-			foreground.z_index if foreground != null else -1,
-			100 - WALL_Z_STEP,
-			"%s keeps the full wall behind the subject" % room_id,
-		)
-		var active_overlays := _visible_subject_overlays(occlusion)
-		_expect(
-			not active_overlays.is_empty()
-			and active_overlays[0].z_index == 100 + WALL_Z_STEP,
-			"%s raises the local wall slice in front of the subject" % room_id,
-		)
-		subject.position = Vector2(-100000.0, -100000.0)
-		_expect(
-			bool(occlusion.update_for_subject(subject)),
-			"%s refreshes when the subject leaves the reveal area" % room_id,
-		)
-		_expect_equal(
-			_visible_subject_overlays(occlusion).size(),
-			0,
-			"%s removes the front wall slice outside the reveal area" % room_id,
-		)
+		for segment_value: Variant in generated_segments:
+			var segment := segment_value as Dictionary
+			var segment_id := String(segment.get("id"))
+			var foreground := occlusion.get_node_or_null(segment_id) as Sprite2D
+			var polygon_index := 0
+			for reveal_value: Variant in (
+				segment.get("reveal_polygons_canvas_px") as Array
+			):
+				var reveal := reveal_value as Array
+				subject.position = _inside_polygon_point(reveal) - _pair(
+					geometry.get("world_origin_px"),
+				)
+				_expect(
+					bool(occlusion.update_for_subject(subject)),
+					"%s segment %s polygon %d refreshes behind the wall"
+					% [room_id, segment_id, polygon_index],
+				)
+				_expect_equal(
+					foreground.z_index if foreground != null else -1,
+					100 - WALL_Z_STEP,
+					"%s segment %s keeps its full image behind the subject"
+					% [room_id, segment_id],
+				)
+				var active_overlays := _visible_segment_subject_overlays(
+					occlusion,
+					segment_id,
+					subject.get_instance_id(),
+				)
+				_expect(
+					not active_overlays.is_empty()
+					and active_overlays[0].z_index == 100 + WALL_Z_STEP,
+					"%s segment %s polygon %d raises a local slice in front"
+					% [room_id, segment_id, polygon_index],
+				)
+				subject.position = Vector2(-100000.0, -100000.0)
+				_expect(
+					bool(occlusion.update_for_subject(subject)),
+					"%s segment %s polygon %d refreshes after exit"
+					% [room_id, segment_id, polygon_index],
+				)
+				_expect_equal(
+					_visible_segment_subject_overlays(
+						occlusion,
+						segment_id,
+						subject.get_instance_id(),
+					).size(),
+					0,
+					"%s segment %s polygon %d removes its front slice"
+					% [room_id, segment_id, polygon_index],
+				)
+				_expect_equal(
+					foreground.z_index if foreground != null else -1,
+					999,
+					"%s segment %s polygon %d restores its authored front depth"
+					% [room_id, segment_id, polygon_index],
+				)
+				polygon_index += 1
 		subject.free()
 		occlusion.update_for_subjects([])
 		occlusion.free()
@@ -226,7 +248,8 @@ func _test_multi_subject_state_refresh(room_id: String) -> void:
 		)),
 		"%s multi-subject regression loads the wall" % room_id,
 	)
-	var first_segment := (manifest.get("segments") as Array)[0] as Dictionary
+	var generated_segments := manifest.get("segments") as Array
+	var first_segment := generated_segments[0] as Dictionary
 	var first_reveal := (
 		first_segment.get("reveal_polygons_canvas_px") as Array
 	)[0] as Array
@@ -242,7 +265,8 @@ func _test_multi_subject_state_refresh(room_id: String) -> void:
 	second_subject.position = foot + Vector2.ONE
 	root.add_child(second_subject)
 	_expect(
-		bool(occlusion.update_for_subjects([first_subject, second_subject])),
+		occlusion.upsert_subject(first_subject)
+		and occlusion.upsert_subject(second_subject),
 		"%s first two-person state refreshes wall occlusion" % room_id,
 	)
 	var foreground := occlusion.get_node_or_null(
@@ -255,49 +279,96 @@ func _test_multi_subject_state_refresh(room_id: String) -> void:
 	)
 	_expect(
 		_visible_subject_overlays(occlusion).size() >= 2,
-		"two people in one room receive independent foreground slices",
+		"%s two people receive independent foreground slices" % room_id,
 	)
 	var stable_overlay_count := _visible_subject_overlays(occlusion).size()
 	_expect(
-		not bool(occlusion.update_for_subjects([first_subject, second_subject])),
-		"an unchanged two-person state skips refresh",
+		not occlusion.upsert_subject(second_subject),
+		"%s unchanged subject state skips refresh" % room_id,
 	)
 	_expect_equal(
 		_visible_subject_overlays(occlusion).size(),
 		stable_overlay_count,
 		"an unchanged frame preserves the existing foreground slices",
 	)
+	var first_overlays := _visible_segment_subject_overlays(
+		occlusion,
+		String(first_segment.get("id")),
+		first_subject.get_instance_id(),
+	)
+	var first_overlay_revision := (
+		int(first_overlays[0].get_meta("refresh_revision", -1))
+		if not first_overlays.is_empty()
+		else -1
+	)
 	second_subject.position += Vector2.ONE
 	_expect(
-		bool(occlusion.update_for_subjects([first_subject, second_subject])),
-		"moving one subject refreshes wall occlusion once",
+		occlusion.upsert_subject(second_subject),
+		"%s moving one subject refreshes that subject" % room_id,
+	)
+	first_overlays = _visible_segment_subject_overlays(
+		occlusion,
+		String(first_segment.get("id")),
+		first_subject.get_instance_id(),
+	)
+	_expect(
+		not first_overlays.is_empty()
+		and int(first_overlays[0].get_meta("refresh_revision", -1))
+		== first_overlay_revision,
+		"%s moving B does not refresh A's overlay" % room_id,
+	)
+	var refresh_stats := occlusion.get_last_refresh_stats()
+	_expect_equal(
+		int(refresh_stats.get("subject_id", -1)),
+		second_subject.get_instance_id(),
+		"%s incremental refresh reports only the dirty subject" % room_id,
+	)
+	_expect(
+		int(refresh_stats.get("touched_segment_count", generated_segments.size()))
+		< generated_segments.size() or generated_segments.size() == 1,
+		"%s moving B does not refresh unrelated wall segments" % room_id,
+	)
+	second_subject.z_index += 7
+	_expect(
+		occlusion.upsert_subject(second_subject),
+		"%s depth changes refresh the dirty subject" % room_id,
+	)
+	var second_overlays := _visible_segment_subject_overlays(
+		occlusion,
+		String(first_segment.get("id")),
+		second_subject.get_instance_id(),
+	)
+	_expect(
+		not second_overlays.is_empty()
+		and second_overlays[0].z_index == second_subject.z_index + WALL_Z_STEP,
+		"%s depth changes update that subject's front slice" % room_id,
 	)
 	first_subject.visible = false
 	_expect(
-		bool(occlusion.update_for_subjects([first_subject, second_subject])),
-		"hiding one subject refreshes wall occlusion once",
+		occlusion.upsert_subject(first_subject),
+		"%s hiding one subject removes only that subject" % room_id,
 	)
 	stable_overlay_count = _visible_subject_overlays(occlusion).size()
 	_expect(
-		not bool(occlusion.update_for_subjects([first_subject, second_subject])),
-		"a stable one-person state also skips refresh",
+		not occlusion.upsert_subject(second_subject),
+		"%s stable visible subject also skips refresh" % room_id,
 	)
 	_expect_equal(
 		_visible_subject_overlays(occlusion).size(),
 		stable_overlay_count,
 		"stable visibility preserves the existing foreground slice",
 	)
-	first_subject.free()
-	second_subject.free()
 	_expect(
-		bool(occlusion.update_for_subjects([])),
-		"removing every subject refreshes the wall once",
+		occlusion.remove_subject(second_subject.get_instance_id()),
+		"%s explicit removal refreshes the final subject" % room_id,
 	)
 	_expect_equal(
 		_visible_subject_overlays(occlusion).size(),
 		0,
 		"removing every subject hides cached foreground slices",
 	)
+	first_subject.free()
+	second_subject.free()
 	occlusion.free()
 	shell.free()
 
@@ -333,6 +404,19 @@ func _visible_subject_overlays(occlusion: Node2D) -> Array[Sprite2D]:
 	for child in occlusion.get_children():
 		if child is Sprite2D and child.has_meta("subject_overlay") and child.visible:
 			result.append(child as Sprite2D)
+	return result
+
+
+func _visible_segment_subject_overlays(
+	occlusion: Node2D,
+	segment_id: String,
+	subject_id: int,
+) -> Array[Sprite2D]:
+	var result: Array[Sprite2D] = []
+	var expected_prefix := "%sSubjectOverlay_%d" % [segment_id, subject_id]
+	for overlay in _visible_subject_overlays(occlusion):
+		if overlay.name == expected_prefix:
+			result.append(overlay)
 	return result
 
 

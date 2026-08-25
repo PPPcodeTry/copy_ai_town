@@ -173,6 +173,16 @@ func _physics_process(delta: float) -> void:
 	advance_presentation(delta)
 
 
+func set_occlusion_depth(value: int) -> bool:
+	if z_index == value and not z_as_relative:
+		return false
+	z_as_relative = false
+	z_index = value
+	if is_node_ready():
+		occlusion_state_changed.emit(self)
+	return true
+
+
 func configure(identity: Dictionary, initial_state: Dictionary) -> Dictionary:
 	var resident_id := String(identity.get("residentId", "")).strip_edges()
 	var resident_name := String(identity.get("residentName", "")).strip_edges()

@@ -33,6 +33,7 @@ var _ground_shadow_count := 0
 var _debug_visible := false
 var _layout_state: Dictionary = {}
 var _pixel_light_texture: Texture2D
+var _prepared_textures: Dictionary = {}
 var _configuration_instances: Array = []
 var _configuration_index := 0
 var _configuration_layout: Dictionary = {}
@@ -50,12 +51,7 @@ func configure(manifest_path: String, layout_path: String) -> bool:
 
 
 func begin_configuration(manifest_path: String, layout_path: String) -> bool:
-	_clear_runtime()
-	_configuration_instances.clear()
-	_configuration_index = 0
-	_configuration_layout.clear()
-	_configuration_active = false
-	_configuration_failed = false
+	_reset_configuration()
 	_manifest_path = manifest_path
 	var manifest := _load_json(manifest_path)
 	var layout := _load_json(layout_path)
@@ -68,22 +64,56 @@ func begin_configuration(manifest_path: String, layout_path: String) -> bool:
 	if not _errors.is_empty():
 		_configuration_failed = true
 		return false
+	return _begin_loaded_configuration(layout, layout_path, false)
+
+
+func begin_configuration_prepared(
+	manifest_path: String,
+	layout_path: String,
+	definitions: Dictionary,
+	layout: Dictionary,
+	light_image: Image,
+	textures: Dictionary,
+) -> bool:
+	_reset_configuration()
+	_manifest_path = manifest_path
+	_definitions = definitions
+	_prepared_textures = textures
+	if light_image != null and not light_image.is_empty():
+		_pixel_light_texture = ImageTexture.create_from_image(light_image)
+	return _begin_loaded_configuration(layout, layout_path, true)
+
+
+func _reset_configuration() -> void:
+	_clear_runtime()
+	_configuration_instances.clear()
+	_configuration_index = 0
+	_configuration_layout.clear()
+	_configuration_active = false
+	_configuration_failed = false
+
+
+func _begin_loaded_configuration(
+	layout: Dictionary,
+	layout_path: String,
+	take_ownership: bool,
+) -> bool:
 	var errors := _validate_layout(layout, false)
 	if not errors.is_empty():
 		_errors = errors
 		_configuration_failed = true
 		return false
-	_configuration_layout = layout.duplicate(true)
-	_configuration_instances = (
-		(_configuration_layout.get("instances", []) as Array).duplicate(true)
-	)
-	_configuration_instances.sort_custom(
-		func(left: Variant, right: Variant) -> bool:
-			return str((left as Dictionary).get("instance_id", "")) < str(
-				(right as Dictionary).get("instance_id", ""),
-			)
-	)
-	_configuration_layout["instances"] = _configuration_instances.duplicate(true)
+	_configuration_layout = layout if take_ownership else layout.duplicate(true)
+	_configuration_instances = _configuration_layout.get("instances", []) as Array
+	if not take_ownership:
+		_configuration_instances = _configuration_instances.duplicate(true)
+		_configuration_instances.sort_custom(
+			func(left: Variant, right: Variant) -> bool:
+				return str((left as Dictionary).get("instance_id", "")) < str(
+					(right as Dictionary).get("instance_id", ""),
+				)
+		)
+		_configuration_layout["instances"] = _configuration_instances.duplicate(true)
 	_clear_scene_nodes()
 	_errors.clear()
 	_occlusion_layer = RUNTIME_OCCLUSION.new() as Node2D
@@ -114,6 +144,7 @@ func continue_configuration() -> Dictionary:
 	add_child(_occlusion_layer)
 	_layout_state = _configuration_layout
 	set_debug_visible(_debug_visible)
+	_prepared_textures.clear()
 	_configuration_active = false
 	return {"ok": true, "complete": true, "failed": false}
 
@@ -482,6 +513,16 @@ func create_agent_prop_projection(
 
 func set_debug_visible(value: bool) -> void:
 	_debug_visible = value
+	if value and _debug_roots.is_empty():
+		for item in _items:
+			var asset_id := str(item.get_meta("asset_id", ""))
+			if not _definitions.has(asset_id):
+				continue
+			_build_debug(
+				item,
+				_definitions.get(asset_id) as Dictionary,
+				str(item.get_meta("direction", "down")),
+			)
 	for debug_root in _debug_roots:
 		if is_instance_valid(debug_root):
 			debug_root.visible = value
@@ -709,7 +750,6 @@ func _build_instance(instance: Dictionary) -> void:
 		_errors.append("%s 没有连续碰撞形状" % instance_id)
 
 	_build_ground_shadows(item, definition, direction)
-	_build_debug(item, definition, direction)
 	_build_occluder(item, definition, direction, texture, anchor)
 	_build_visual_effects(item, definition, direction)
 
@@ -913,6 +953,7 @@ func _clear_runtime() -> void:
 	_errors.clear()
 	_layout_state.clear()
 	_layout_path = ""
+	_prepared_textures.clear()
 
 
 func _base_depth_for(local_y: float) -> int:
@@ -938,6 +979,9 @@ func _read_json(path: String) -> Dictionary:
 
 
 func _load_texture(path: String) -> Texture2D:
+	var prepared := _prepared_textures.get(path) as Texture2D
+	if prepared != null:
+		return prepared
 	if ResourceLoader.exists(path, "Texture2D"):
 		var imported := ResourceLoader.load(path, "Texture2D") as Texture2D
 		if imported != null:

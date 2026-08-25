@@ -24,6 +24,7 @@ func _initialize() -> void:
 
 
 func _run() -> void:
+	_test_existing_wall_furniture_blocker_advances()
 	var startup_started := Time.get_ticks_msec()
 	var town := TOWN_BASE.new()
 	root.add_child(town)
@@ -35,10 +36,24 @@ func _run() -> void:
 		"Town owns a frame-budgeted interior preparation queue",
 	)
 	if build_queue != null:
+		var disabled_profile := build_queue.get_profile_snapshot() as Dictionary
+		_expect(
+			not build_queue.is_profiling_enabled(),
+			"interior preparation profiling is disabled during normal play",
+		)
+		_expect(
+			not disabled_profile.has("rooms") and disabled_profile.size() == 2,
+			"disabled profiling does not allocate room or stage statistics",
+		)
+		build_queue.set_profiling_enabled(true)
+		_expect(
+			build_queue.is_profiling_enabled(),
+			"performance tests can explicitly enable interior profiling",
+		)
 		_expect_equal(
-			build_queue.get_frame_budget_usec(),
+			build_queue.get_frame_target_usec(),
 			8000,
-			"interior preparation has an explicit eight-millisecond frame budget",
+			"interior preparation has an explicit eight-millisecond frame target",
 		)
 	_expect_equal(
 		roots.size(),
@@ -127,10 +142,94 @@ func _run() -> void:
 			not room.get_navigation_grid_data().is_empty(),
 			"%s builds navigation data" % interior_id,
 		)
+		var navigation := room.get_navigation_grid_data()
+		var entry_cell := _serialized_cell(navigation.get("entry_cell"))
+		var exit_cell := _serialized_cell(navigation.get("exit_cell"))
+		_expect(
+			room.is_navigation_cell_walkable(entry_cell),
+			"%s entry cell is actually walkable" % interior_id,
+		)
+		_expect(
+			room.is_navigation_cell_walkable(exit_cell),
+			"%s exit cell is actually walkable" % interior_id,
+		)
+		var entry_neighbors := room.get_walkable_navigation_neighbors(entry_cell)
+		var neighbors_are_valid := not entry_neighbors.is_empty()
+		for neighbor in entry_neighbors:
+			neighbors_are_valid = (
+				neighbors_are_valid
+				and room.is_navigation_cell_walkable(neighbor)
+				and absi(neighbor.x - entry_cell.x) + absi(neighbor.y - entry_cell.y) == 1
+			)
+		_expect(
+			neighbors_are_valid,
+			"%s navigation returns only walkable cardinal neighbors" % interior_id,
+		)
+		var layout_instances := (
+			room.get_furniture_layout_snapshot().get("instances", []) as Array
+		)
+		_expect_equal(
+			room.get_furniture_instance_count(),
+			layout_instances.size(),
+			"%s instantiates every authored furniture item" % interior_id,
+		)
+		var has_authored_furniture := not layout_instances.is_empty()
+		_expect(
+			(room.get_furniture_collision_shape_count() > 0)
+			== has_authored_furniture,
+			"%s furniture collision presence matches the authored layout" % interior_id,
+		)
+		var occupied_cells := room.get_furniture_occupied_cells()
+		var furniture_cells_block_navigation := (
+			not occupied_cells.is_empty() if has_authored_furniture else occupied_cells.is_empty()
+		)
+		for occupied_cell in occupied_cells:
+			if room.is_navigation_cell_walkable(occupied_cell):
+				furniture_cells_block_navigation = false
+				break
+		_expect(
+			furniture_cells_block_navigation,
+			"%s furniture occupancy matches and constrains navigation" % interior_id,
+		)
 		var wall := room.get_node_or_null("WallCollision") as StaticBody2D
 		_expect(
 			wall != null and wall.get_child_count() > 0,
 			"%s builds wall collisions" % interior_id,
+		)
+		await physics_frame
+		var wall_shape := _first_collision_shape(wall)
+		_expect(
+			wall_shape != null
+			and _physics_point_hits(
+				town,
+				_shape_interior_global_point(wall_shape),
+				wall,
+			),
+			"%s wall collision participates in the physics space" % interior_id,
+		)
+		var furniture_body := _first_furniture_collision_body(room)
+		var furniture_shape := _first_collision_shape(furniture_body)
+		_expect(
+			(
+				furniture_body != null
+				and furniture_shape != null
+				and _physics_point_hits(
+					town,
+					_shape_interior_global_point(furniture_shape),
+					furniture_body,
+				)
+			)
+			if has_authored_furniture
+			else furniture_body == null,
+			"%s furniture physics presence matches the authored layout" % interior_id,
+		)
+		var player_foot := (
+			town.get_node("Player/PlayerOcclusionFootPoint") as Node2D
+		)
+		_expect_equal(
+			player_foot.z_index,
+			player.z_index,
+			"%s entry keeps player occlusion depth synchronized" % interior_id,
 		)
 		if not controller_checked:
 			var controller := town.get_node_or_null("InteriorOcclusionController")
@@ -157,6 +256,11 @@ func _run() -> void:
 			controller_checked = true
 		await town.call("_exit_interior", player, interior_id)
 		_expect(not room.visible, "%s hides after exit" % interior_id)
+		_expect_equal(
+			player_foot.z_index,
+			player.z_index,
+			"%s exit keeps player occlusion depth synchronized" % interior_id,
+		)
 		town.set("_blocked_exterior_reentry_portal_id", "")
 		await town.call("_enter_interior", player, portal_id)
 		_expect(
@@ -191,6 +295,7 @@ func _run() -> void:
 	var all_navigation_scans_are_batched := true
 	var all_furniture_filters_are_batched := true
 	var all_navigation_lookups_are_batched := true
+	var all_furniture_asset_loads_are_staged := true
 	for room_profile_value: Variant in (
 		build_profile.get("rooms", {}) as Dictionary
 	).values():
@@ -215,6 +320,10 @@ func _run() -> void:
 		all_navigation_lookups_are_batched = (
 			all_navigation_lookups_are_batched
 			and int(stage_calls.get("furniture_navigation_lookup", 0)) > 1
+		)
+		all_furniture_asset_loads_are_staged = (
+			all_furniture_asset_loads_are_staged
+			and int(stage_calls.get("furniture_begin", 0)) > 1
 		)
 		max_room_cpu_usec = maxi(
 			max_room_cpu_usec,
@@ -272,6 +381,10 @@ func _run() -> void:
 		all_navigation_lookups_are_batched,
 		"every room advances the final navigation lookup across multiple bounded batches",
 	)
+	_expect(
+		all_furniture_asset_loads_are_staged,
+		"every room loads furniture data and textures across multiple resumable steps",
+	)
 	await _finish(town, {
 		"startup_msec": startup_msec,
 		"first_entry_msec": first_entry_msec,
@@ -290,12 +403,100 @@ func _run() -> void:
 	})
 
 
+func _test_existing_wall_furniture_blocker_advances() -> void:
+	var room := InteriorRoom.new()
+	room.set("_navigation_grid_data", {
+		"walkable_cells": [],
+		"wall_cells": [[3, 4]],
+	})
+	var task := InteriorRoomPreparationTask.new(
+		"",
+		Vector2.ZERO,
+		Vector2.ZERO,
+		"",
+		"",
+		"",
+		"",
+		false,
+	)
+	task.furniture_navigation_phase = (
+		InteriorRoomPreparationTask.FurnitureNavigationPhase.BLOCKED
+	)
+	task.furniture_blocked_cells = [Vector2i(3, 4)]
+	task.furniture_wall_lookup = {Vector2i(3, 4): true}
+	var processed := room.preparation_continue_furniture_navigation(task, 1)
+	_expect_equal(
+		processed,
+		1,
+		"an occupied cell already present in wall navigation consumes one work item",
+	)
+	_expect_equal(
+		task.furniture_blocked_cursor,
+		1,
+		"an occupied cell already present in wall navigation advances the cursor",
+	)
+	room.free()
+
+
 func _count_exterior_portals(town: Node) -> int:
 	var count := 0
 	for portal_spec in TOWN_BASE.EXTERIOR_INTERIOR_PORTALS:
 		if town.get_node_or_null(String(portal_spec.get("node_name", ""))) != null:
 			count += 1
 	return count
+
+
+func _serialized_cell(value: Variant) -> Vector2i:
+	var pair := value as Array
+	return Vector2i(int(pair[0]), int(pair[1])) if pair.size() >= 2 else Vector2i.ZERO
+
+
+func _first_collision_shape(body: StaticBody2D) -> CollisionShape2D:
+	if not is_instance_valid(body):
+		return null
+	for child in body.get_children():
+		if child is CollisionShape2D and (child as CollisionShape2D).shape != null:
+			return child as CollisionShape2D
+	return null
+
+
+func _first_furniture_collision_body(room: InteriorRoom) -> StaticBody2D:
+	for node in room.find_children(
+		"ContinuousGroundCollision",
+		"StaticBody2D",
+		true,
+		false,
+	):
+		if node is StaticBody2D:
+			return node as StaticBody2D
+	return null
+
+
+func _shape_interior_global_point(collision: CollisionShape2D) -> Vector2:
+	var local_point := Vector2.ZERO
+	if collision.shape is ConvexPolygonShape2D:
+		var points := (collision.shape as ConvexPolygonShape2D).points
+		if not points.is_empty():
+			for point in points:
+				local_point += point
+			local_point /= float(points.size())
+	return collision.to_global(local_point)
+
+
+func _physics_point_hits(
+	host: Node,
+	global_point: Vector2,
+	expected_collider: CollisionObject2D,
+) -> bool:
+	var query := PhysicsPointQueryParameters2D.new()
+	query.position = global_point
+	query.collision_mask = 1
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	for hit in host.get_world_2d().direct_space_state.intersect_point(query, 32):
+		if (hit as Dictionary).get("collider") == expected_collider:
+			return true
+	return false
 
 
 func _expect(condition: bool, message: String) -> void:

@@ -10,6 +10,8 @@ signal resident_body_space_changed(
 	space_id: String,
 )
 signal occlusion_subjects_changed(subjects: Array[Node2D])
+signal occlusion_subject_added(subject: Node2D)
+signal occlusion_subject_removed(subject_id: int)
 signal occlusion_subject_state_changed(subject: Node2D)
 signal presentation_diagnostic(diagnostic: Dictionary)
 signal resident_selected(resident_id: String, resident_name: String)
@@ -1216,10 +1218,17 @@ func _on_body_visible_space_changed(
 		previous_space_id,
 		space_id,
 	)
-	_refresh_active_occlusion_subjects()
+	var body := _bodies.get(resident_id) as Node2D
+	_update_active_occlusion_subject(body)
 
 
 func _on_body_occlusion_state_changed(subject: Node2D) -> void:
+	if not is_instance_valid(subject) or not subject.has_method("get_space_id"):
+		return
+	_update_active_occlusion_subject(subject)
+
+
+func _update_active_occlusion_subject(subject: Node2D) -> void:
 	if not is_instance_valid(subject) or not subject.has_method("get_space_id"):
 		return
 	var should_be_active := (
@@ -1227,9 +1236,13 @@ func _on_body_occlusion_state_changed(subject: Node2D) -> void:
 		and String(subject.get_space_id()) == _active_space_id
 	)
 	var is_active := _active_occlusion_subjects.has(subject)
-	if should_be_active != is_active:
-		_refresh_active_occlusion_subjects()
-	elif should_be_active:
+	if should_be_active and not is_active:
+		_active_occlusion_subjects.append(subject)
+		occlusion_subject_added.emit(subject)
+	elif not should_be_active and is_active:
+		_active_occlusion_subjects.erase(subject)
+		occlusion_subject_removed.emit(subject.get_instance_id())
+	elif is_active:
 		occlusion_subject_state_changed.emit(subject)
 
 

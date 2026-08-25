@@ -12,27 +12,9 @@ const FURNITURE_RUNTIME_SCRIPT := preload(
 const GEOMETRY_LOAD_TASK := preload(
 	"res://world/maps/town/interiors/InteriorGeometryLoadTask.gd"
 )
-const PREPARATION_WORK_ITEM_RESERVE_USEC := 500
-const MAX_PREPARATION_WORK_ITEMS := 16
-enum PreparationStage {
-	IDLE,
-	SHELL_REQUEST,
-	SHELL_WAIT,
-	GEOMETRY_REQUEST,
-	GEOMETRY_WAIT,
-	GEOMETRY_APPLY,
-	COLLISION,
-	NAVIGATION,
-	NAVIGATION_LOOKUP,
-	OCCLUSION_BEGIN,
-	OCCLUSION_SEGMENT,
-	FURNITURE_BEGIN,
-	FURNITURE_INSTANCE,
-	FURNITURE_NAVIGATION,
-	FURNITURE_NAVIGATION_LOOKUP,
-	COMPLETE,
-	FAILED,
-}
+const PREPARATION_WORK_ITEM_TARGET_USEC := (
+	InteriorRoomPreparationTask.WORK_ITEM_TARGET_USEC
+)
 
 var _floor_profile_id := ""
 var _geometry_path := ""
@@ -46,9 +28,7 @@ var _wall_occlusion: InteriorWallOcclusion
 var _furniture_manifest_path := ""
 var _furniture_layout_path := ""
 var _furniture_runtime: InteriorFurnitureRuntime
-var _preparation_stage := PreparationStage.IDLE
-var _preparation_config: Dictionary = {}
-var _preparation_error := ""
+var _preparation_task: InteriorRoomPreparationTask
 
 
 func configure(
@@ -84,281 +64,235 @@ func begin_preparation(
 	furniture_layout_path: String = "",
 	threaded_shell_load: bool = false,
 ) -> bool:
-	if _preparation_stage != PreparationStage.IDLE:
+	if _preparation_task != null:
 		return false
-	_preparation_config = {
-		"shell_path": shell_path,
-		"entry_point": entry_point,
-		"exit_point": exit_point,
-		"geometry_path": geometry_path,
-		"occlusion_path": occlusion_path,
-		"furniture_manifest_path": furniture_manifest_path,
-		"furniture_layout_path": furniture_layout_path,
-		"threaded_shell_load": threaded_shell_load,
-	}
-	_preparation_error = ""
-	_preparation_stage = PreparationStage.SHELL_REQUEST
+	_preparation_task = InteriorRoomPreparationTask.new(
+		shell_path,
+		entry_point,
+		exit_point,
+		geometry_path,
+		occlusion_path,
+		furniture_manifest_path,
+		furniture_layout_path,
+		threaded_shell_load,
+	)
 	return true
 
 
-func prepare_next_stage(remaining_budget_usec: int = 8000) -> Dictionary:
-	if is_preparation_complete() or has_preparation_failed():
-		return _preparation_result("idle", 0)
-	var started_usec := Time.get_ticks_usec()
-	var stage_name := "unknown"
-	var work_item_limit := clampi(
-		remaining_budget_usec / PREPARATION_WORK_ITEM_RESERVE_USEC,
-		1,
-		MAX_PREPARATION_WORK_ITEMS,
-	)
-	var work_items := 1
-	match _preparation_stage:
-		PreparationStage.SHELL_REQUEST:
-			stage_name = "shell_request"
-			_prepare_shell_request()
-		PreparationStage.SHELL_WAIT:
-			stage_name = "shell_wait"
-			_prepare_shell_wait()
-			if _preparation_stage == PreparationStage.SHELL_WAIT:
-				work_items = 0
-		PreparationStage.GEOMETRY_REQUEST:
-			stage_name = "geometry_request"
-			_prepare_geometry_request()
-		PreparationStage.GEOMETRY_WAIT:
-			stage_name = "geometry_wait"
-			_prepare_geometry_wait()
-			if _preparation_stage == PreparationStage.GEOMETRY_WAIT:
-				work_items = 0
-		PreparationStage.GEOMETRY_APPLY:
-			stage_name = "geometry_apply"
-			_apply_geometry()
-		PreparationStage.COLLISION:
-			stage_name = "collision"
-			work_items = _prepare_wall_collision(work_item_limit)
-		PreparationStage.NAVIGATION:
-			stage_name = "navigation"
-			work_items = _prepare_navigation(work_item_limit)
-		PreparationStage.NAVIGATION_LOOKUP:
-			stage_name = "navigation_lookup"
-			work_items = _continue_navigation_lookup(work_item_limit)
-		PreparationStage.OCCLUSION_BEGIN:
-			stage_name = "occlusion_begin"
-			_prepare_occlusion_begin()
-		PreparationStage.OCCLUSION_SEGMENT:
-			stage_name = "occlusion_segment"
-			_prepare_occlusion_segment()
-		PreparationStage.FURNITURE_BEGIN:
-			stage_name = "furniture_begin"
-			_prepare_furniture_begin()
-		PreparationStage.FURNITURE_INSTANCE:
-			stage_name = "furniture_instance"
-			_prepare_furniture_instance()
-		PreparationStage.FURNITURE_NAVIGATION:
-			stage_name = "furniture_navigation"
-			work_items = _prepare_furniture_navigation(work_item_limit)
-		PreparationStage.FURNITURE_NAVIGATION_LOOKUP:
-			stage_name = "furniture_navigation_lookup"
-			work_items = _continue_navigation_lookup(work_item_limit)
-	var elapsed_usec := Time.get_ticks_usec() - started_usec
-	return _preparation_result(
-		stage_name,
-		elapsed_usec,
-		work_items,
-		work_item_limit,
-	)
+func prepare_next_stage(
+	deadline_usec: int = 0,
+	collect_metrics: bool = false,
+) -> InteriorRoomPreparationTask.AdvanceStatus:
+	if _preparation_task == null:
+		return null
+	return _preparation_task.advance(self, deadline_usec, collect_metrics)
 
 
 func is_preparation_complete() -> bool:
-	return _preparation_stage == PreparationStage.COMPLETE
+	return _preparation_task != null and _preparation_task.is_complete()
 
 
 func has_preparation_failed() -> bool:
-	return _preparation_stage == PreparationStage.FAILED
+	return _preparation_task != null and _preparation_task.has_failed()
 
 
 func get_preparation_error() -> String:
-	return _preparation_error
+	return _preparation_task.error if _preparation_task != null else ""
 
 
-func _prepare_shell_request() -> void:
+func cancel_preparation() -> void:
+	if _preparation_task != null:
+		_preparation_task.cancel()
+	if is_instance_valid(_wall_occlusion):
+		_wall_occlusion.cancel_configuration()
+
+
+func preparation_request_shell(task: InteriorRoomPreparationTask) -> void:
 	var shell := get_node("RoomShell") as Sprite2D
-	var shell_path := String(_preparation_config.get("shell_path"))
-	if bool(_preparation_config.get("threaded_shell_load", false)):
+	if task.threaded_load:
 		if (
-			not ResourceLoader.exists(shell_path, "Texture2D")
+			not ResourceLoader.exists(task.shell_path, "Texture2D")
 			or ResourceLoader.load_threaded_request(
-				shell_path,
+				task.shell_path,
 				"Texture2D",
 				true,
 			) != OK
-		):
-			_fail_preparation("Interior shell could not be queued: %s" % shell_path)
-			return
-		_preparation_stage = PreparationStage.SHELL_WAIT
+			):
+				task.fail("Interior shell could not be queued: %s" % task.shell_path)
+				return
+		task.shell_request_active = true
+		task.stage = InteriorRoomPreparationTask.Stage.SHELL_WAIT
 		return
-	shell.texture = _load_texture(shell_path)
+	shell.texture = _load_texture(task.shell_path)
 	if shell.texture == null:
-		_fail_preparation("Interior shell is missing: %s" % shell_path)
+		task.fail("Interior shell is missing: %s" % task.shell_path)
 		return
-	_preparation_stage = PreparationStage.GEOMETRY_REQUEST
+	task.stage = InteriorRoomPreparationTask.Stage.GEOMETRY_REQUEST
 
 
-func _prepare_shell_wait() -> void:
-	var shell_path := String(_preparation_config.get("shell_path"))
-	var status := ResourceLoader.load_threaded_get_status(shell_path)
+func preparation_poll_shell(task: InteriorRoomPreparationTask) -> void:
+	var status := ResourceLoader.load_threaded_get_status(task.shell_path)
 	if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
 		return
 	if status != ResourceLoader.THREAD_LOAD_LOADED:
-		_fail_preparation("Interior shell threaded load failed: %s" % shell_path)
+		task.fail("Interior shell threaded load failed: %s" % task.shell_path)
 		return
 	var shell := get_node("RoomShell") as Sprite2D
-	shell.texture = ResourceLoader.load_threaded_get(shell_path) as Texture2D
+	shell.texture = ResourceLoader.load_threaded_get(task.shell_path) as Texture2D
+	task.shell_request_active = false
 	if shell.texture == null:
-		_fail_preparation("Interior shell is missing: %s" % shell_path)
+		task.fail("Interior shell is missing: %s" % task.shell_path)
 		return
-	_preparation_stage = PreparationStage.GEOMETRY_REQUEST
+	task.stage = InteriorRoomPreparationTask.Stage.GEOMETRY_REQUEST
 
 
-func _prepare_geometry_request() -> void:
-	_geometry_path = String(_preparation_config.get("geometry_path"))
-	if (
-		bool(_preparation_config.get("threaded_shell_load", false))
-		and not _geometry_path.is_empty()
-	):
-		var task := GEOMETRY_LOAD_TASK.new() as InteriorGeometryLoadTask
-		_preparation_config["geometry_task"] = task
-		_preparation_config["geometry_task_id"] = WorkerThreadPool.add_task(
-			task.run.bind(_geometry_path),
+func preparation_request_geometry(task: InteriorRoomPreparationTask) -> void:
+	_geometry_path = task.geometry_path
+	if task.threaded_load and not _geometry_path.is_empty():
+		task.geometry_worker = GEOMETRY_LOAD_TASK.new() as InteriorGeometryLoadTask
+		task.geometry_worker_id = WorkerThreadPool.add_task(
+			task.geometry_worker.run.bind(_geometry_path),
 			false,
 			"Load interior geometry",
 		)
-		_preparation_stage = PreparationStage.GEOMETRY_WAIT
+		task.stage = InteriorRoomPreparationTask.Stage.GEOMETRY_WAIT
 		return
 	_geometry_data = ROOM_GEOMETRY.load_geometry(_geometry_path)
-	_preparation_stage = PreparationStage.GEOMETRY_APPLY
+	task.stage = InteriorRoomPreparationTask.Stage.GEOMETRY_APPLY
 
-func _prepare_geometry_wait() -> void:
-	var task_id := int(_preparation_config.get("geometry_task_id", -1))
-	if task_id < 0:
-		_fail_preparation("Interior room geometry task is missing")
+func preparation_poll_geometry(task: InteriorRoomPreparationTask) -> void:
+	if task.geometry_worker_id < 0 or task.geometry_worker == null:
+		task.fail("Interior room geometry task is missing")
 		return
-	if not WorkerThreadPool.is_task_completed(task_id):
+	if not WorkerThreadPool.is_task_completed(task.geometry_worker_id):
 		return
-	WorkerThreadPool.wait_for_task_completion(task_id)
-	var task := (
-		_preparation_config.get("geometry_task") as InteriorGeometryLoadTask
-	)
-	_geometry_data = task.take_result()
-	_preparation_config.erase("geometry_task_id")
-	_preparation_config.erase("geometry_task")
-	_preparation_stage = PreparationStage.GEOMETRY_APPLY
+	WorkerThreadPool.wait_for_task_completion(task.geometry_worker_id)
+	var loaded := task.geometry_worker.take_result()
+	_geometry_data = loaded.get("geometry", {}) as Dictionary
+	task.geometry_setup = loaded.get("setup", {}) as Dictionary
+	task.geometry_worker_id = -1
+	task.geometry_worker = null
+	task.stage = InteriorRoomPreparationTask.Stage.GEOMETRY_APPLY
 
 
-func _apply_geometry() -> void:
+func preparation_apply_geometry(task: InteriorRoomPreparationTask) -> void:
 	var shell := get_node("RoomShell") as Sprite2D
-	var shell_path := String(_preparation_config.get("shell_path"))
-	var entry_point := _preparation_config.get("entry_point") as Vector2
-	var exit_point := _preparation_config.get("exit_point") as Vector2
 	shell.position = Vector2.ZERO
 	if not _geometry_path.is_empty() and _geometry_data.is_empty():
-		_fail_preparation("Interior room geometry is missing: %s" % _geometry_path)
+		task.fail("Interior room geometry is missing: %s" % _geometry_path)
 		return
 	if not _geometry_data.is_empty():
-		var setup := ROOM_GEOMETRY.room_setup_from_loaded_geometry(
-			_geometry_data,
-		) as Dictionary
+		var setup := task.geometry_setup
+		if setup.is_empty():
+			# 同步兼容路径没有工作线程；正式队列在工作线程预计算此结果。
+			setup = ROOM_GEOMETRY.room_setup_from_loaded_geometry(
+				_geometry_data,
+			) as Dictionary
 		shell.position = setup.get("shell_position") as Vector2
-		entry_point = setup.get("entry_point") as Vector2
-		exit_point = setup.get("exit_point") as Vector2
-	(get_node("IndoorEntryPoint") as Marker2D).position = entry_point
-	(get_node("IndoorExitPoint") as Marker2D).position = exit_point
+		task.entry_point = setup.get("entry_point") as Vector2
+		task.exit_point = setup.get("exit_point") as Vector2
+		task.geometry_setup.clear()
+	(get_node("IndoorEntryPoint") as Marker2D).position = task.entry_point
+	(get_node("IndoorExitPoint") as Marker2D).position = task.exit_point
 	if not _geometry_data.is_empty():
 		_floor_profile_id = str(_geometry_data.get("room_id", ""))
 	else:
-		_floor_profile_id = FLOOR_PROFILES.profile_id_from_shell_path(shell_path)
+		_floor_profile_id = FLOOR_PROFILES.profile_id_from_shell_path(task.shell_path)
 		if not FLOOR_PROFILES.has_profile(_floor_profile_id):
-			_fail_preparation(
+			task.fail(
 				"Interior floor profile is missing: %s" % _floor_profile_id,
 			)
 			return
-	_preparation_config["entry_point"] = entry_point
-	_preparation_config["exit_point"] = exit_point
-	_preparation_stage = PreparationStage.COLLISION
+	task.stage = InteriorRoomPreparationTask.Stage.COLLISION
 
 
-func _prepare_navigation(max_work_items: int) -> int:
-	var entry_point := _preparation_config.get("entry_point") as Vector2
-	var exit_point := _preparation_config.get("exit_point") as Vector2
+func preparation_continue_navigation(
+	task: InteriorRoomPreparationTask,
+	max_work_items: int,
+) -> int:
 	if not _geometry_data.is_empty():
-		if not _preparation_config.has("navigation_scan"):
-			_preparation_config["navigation_scan"] = (
+		if task.navigation_scan.is_empty():
+			task.navigation_scan = (
 				ROOM_GEOMETRY.begin_navigation_grid_scan(
 					_geometry_data,
-					entry_point,
-					exit_point,
+					task.entry_point,
+					task.exit_point,
 				)
 			)
 		var result := ROOM_GEOMETRY.continue_navigation_grid_scan(
-			_preparation_config.get("navigation_scan") as Dictionary,
+			task.navigation_scan,
 			max_work_items,
 		) as Dictionary
 		if result.get("complete") != true:
 			return int(result.get("processed", 0))
-		_preparation_config.erase("navigation_scan")
+		task.navigation_scan = {}
 		if result.get("failed") == true:
-			_fail_preparation("Interior navigation grid could not be built")
+			task.fail("Interior navigation grid could not be built")
 			return int(result.get("processed", 0))
 		_navigation_grid_data = result.get("data", {}) as Dictionary
 	else:
 		# 旧壳配置仅用于兼容工具；正式十间室内全部走已验证几何的游标扫描。
 		_navigation_grid_data = FLOOR_PROFILES.build_navigation_grid_data(
 			_floor_profile_id,
-			entry_point,
-			exit_point
+			task.entry_point,
+			task.exit_point,
 		)
 	_base_navigation_grid_data = _navigation_grid_data.duplicate(true)
-	_preparation_stage = PreparationStage.OCCLUSION_BEGIN
+	task.stage = InteriorRoomPreparationTask.Stage.OCCLUSION_BEGIN
 	return 1
 
 
-func _prepare_occlusion_begin() -> void:
+func preparation_begin_occlusion(task: InteriorRoomPreparationTask) -> void:
 	var shell := get_node("RoomShell") as Sprite2D
-	var configured_path := String(_preparation_config.get("occlusion_path"))
-	_occlusion_path = _resolve_occlusion_path(_geometry_path, configured_path)
+	_occlusion_path = _resolve_occlusion_path(_geometry_path, task.occlusion_path)
 	if not _occlusion_path.is_empty() and not _geometry_data.is_empty():
 		_wall_occlusion = WALL_OCCLUSION_SCRIPT.new() as InteriorWallOcclusion
 		add_child(_wall_occlusion)
-		if not bool(_wall_occlusion.begin_configuration(
-			shell,
-			_geometry_data,
-			_geometry_path,
-			_occlusion_path,
-			String(_preparation_config.get("shell_path")),
-		)):
+		var begun := (
+			_wall_occlusion.begin_configuration_threaded(
+				shell,
+				_geometry_data,
+				_geometry_path,
+				_occlusion_path,
+				task.shell_path,
+			)
+			if task.threaded_load
+			else _wall_occlusion.begin_configuration(
+				shell,
+				_geometry_data,
+				_geometry_path,
+				_occlusion_path,
+				task.shell_path,
+			)
+		)
+		if not begun:
 			_wall_occlusion.queue_free()
 			_wall_occlusion = null
-			_fail_preparation("Interior wall occlusion could not be loaded")
+			task.fail("Interior wall occlusion could not be loaded")
 			return
-		_preparation_stage = PreparationStage.OCCLUSION_SEGMENT
+		task.stage = InteriorRoomPreparationTask.Stage.OCCLUSION_SEGMENT
 		return
-	_preparation_stage = PreparationStage.FURNITURE_BEGIN
+	task.stage = InteriorRoomPreparationTask.Stage.FURNITURE_BEGIN
 
 
-func _prepare_occlusion_segment() -> void:
+func preparation_continue_occlusion(task: InteriorRoomPreparationTask) -> void:
 	var result := _wall_occlusion.continue_configuration() as Dictionary
+	task.stage_waiting = result.get("waiting") == true
 	if result.get("failed") == true:
-		_fail_preparation("Interior wall occlusion segment could not be loaded")
+		task.fail("Interior wall occlusion segment could not be loaded")
 		return
 	if result.get("complete") == true:
-		_preparation_stage = PreparationStage.FURNITURE_BEGIN
+		task.stage = InteriorRoomPreparationTask.Stage.FURNITURE_BEGIN
 
 
-func _prepare_furniture_begin() -> void:
-	_furniture_manifest_path = String(
-		_preparation_config.get("furniture_manifest_path"),
-	)
-	_furniture_layout_path = String(_preparation_config.get("furniture_layout_path"))
+func preparation_begin_furniture(task: InteriorRoomPreparationTask) -> void:
+	_furniture_manifest_path = task.furniture_manifest_path
+	_furniture_layout_path = task.furniture_layout_path
 	if not _furniture_manifest_path.is_empty() and not _furniture_layout_path.is_empty():
+		var load_status := task.continue_furniture_asset_loading()
+		if load_status != InteriorRoomPreparationTask.AssetLoadStatus.READY:
+			return
+		var prepared := task.take_furniture_prepared_data()
 		_furniture_runtime = FURNITURE_RUNTIME_SCRIPT.new() as InteriorFurnitureRuntime
 		_furniture_runtime.name = "FurnitureRuntime"
 		add_child(_furniture_runtime)
@@ -366,79 +300,44 @@ func _prepare_furniture_begin() -> void:
 			"layout_changed",
 			_on_furniture_layout_changed
 		)
-		if not bool(_furniture_runtime.begin_configuration(
+		if not bool(_furniture_runtime.begin_configuration_prepared(
 			_furniture_manifest_path,
 			_furniture_layout_path,
+			prepared.get("definitions", {}) as Dictionary,
+			prepared.get("layout", {}) as Dictionary,
+			prepared.get("light_image") as Image,
+			prepared.get("textures", {}) as Dictionary,
 		)):
 			var details := PackedStringArray()
 			for error in _furniture_runtime.get_errors() as PackedStringArray:
 				details.append(error)
-			_fail_preparation(
+			task.fail(
 				"Interior furniture layout could not be loaded: %s (%s)"
 				% [_furniture_layout_path, "; ".join(details)],
 			)
 			return
-		_preparation_stage = PreparationStage.FURNITURE_INSTANCE
+		task.stage = InteriorRoomPreparationTask.Stage.FURNITURE_INSTANCE
 		return
-	_begin_navigation_lookup(
-		PreparationStage.NAVIGATION_LOOKUP,
-		PreparationStage.COMPLETE,
+	begin_preparation_navigation_lookup(
+		task,
+		InteriorRoomPreparationTask.Stage.NAVIGATION_LOOKUP,
+		InteriorRoomPreparationTask.Stage.COMPLETE,
 	)
 
 
-func _prepare_furniture_instance() -> void:
+func preparation_continue_furniture(task: InteriorRoomPreparationTask) -> void:
 	var result := _furniture_runtime.continue_configuration() as Dictionary
 	if result.get("failed") == true:
 		var details := _furniture_runtime.get_errors() as PackedStringArray
-		_fail_preparation(
+		task.fail(
 			"Interior furniture instance could not be loaded: %s"
 			% "; ".join(details),
 		)
 		return
 	if result.get("complete") == true:
 		_furniture_runtime.begin_occupied_room_cell_scan()
-		_preparation_config["furniture_navigation_phase"] = "occupancy"
-		_preparation_stage = PreparationStage.FURNITURE_NAVIGATION
-
-
-func _finish_preparation() -> void:
-	queue_redraw()
-	_preparation_config.clear()
-	_preparation_stage = PreparationStage.COMPLETE
-
-
-func _fail_preparation(message: String) -> void:
-	_preparation_error = message
-	_preparation_stage = PreparationStage.FAILED
-	push_error(message)
-
-
-func _preparation_result(
-	stage_name: String,
-	elapsed_usec: int,
-	work_items: int = 0,
-	work_item_limit: int = 0,
-) -> Dictionary:
-	return {
-		"ok": not has_preparation_failed(),
-		"complete": is_preparation_complete(),
-		"failed": has_preparation_failed(),
-		"stage": stage_name,
-		"elapsed_usec": elapsed_usec,
-		"work_items": work_items,
-		"work_item_limit": work_item_limit,
-		"waiting": (
-			(
-				stage_name == "shell_wait"
-				and _preparation_stage == PreparationStage.SHELL_WAIT
-			)
-			or (
-				stage_name == "geometry_wait"
-				and _preparation_stage == PreparationStage.GEOMETRY_WAIT
-			)
-		),
-		"error": _preparation_error,
-	}
+		task.begin_furniture_navigation()
+		task.stage = InteriorRoomPreparationTask.Stage.FURNITURE_NAVIGATION
 
 
 func get_floor_profile_id() -> String:
@@ -481,6 +380,12 @@ func get_furniture_collision_shape_count() -> int:
 	if not is_instance_valid(_furniture_runtime):
 		return 0
 	return int(_furniture_runtime.get_collision_shape_count())
+
+
+func get_furniture_occupied_cells() -> Array[Vector2i]:
+	if not is_instance_valid(_furniture_runtime):
+		return []
+	return _furniture_runtime.get_occupied_room_cells() as Array[Vector2i]
 
 
 func get_furniture_errors() -> PackedStringArray:
@@ -629,6 +534,24 @@ func update_wall_occlusion_subjects(subjects: Array[Node2D]) -> bool:
 	return bool(_wall_occlusion.update_for_subjects(subjects))
 
 
+func upsert_wall_occlusion_subject(subject: Node2D) -> bool:
+	if not is_instance_valid(_wall_occlusion):
+		return false
+	return bool(_wall_occlusion.upsert_subject(subject))
+
+
+func remove_wall_occlusion_subject(subject_id: int) -> bool:
+	if not is_instance_valid(_wall_occlusion):
+		return false
+	return bool(_wall_occlusion.remove_subject(subject_id))
+
+
+func clear_wall_occlusion_subjects() -> bool:
+	if not is_instance_valid(_wall_occlusion):
+		return false
+	return bool(_wall_occlusion.clear_subjects())
+
+
 func get_floor_local_bounds() -> Rect2:
 	if not _geometry_data.is_empty():
 		return ROOM_GEOMETRY.get_floor_local_bounds(_geometry_data)
@@ -685,87 +608,93 @@ func _draw() -> void:
 	)
 
 
-func _prepare_wall_collision(max_work_items: int) -> int:
+func preparation_continue_collision(
+	task: InteriorRoomPreparationTask,
+	max_work_items: int,
+) -> int:
 	var processed := 0
-	if not _preparation_config.has("collision_rects"):
+	if task.collision_rects.is_empty():
 		if not _geometry_data.is_empty():
-			if not _preparation_config.has("collision_scan"):
-				_preparation_config["collision_scan"] = (
+			if task.collision_scan.is_empty():
+				task.collision_scan = (
 					ROOM_GEOMETRY.begin_boundary_collision_scan(_geometry_data)
 				)
 			var result := ROOM_GEOMETRY.continue_boundary_collision_scan(
-				_preparation_config.get("collision_scan") as Dictionary,
+				task.collision_scan,
 				max_work_items,
 			) as Dictionary
 			processed += int(result.get("processed", 0))
 			if result.get("complete") != true:
 				return processed
-			_preparation_config.erase("collision_scan")
-			_preparation_config["collision_rects"] = result.get("rects", []) as Array
+			task.collision_scan = {}
+			task.collision_rects = result.get("rects", []) as Array
 		else:
 			# 旧壳配置仅用于兼容工具；正式室内使用上面的游标扫描。
-			_preparation_config["collision_rects"] = (
+			task.collision_rects = (
 				FLOOR_PROFILES.get_boundary_collision_rects(_floor_profile_id)
 			)
-		_preparation_config["collision_cursor"] = 0
-	var collision_rects := _preparation_config.get("collision_rects", []) as Array
-	var cursor := int(_preparation_config.get("collision_cursor", 0))
 	var wall := get_node("WallCollision") as StaticBody2D
-	while cursor < collision_rects.size() and processed < max_work_items:
-		var rect := collision_rects[cursor] as Rect2
+	while (
+		task.collision_cursor < task.collision_rects.size()
+		and processed < max_work_items
+	):
+		var rect := task.collision_rects[task.collision_cursor] as Rect2
 		var collision := CollisionShape2D.new()
-		collision.name = "WallSection_%02d" % cursor
+		collision.name = "WallSection_%02d" % task.collision_cursor
 		collision.position = rect.get_center()
 		var shape := RectangleShape2D.new()
 		shape.size = rect.size
 		collision.shape = shape
 		wall.add_child(collision)
-		cursor += 1
+		task.collision_cursor += 1
 		processed += 1
-	_preparation_config["collision_cursor"] = cursor
-	if cursor >= collision_rects.size():
-		_preparation_config.erase("collision_rects")
-		_preparation_config.erase("collision_cursor")
-		_preparation_stage = PreparationStage.NAVIGATION
+	if task.collision_cursor >= task.collision_rects.size():
+		task.collision_rects = []
+		task.collision_cursor = 0
+		task.stage = InteriorRoomPreparationTask.Stage.NAVIGATION
 	return processed
 
 
-func _begin_navigation_lookup(stage: PreparationStage, next_stage: PreparationStage) -> void:
+func begin_preparation_navigation_lookup(
+	task: InteriorRoomPreparationTask,
+	stage: InteriorRoomPreparationTask.Stage,
+	next_stage: InteriorRoomPreparationTask.Stage,
+) -> void:
 	_walkable_cell_lookup = {}
-	_preparation_config["navigation_lookup_cells"] = (
-		_navigation_grid_data.get("walkable_cells", []) as Array
+	task.begin_navigation_lookup(
+		_navigation_grid_data.get("walkable_cells", []) as Array,
+		next_stage,
 	)
-	_preparation_config["navigation_lookup_cursor"] = 0
-	_preparation_config["navigation_lookup_next_stage"] = next_stage
-	_preparation_stage = stage
+	task.stage = stage
 
 
-func _continue_navigation_lookup(max_work_items: int) -> int:
-	var cells := _preparation_config.get("navigation_lookup_cells", []) as Array
-	var cursor := int(_preparation_config.get("navigation_lookup_cursor", 0))
+func preparation_continue_navigation_lookup(
+	task: InteriorRoomPreparationTask,
+	max_work_items: int,
+) -> int:
 	var processed := 0
-	while cursor < cells.size() and processed < max_work_items:
-		var serialized_cell := cells[cursor] as Array
+	while (
+		task.navigation_lookup_cursor < task.navigation_lookup_cells.size()
+		and processed < max_work_items
+	):
+		var serialized_cell := (
+			task.navigation_lookup_cells[task.navigation_lookup_cursor] as Array
+		)
 		if serialized_cell.size() >= 2:
 			_walkable_cell_lookup[Vector2i(
 				int(serialized_cell[0]),
 				int(serialized_cell[1]),
 			)] = true
-		cursor += 1
+		task.navigation_lookup_cursor += 1
 		processed += 1
-	_preparation_config["navigation_lookup_cursor"] = cursor
-	if cursor >= cells.size():
-		var next_stage := int(_preparation_config.get(
-			"navigation_lookup_next_stage",
-			PreparationStage.COMPLETE,
-		)) as PreparationStage
-		_preparation_config.erase("navigation_lookup_cells")
-		_preparation_config.erase("navigation_lookup_cursor")
-		_preparation_config.erase("navigation_lookup_next_stage")
-		if next_stage == PreparationStage.COMPLETE:
-			_finish_preparation()
+	if task.navigation_lookup_cursor >= task.navigation_lookup_cells.size():
+		var next_stage := task.navigation_lookup_next_stage
+		task.clear_navigation_lookup()
+		if next_stage == InteriorRoomPreparationTask.Stage.COMPLETE:
+			queue_redraw()
+			task.complete()
 		else:
-			_preparation_stage = next_stage
+			task.stage = next_stage
 	return processed
 
 
@@ -779,12 +708,14 @@ func _rebuild_navigation_lookup() -> void:
 			)] = true
 
 
-func _prepare_furniture_navigation(max_work_items: int) -> int:
-	var phase := String(_preparation_config.get(
-		"furniture_navigation_phase",
-		"occupancy",
-	))
-	if phase == "occupancy":
+func preparation_continue_furniture_navigation(
+	task: InteriorRoomPreparationTask,
+	max_work_items: int,
+) -> int:
+	if (
+		task.furniture_navigation_phase
+		== InteriorRoomPreparationTask.FurnitureNavigationPhase.OCCUPANCY
+	):
 		var occupancy_result := (
 			_furniture_runtime.continue_occupied_room_cell_scan(max_work_items)
 			as Dictionary
@@ -792,99 +723,88 @@ func _prepare_furniture_navigation(max_work_items: int) -> int:
 		var processed := int(occupancy_result.get("processed", 0))
 		if occupancy_result.get("complete") != true:
 			return processed
-		_preparation_config["furniture_blocked_cells"] = (
+		task.furniture_blocked_cells = (
 			_furniture_runtime.get_scanned_occupied_room_cells()
 		)
-		_preparation_config["furniture_blocked_lookup"] = (
+		task.furniture_blocked_lookup = (
 			_furniture_runtime.get_scanned_occupied_room_cell_lookup()
 		)
-		_preparation_config["furniture_filtered_walkable"] = []
-		_preparation_config["furniture_walkable_cursor"] = 0
-		_preparation_config["furniture_navigation_phase"] = "walkable"
+		task.furniture_filtered_walkable = []
+		task.furniture_walkable_cursor = 0
+		task.furniture_navigation_phase = (
+			InteriorRoomPreparationTask.FurnitureNavigationPhase.WALKABLE
+		)
 		return processed
-	if phase == "walkable":
+	if (
+		task.furniture_navigation_phase
+		== InteriorRoomPreparationTask.FurnitureNavigationPhase.WALKABLE
+	):
 		var source_walkable := (
 			_navigation_grid_data.get("walkable_cells", []) as Array
 		)
-		var cursor := int(_preparation_config.get("furniture_walkable_cursor", 0))
-		var filtered := _preparation_config.get(
-			"furniture_filtered_walkable",
-			[],
-		) as Array
-		var blocked := _preparation_config.get(
-			"furniture_blocked_lookup",
-			{},
-		) as Dictionary
 		var processed := 0
-		while cursor < source_walkable.size() and processed < max_work_items:
-			var serialized_cell := source_walkable[cursor] as Array
+		while (
+			task.furniture_walkable_cursor < source_walkable.size()
+			and processed < max_work_items
+		):
+			var serialized_cell := (
+				source_walkable[task.furniture_walkable_cursor] as Array
+			)
 			var cell := Vector2i(int(serialized_cell[0]), int(serialized_cell[1]))
-			if not blocked.has(cell):
-				filtered.append(serialized_cell)
-			cursor += 1
+			if not task.furniture_blocked_lookup.has(cell):
+				task.furniture_filtered_walkable.append(serialized_cell)
+			task.furniture_walkable_cursor += 1
 			processed += 1
-		_preparation_config["furniture_walkable_cursor"] = cursor
-		if cursor >= source_walkable.size():
-			_preparation_config["furniture_wall_lookup"] = {}
-			_preparation_config["furniture_wall_cursor"] = 0
-			_preparation_config["furniture_navigation_phase"] = "walls"
+		if task.furniture_walkable_cursor >= source_walkable.size():
+			task.furniture_wall_lookup = {}
+			task.furniture_wall_cursor = 0
+			task.furniture_navigation_phase = (
+				InteriorRoomPreparationTask.FurnitureNavigationPhase.WALLS
+			)
 		return processed
-	if phase == "walls":
+	if (
+		task.furniture_navigation_phase
+		== InteriorRoomPreparationTask.FurnitureNavigationPhase.WALLS
+	):
 		var wall_cells := _navigation_grid_data.get("wall_cells", []) as Array
-		var cursor := int(_preparation_config.get("furniture_wall_cursor", 0))
-		var wall_lookup := _preparation_config.get(
-			"furniture_wall_lookup",
-			{},
-		) as Dictionary
 		var processed := 0
-		while cursor < wall_cells.size() and processed < max_work_items:
-			var serialized_cell := wall_cells[cursor] as Array
-			wall_lookup[Vector2i(
+		while (
+			task.furniture_wall_cursor < wall_cells.size()
+			and processed < max_work_items
+		):
+			var serialized_cell := wall_cells[task.furniture_wall_cursor] as Array
+			task.furniture_wall_lookup[Vector2i(
 				int(serialized_cell[0]),
 				int(serialized_cell[1]),
 			)] = true
-			cursor += 1
+			task.furniture_wall_cursor += 1
 			processed += 1
-		_preparation_config["furniture_wall_cursor"] = cursor
-		if cursor >= wall_cells.size():
-			_preparation_config["furniture_blocked_cursor"] = 0
-			_preparation_config["furniture_navigation_phase"] = "blocked"
+		if task.furniture_wall_cursor >= wall_cells.size():
+			task.furniture_blocked_cursor = 0
+			task.furniture_navigation_phase = (
+				InteriorRoomPreparationTask.FurnitureNavigationPhase.BLOCKED
+			)
 		return processed
-	var blocked_cells := _preparation_config.get(
-		"furniture_blocked_cells",
-		[],
-	) as Array
-	var cursor := int(_preparation_config.get("furniture_blocked_cursor", 0))
 	var wall_cells := _navigation_grid_data.get("wall_cells", []) as Array
-	var wall_lookup := _preparation_config.get("furniture_wall_lookup", {}) as Dictionary
 	var processed := 0
-	while cursor < blocked_cells.size() and processed < max_work_items:
-		var cell := blocked_cells[cursor] as Vector2i
-		if not wall_lookup.has(cell):
-			wall_lookup[cell] = true
+	while (
+		task.furniture_blocked_cursor < task.furniture_blocked_cells.size()
+		and processed < max_work_items
+	):
+		var cell := (
+			task.furniture_blocked_cells[task.furniture_blocked_cursor] as Vector2i
+		)
+		if not task.furniture_wall_lookup.has(cell):
+			task.furniture_wall_lookup[cell] = true
 			wall_cells.append([cell.x, cell.y])
-		cursor += 1
+		task.furniture_blocked_cursor += 1
 		processed += 1
-	_preparation_config["furniture_blocked_cursor"] = cursor
-	if cursor >= blocked_cells.size():
-		_navigation_grid_data["walkable_cells"] = _preparation_config.get(
-			"furniture_filtered_walkable",
-			[],
-		) as Array
-		for key in [
-			"furniture_navigation_phase",
-			"furniture_blocked_cells",
-			"furniture_blocked_lookup",
-			"furniture_filtered_walkable",
-			"furniture_walkable_cursor",
-			"furniture_wall_lookup",
-			"furniture_wall_cursor",
-			"furniture_blocked_cursor",
-		]:
-			_preparation_config.erase(key)
-		_begin_navigation_lookup(
-			PreparationStage.FURNITURE_NAVIGATION_LOOKUP,
-			PreparationStage.COMPLETE,
+	if task.furniture_blocked_cursor >= task.furniture_blocked_cells.size():
+		_navigation_grid_data["walkable_cells"] = task.furniture_filtered_walkable
+		begin_preparation_navigation_lookup(
+			task,
+			InteriorRoomPreparationTask.Stage.FURNITURE_NAVIGATION_LOOKUP,
+			InteriorRoomPreparationTask.Stage.COMPLETE,
 		)
 	return processed
 

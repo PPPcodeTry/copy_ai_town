@@ -3,15 +3,38 @@ extends RefCounted
 const OCCLUSION_MANIFEST := preload(
 	"res://world/maps/town/interiors/InteriorOcclusionManifest.gd"
 )
+const PUBLISH_TRANSACTION := preload(
+	"res://tools/interiors/InteriorOcclusionPublishTransaction.gd"
+)
 const SCHEMA_VERSION := 2
 const RUNTIME_DIRECTORY := "wall_occlusion_runtime"
 const MANIFEST_NAME := "wall_occlusion_runtime.json"
 const MAX_CANVAS_PIXELS := 16777216
 
+var _publish_fault_point := ""
+var _publish_fault_occurrence := 1
+
+
+func configure_publish_fault(point: String, occurrence: int = 1) -> void:
+	_publish_fault_point = point
+	_publish_fault_occurrence = maxi(1, occurrence)
+
 
 func generate(rooms_root: String, room_ids: Array[String]) -> Dictionary:
 	if not _valid_resource_path(rooms_root) or room_ids.is_empty():
 		return _failure("rooms root and room ids are required")
+	var seen_room_ids := {}
+	for room_id in room_ids:
+		if room_id.is_empty() or not room_id.is_valid_identifier():
+			return _failure("invalid room id: %s" % room_id)
+		if seen_room_ids.has(room_id):
+			return _failure("duplicate room id: %s" % room_id)
+		seen_room_ids[room_id] = true
+	var transaction := PUBLISH_TRANSACTION.new()
+	transaction.configure_fault(_publish_fault_point, _publish_fault_occurrence)
+	var recovery := transaction.recover_pending(rooms_root) as Dictionary
+	if recovery.get("ok") != true:
+		return recovery
 	var run_id := "%d_%d" % [Time.get_ticks_usec(), randi()]
 	var staging_root := "user://interior_occlusion_staging/%s" % run_id
 	if DirAccess.make_dir_recursive_absolute(
@@ -22,13 +45,34 @@ func generate(rooms_root: String, room_ids: Array[String]) -> Dictionary:
 	for room_id in room_ids:
 		var staged := _stage_room(rooms_root, room_id, staging_root)
 		if staged.get("ok") != true:
-			_remove_staging_tree(staging_root)
+			if not _remove_staging_tree(staging_root):
+				staged["staging_cleanup_failed"] = true
+				staged["error"] = "%s; staging cleanup failed" % staged.get(
+					"error",
+					"generation failed",
+				)
 			return staged
 		staged_rooms.append(staged)
-	var published := _publish(staged_rooms, run_id)
-	_remove_staging_tree(staging_root)
+	var published := transaction.publish(rooms_root, staged_rooms, run_id) as Dictionary
+	var staging_cleaned := _remove_staging_tree(staging_root)
 	if published.get("ok") != true:
+		# 可报告的 I/O 失败与故障注入都必须在 generate() 返回前恢复。
+		# 真正的进程中断则由下一次 generate() 开头的 recover_pending() 接管。
+		var rollback := PUBLISH_TRANSACTION.new().recover_pending(rooms_root) as Dictionary
+		if rollback.get("ok") != true:
+			rollback["publish_error"] = published.get("error", "")
+			rollback["staging_cleanup_failed"] = not staging_cleaned
+			return rollback
+		published["recovery_pending"] = false
+		if not staging_cleaned:
+			published["staging_cleanup_failed"] = true
+			published["error"] = "%s; staging cleanup failed" % published.get(
+				"error",
+				"publication failed",
+			)
 		return published
+	if not staging_cleaned:
+		return _failure("publication committed but staging cleanup failed")
 	return {
 		"ok": true,
 		"room_count": staged_rooms.size(),
@@ -187,159 +231,6 @@ func _stage_room(
 	}
 
 
-func _publish(staged_rooms: Array[Dictionary], run_id: String) -> Dictionary:
-	var segment_count := 0
-	var created_assets: Array[String] = []
-	for room in staged_rooms:
-		var runtime_root := String(room.get("room_root")).path_join(
-			RUNTIME_DIRECTORY,
-		)
-		if DirAccess.make_dir_recursive_absolute(
-			ProjectSettings.globalize_path(runtime_root),
-		) != OK:
-			return _abort_publish(
-				"runtime output directory could not be created",
-				created_assets,
-				staged_rooms,
-			)
-		for asset_value: Variant in room.get("assets", []) as Array:
-			var asset := asset_value as Dictionary
-			var final_path := String(asset.get("final_path"))
-			var expected_hash := String(asset.get("sha256"))
-			if FileAccess.file_exists(final_path):
-				if FileAccess.get_sha256(final_path) != expected_hash:
-					return _abort_publish(
-						"content-addressed texture digest collision",
-						created_assets,
-						staged_rooms,
-					)
-				continue
-			var temp_path := "%s.%s.tmp" % [final_path, run_id]
-			if not _copy_file(String(asset.get("staged_path")), temp_path):
-				_remove_file(temp_path)
-				return _abort_publish(
-					"generated texture could not be published",
-					created_assets,
-					staged_rooms,
-				)
-			if FileAccess.get_sha256(temp_path) != expected_hash:
-				_remove_file(temp_path)
-				return _abort_publish(
-					"published texture digest does not match",
-					created_assets,
-					staged_rooms,
-				)
-			if not _rename_file(temp_path, final_path):
-				_remove_file(temp_path)
-				return _abort_publish(
-					"generated texture could not be committed",
-					created_assets,
-					staged_rooms,
-				)
-			created_assets.append(final_path)
-		segment_count += (room.get("assets", []) as Array).size()
-	# Prepare every manifest beside its final location before switching any room.
-	for room in staged_rooms:
-		var temp_manifest := "%s.%s.tmp" % [
-			String(room.get("final_manifest_path")),
-			run_id,
-		]
-		room["temp_manifest_path"] = temp_manifest
-		if not _copy_file(String(room.get("staged_manifest_path")), temp_manifest):
-			return _abort_publish(
-				"generated manifest could not be prepared",
-				created_assets,
-				staged_rooms,
-			)
-	var switched: Array[Dictionary] = []
-	for room in staged_rooms:
-		var final_manifest := String(room.get("final_manifest_path"))
-		var temp_manifest := String(room.get("temp_manifest_path"))
-		var backup_manifest := "%s.%s.backup" % [final_manifest, run_id]
-		var had_previous := FileAccess.file_exists(final_manifest)
-		if had_previous and not _rename_file(final_manifest, backup_manifest):
-			return _abort_publish(
-				"previous manifest could not be backed up",
-				created_assets,
-				staged_rooms,
-				switched,
-			)
-		var switch_state := {
-			"final": final_manifest,
-			"backup": backup_manifest,
-			"had_previous": had_previous,
-		}
-		if not _rename_file(temp_manifest, final_manifest):
-			if had_previous:
-				_rename_file(backup_manifest, final_manifest)
-			return _abort_publish(
-				"generated manifest could not be committed",
-				created_assets,
-				staged_rooms,
-				switched,
-			)
-		switched.append(switch_state)
-	for state in switched:
-		if bool(state.get("had_previous")):
-			_remove_file(String(state.get("backup")))
-	for room in staged_rooms:
-		_remove_unreferenced_resources(room)
-	return {"ok": true, "segment_count": segment_count}
-
-
-func _abort_publish(
-	message: String,
-	created_assets: Array[String],
-	staged_rooms: Array[Dictionary],
-	switched_manifests: Array[Dictionary] = [],
-) -> Dictionary:
-	if not switched_manifests.is_empty():
-		_rollback_manifests(switched_manifests)
-	_cleanup_manifest_temps(staged_rooms)
-	for path in created_assets:
-		_remove_file(path)
-		_remove_file(path + ".import")
-	return _failure(message)
-
-
-func _rollback_manifests(switched: Array[Dictionary]) -> void:
-	for index in range(switched.size() - 1, -1, -1):
-		var state := switched[index]
-		var final_path := String(state.get("final"))
-		_remove_file(final_path)
-		if bool(state.get("had_previous")):
-			_rename_file(String(state.get("backup")), final_path)
-
-
-func _cleanup_manifest_temps(staged_rooms: Array[Dictionary]) -> void:
-	for room in staged_rooms:
-		_remove_file(String(room.get("temp_manifest_path", "")))
-
-
-func _remove_unreferenced_resources(room: Dictionary) -> void:
-	var referenced := {}
-	for asset_value: Variant in room.get("assets", []) as Array:
-		var asset := asset_value as Dictionary
-		referenced[String(asset.get("final_path"))] = true
-	var runtime_root := String(room.get("room_root")).path_join(RUNTIME_DIRECTORY)
-	var directory := DirAccess.open(runtime_root)
-	if directory == null:
-		return
-	directory.list_dir_begin()
-	var file_name := directory.get_next()
-	while not file_name.is_empty():
-		if not directory.current_is_dir():
-			var path := runtime_root.path_join(file_name)
-			var png_path := path.trim_suffix(".import")
-			if (
-				(file_name.ends_with(".png") or file_name.ends_with(".png.import"))
-				and not referenced.has(png_path)
-			):
-				_remove_file(path)
-		file_name = directory.get_next()
-	directory.list_dir_end()
-
-
 func _extract_foreground(
 	image: Image,
 	polygon: PackedVector2Array,
@@ -443,48 +334,40 @@ func _write_json(path: String, value: Dictionary) -> bool:
 	return true
 
 
-func _copy_file(source: String, destination: String) -> bool:
-	return DirAccess.copy_absolute(
-		ProjectSettings.globalize_path(source),
-		ProjectSettings.globalize_path(destination),
-	) == OK
-
-
-func _rename_file(source: String, destination: String) -> bool:
-	return DirAccess.rename_absolute(
-		ProjectSettings.globalize_path(source),
-		ProjectSettings.globalize_path(destination),
-	) == OK
-
-
-func _remove_file(path: String) -> void:
-	if not path.is_empty() and FileAccess.file_exists(path):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
-
-
-func _remove_staging_tree(path: String) -> void:
+func _remove_staging_tree(path: String) -> bool:
 	if not path.begins_with("user://interior_occlusion_staging/"):
-		return
+		return false
 	var absolute := ProjectSettings.globalize_path(path)
-	_remove_directory_contents(absolute)
-	DirAccess.remove_absolute(absolute)
+	if not DirAccess.dir_exists_absolute(absolute):
+		return true
+	return (
+		_remove_directory_contents(absolute)
+		and DirAccess.remove_absolute(absolute) == OK
+	)
 
 
-func _remove_directory_contents(absolute_path: String) -> void:
+func _remove_directory_contents(absolute_path: String) -> bool:
 	var directory := DirAccess.open(absolute_path)
 	if directory == null:
-		return
+		return false
 	directory.list_dir_begin()
 	var entry := directory.get_next()
 	while not entry.is_empty():
 		var child := absolute_path.path_join(entry)
 		if directory.current_is_dir():
-			_remove_directory_contents(child)
-			DirAccess.remove_absolute(child)
+			if (
+				not _remove_directory_contents(child)
+				or DirAccess.remove_absolute(child) != OK
+			):
+				directory.list_dir_end()
+				return false
 		else:
-			DirAccess.remove_absolute(child)
+			if DirAccess.remove_absolute(child) != OK:
+				directory.list_dir_end()
+				return false
 		entry = directory.get_next()
 	directory.list_dir_end()
+	return true
 
 
 func _valid_resource_path(path: String) -> bool:

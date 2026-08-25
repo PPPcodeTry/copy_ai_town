@@ -2245,12 +2245,30 @@ func _update_cafe_depth_order() -> void:
 	_update_player_ground_shadow_depth()
 	if not _inside_furniture_room or not is_instance_valid(_interior_root):
 		_player.z_index = 100
+		_sync_player_occlusion_depth()
 		return
 	_player.z_as_relative = false
 	# 室内人物始终是一张完整图，只用 CharacterBody2D 原点这个脚点参与遮挡命中。
 	_player.z_index = CAFE_PLAYER_DEPTH
+	_sync_player_occlusion_depth()
 	if is_instance_valid(_active_furniture_layout):
 		_active_furniture_layout.call("update_depth_for_subject", _player)
+
+
+func _sync_player_occlusion_depth() -> void:
+	if not is_instance_valid(_player_occlusion_foot_point):
+		return
+	if (
+		_player_occlusion_foot_point.z_index == _player.z_index
+		and not _player_occlusion_foot_point.z_as_relative
+	):
+		return
+	_player_occlusion_foot_point.z_as_relative = false
+	_player_occlusion_foot_point.z_index = _player.z_index
+	if is_instance_valid(_interior_occlusion_controller):
+		_interior_occlusion_controller.mark_subject_dirty(
+			_player_occlusion_foot_point,
+		)
 
 
 func _update_player_ground_shadow_depth() -> void:

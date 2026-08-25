@@ -4,11 +4,15 @@
  "tests": [
   {
    "id": "res://tests/town_interior_lazy_loading_test.gd",
-   "min_checks": 109
+   "min_checks": 215
+  },
+  {
+   "id": "res://tests/town_interior_build_stability_test.gd",
+   "min_checks": 12
   },
   {
    "id": "res://tests/town_interior_wall_occlusion_cutout_test.gd",
-   "min_checks": 419
+   "min_checks": 941
   },
   {
    "id": "res://tests/town_interior_occlusion_validation_test.gd",
@@ -16,7 +20,7 @@
   },
   {
    "id": "res://tests/interior_occlusion_asset_generator_test.gd",
-   "min_checks": 18
+   "min_checks": 53
   },
   {
    "id": "res://tests/town_world_save_test.gd",

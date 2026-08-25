@@ -4,30 +4,38 @@ extends Node
 signal room_prepared(interior_id: String, room: InteriorRoom, profile: Dictionary)
 signal room_failed(interior_id: String, error: String, profile: Dictionary)
 
-const FRAME_BUDGET_USEC := 8000
-const MIN_STAGE_REMAINING_USEC := InteriorRoom.PREPARATION_WORK_ITEM_RESERVE_USEC
+const FRAME_TARGET_USEC := 8000
+const MIN_STEP_REMAINING_USEC := InteriorRoom.PREPARATION_WORK_ITEM_TARGET_USEC
+const MAX_UNRETURNED_ATTEMPTS := 3
 const ROOM_SCENE := preload(
 	"res://world/maps/town/interiors/InteriorRoom.tscn"
 )
 
+class BuildJob:
+	extends RefCounted
+	var room: InteriorRoom
+	var unreturned_attempts := 0
+
+	func _init(room_value: InteriorRoom) -> void:
+		room = room_value
+
+
 var _order: Array[String] = []
 var _jobs: Dictionary = {}
-var _room_profiles: Dictionary = {}
-var _max_frame_work_usec := 0
-var _max_stage_usec := 0
-var _completed_room_count := 0
-var _failed_room_count := 0
+var _profiler := InteriorRoomBuildProfiler.new()
 
 
 func _ready() -> void:
+	_profiler.configure(false, FRAME_TARGET_USEC)
 	set_process(false)
 
 
 func _exit_tree() -> void:
 	for job_value: Variant in _jobs.values():
-		var room := (job_value as Dictionary).get("room") as InteriorRoom
-		if is_instance_valid(room) and room.get_parent() == null:
-			room.free()
+		var job := job_value as BuildJob
+		if is_instance_valid(job.room) and job.room.get_parent() == null:
+			job.room.cancel_preparation()
+			job.room.free()
 	_jobs.clear()
 	_order.clear()
 
@@ -54,16 +62,8 @@ func request(
 	):
 		room.free()
 		return false
-	_jobs[interior_id] = {
-		"room": room,
-		"requested_usec": Time.get_ticks_usec(),
-		"cpu_usec": 0,
-		"max_stage_usec": 0,
-		"stage_count": 0,
-		"stages": {},
-		"stage_calls": {},
-		"max_stage_work_items": 0,
-	}
+	_jobs[interior_id] = BuildJob.new(room)
+	_profiler.start_room(interior_id)
 	if priority:
 		_order.push_front(interior_id)
 	else:
@@ -76,19 +76,30 @@ func is_pending(interior_id: String) -> bool:
 	return _jobs.has(interior_id)
 
 
+# 兼容旧调用。这里是调度目标，不是硬实时保证。
 func get_frame_budget_usec() -> int:
-	return FRAME_BUDGET_USEC
+	return FRAME_TARGET_USEC
+
+
+func get_frame_target_usec() -> int:
+	return FRAME_TARGET_USEC
+
+
+func set_profiling_enabled(enabled: bool) -> void:
+	if enabled == _profiler.is_enabled():
+		return
+	_profiler.configure(enabled, FRAME_TARGET_USEC)
+	if enabled:
+		for interior_id in _order:
+			_profiler.start_room(interior_id)
+
+
+func is_profiling_enabled() -> bool:
+	return _profiler.is_enabled()
 
 
 func get_profile_snapshot() -> Dictionary:
-	return {
-		"frame_budget_usec": FRAME_BUDGET_USEC,
-		"max_frame_work_usec": _max_frame_work_usec,
-		"max_stage_usec": _max_stage_usec,
-		"completed_room_count": _completed_room_count,
-		"failed_room_count": _failed_room_count,
-		"rooms": _room_profiles.duplicate(true),
-	}
+	return _profiler.snapshot()
 
 
 func _process(_delta: float) -> void:
@@ -96,85 +107,58 @@ func _process(_delta: float) -> void:
 		set_process(false)
 		return
 	var frame_started_usec := Time.get_ticks_usec()
+	var deadline_usec := frame_started_usec + FRAME_TARGET_USEC
 	while not _order.is_empty():
-		var remaining_budget_usec := (
-			FRAME_BUDGET_USEC - (Time.get_ticks_usec() - frame_started_usec)
-		)
-		if remaining_budget_usec < MIN_STAGE_REMAINING_USEC:
+		if deadline_usec - Time.get_ticks_usec() < MIN_STEP_REMAINING_USEC:
 			break
 		var interior_id := _order[0]
-		var job := _jobs.get(interior_id, {}) as Dictionary
-		var room := job.get("room") as InteriorRoom
-		if not is_instance_valid(room):
+		var job := _jobs.get(interior_id) as BuildJob
+		if job == null or not is_instance_valid(job.room):
 			_finish_failed(interior_id, "interior room disappeared")
 		else:
-			var result := room.prepare_next_stage(remaining_budget_usec) as Dictionary
-			var stage_usec := int(result.get("elapsed_usec", 0))
-			job["cpu_usec"] = int(job.get("cpu_usec", 0)) + stage_usec
-			job["max_stage_usec"] = maxi(
-				int(job.get("max_stage_usec", 0)),
-				stage_usec,
+			job.unreturned_attempts += 1
+			if job.unreturned_attempts > MAX_UNRETURNED_ATTEMPTS:
+				_finish_failed(
+					interior_id,
+					"interior preparation repeatedly aborted without returning",
+				)
+				continue
+			var status := job.room.prepare_next_stage(
+				deadline_usec,
+				_profiler.is_enabled(),
 			)
-			job["stage_count"] = int(job.get("stage_count", 0)) + 1
-			var stages := job.get("stages", {}) as Dictionary
-			var stage_name := String(result.get("stage", "unknown"))
-			stages[stage_name] = maxi(
-				int(stages.get(stage_name, 0)),
-				stage_usec,
-			)
-			var stage_calls := job.get("stage_calls", {}) as Dictionary
-			stage_calls[stage_name] = int(stage_calls.get(stage_name, 0)) + 1
-			job["max_stage_work_items"] = maxi(
-				int(job.get("max_stage_work_items", 0)),
-				int(result.get("work_items", 0)),
-			)
-			_max_stage_usec = maxi(_max_stage_usec, stage_usec)
-			if result.get("failed") == true:
-				_finish_failed(interior_id, String(result.get("error", "unknown")))
-			elif result.get("complete") == true:
-				_finish_prepared(interior_id, room)
-			if result.get("waiting") == true:
+			job.unreturned_attempts = 0
+			if status == null:
+				_finish_failed(interior_id, "interior preparation returned no status")
+				continue
+			_profiler.record_step(interior_id, status)
+			if status.failed:
+				_finish_failed(interior_id, status.error)
+			elif status.complete:
+				_finish_prepared(interior_id, job.room)
+			if status.waiting:
 				break
-		var frame_work_usec := Time.get_ticks_usec() - frame_started_usec
-		if frame_work_usec >= FRAME_BUDGET_USEC:
+		if Time.get_ticks_usec() >= deadline_usec:
 			break
-	var total_frame_work_usec := Time.get_ticks_usec() - frame_started_usec
-	_max_frame_work_usec = maxi(_max_frame_work_usec, total_frame_work_usec)
+	_profiler.record_frame(Time.get_ticks_usec() - frame_started_usec)
 	if _order.is_empty():
 		set_process(false)
 
 
 func _finish_prepared(interior_id: String, room: InteriorRoom) -> void:
-	var profile := _final_profile(interior_id)
+	var profile := _profiler.finish_room(interior_id, false)
 	_remove_job(interior_id)
-	_completed_room_count += 1
-	_room_profiles[interior_id] = profile
 	room_prepared.emit(interior_id, room, profile)
 
 
 func _finish_failed(interior_id: String, error: String) -> void:
-	var job := _jobs.get(interior_id, {}) as Dictionary
-	var room := job.get("room") as InteriorRoom
-	var profile := _final_profile(interior_id)
+	var job := _jobs.get(interior_id) as BuildJob
+	var profile := _profiler.finish_room(interior_id, true)
 	_remove_job(interior_id)
-	_failed_room_count += 1
-	_room_profiles[interior_id] = profile
-	if is_instance_valid(room):
-		room.free()
+	if job != null and is_instance_valid(job.room):
+		job.room.cancel_preparation()
+		job.room.free()
 	room_failed.emit(interior_id, error, profile)
-
-
-func _final_profile(interior_id: String) -> Dictionary:
-	var job := _jobs.get(interior_id, {}) as Dictionary
-	return {
-		"cpu_usec": int(job.get("cpu_usec", 0)),
-		"wall_usec": Time.get_ticks_usec() - int(job.get("requested_usec", 0)),
-		"max_stage_usec": int(job.get("max_stage_usec", 0)),
-		"stage_count": int(job.get("stage_count", 0)),
-		"stages": (job.get("stages", {}) as Dictionary).duplicate(),
-		"stage_calls": (job.get("stage_calls", {}) as Dictionary).duplicate(),
-		"max_stage_work_items": int(job.get("max_stage_work_items", 0)),
-	}
 
 
 func _remove_job(interior_id: String) -> void:
