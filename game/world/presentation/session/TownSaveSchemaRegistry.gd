@@ -6,6 +6,7 @@ extends RefCounted
 
 const WORLD_SCHEMA_VERSION := 2
 const WORLD_SUPPORTED_SCHEMA_VERSIONS := [1, 2]
+const WORLD_DATA_VERSION := 4
 const MANIFEST_SCHEMA_VERSION := 3
 const MANIFEST_LEGACY_SCHEMA_VERSION := 1
 const MANIFEST_PREVIOUS_SCHEMA_VERSION := 2
@@ -20,6 +21,18 @@ const CUSTOM_RESIDENT_LIBRARY_SCHEMA_VERSION := 1
 # 从旧 sourceFingerprint 到下一版本的、可重复执行的字段迁移。旧规则一旦随版本
 # 发布就不能删除，否则跳过多个版本的存档会失去升级路径。
 const ACTIVITY_SAVE_MIGRATION_VERSION := 2
+const WORLD_SAVE_MIGRATION_VERSION := 2
+const PLACE_SERVICE_OWNER_BACKFILL_MIGRATION_ID := (
+	"2026-08-24-place-service-owner-backfill"
+)
+const PLACE_SERVICE_CONFIG_FIELDS: Array[String] = [
+	"pressure_id",
+	"place_id",
+	"service_occupation_id",
+	"service_capacity",
+	"helper_activity_id",
+	"request_activity_ids",
+]
 const ACTIVITY_SOURCE_FINGERPRINT_BEFORE_PUBLIC_DINING_SLOT_REWORK := (
 	"bf870f16f18fde30f8512bdd6c1fbbaa62989f38970af10d1630d4ab87947dff"
 )
@@ -227,8 +240,58 @@ static func migrate_world_state(
 		"state": state,
 		"applied": applied,
 		"refreshResidentActionRoutes": refresh_resident_action_routes,
-		"migrationVersion": ACTIVITY_SAVE_MIGRATION_VERSION,
+		"migrationVersion": WORLD_SAVE_MIGRATION_VERSION,
 	}
+
+
+static func migrate_place_service_owners(
+	value: Variant,
+	current_defaults: Dictionary,
+) -> Dictionary:
+	if not value is Dictionary:
+		return {
+			"ok": true,
+			"state": value,
+			"applied": [],
+			"migrationVersion": WORLD_SAVE_MIGRATION_VERSION,
+		}
+	var states := (value as Dictionary).duplicate(true)
+	var changed := false
+	for place_id_value: Variant in states:
+		var place_id := String(place_id_value)
+		var state_value: Variant = states.get(place_id_value)
+		var expected_value: Variant = current_defaults.get(place_id)
+		if not state_value is Dictionary or not expected_value is Dictionary:
+			continue
+		var state := state_value as Dictionary
+		var expected := expected_value as Dictionary
+		if not _can_backfill_place_service_owner(state, expected):
+			continue
+		state["owner_id"] = expected.get("owner_id")
+		if _place_service_state_is_untouched(state):
+			state["open"] = expected.get("open")
+		states[place_id_value] = state
+		changed = true
+	return {
+		"ok": true,
+		"state": states,
+		"applied": (
+			[PLACE_SERVICE_OWNER_BACKFILL_MIGRATION_ID]
+			if changed
+			else []
+		),
+		"migrationVersion": WORLD_SAVE_MIGRATION_VERSION,
+	}
+
+
+static func place_service_config_matches(
+	state: Dictionary,
+	expected: Dictionary,
+) -> bool:
+	for field_name: String in PLACE_SERVICE_CONFIG_FIELDS:
+		if not state.has(field_name) or state.get(field_name) != expected.get(field_name):
+			return false
+	return true
 
 
 static func _activity_migration_from(source_fingerprint: String) -> Dictionary:
@@ -237,6 +300,35 @@ static func _activity_migration_from(source_fingerprint: String) -> Dictionary:
 		if String(migration.get("fromSourceFingerprint", "")) == source_fingerprint:
 			return migration
 	return {}
+
+
+static func _can_backfill_place_service_owner(
+	state: Dictionary,
+	expected: Dictionary,
+) -> bool:
+	if (
+		not state.get("owner_id") is String
+		or not expected.get("owner_id") is String
+		or not (state.get("owner_id") as String).is_empty()
+		or (expected.get("owner_id") as String).is_empty()
+		or not state.get("open") is bool
+		or not expected.get("open") is bool
+	):
+		return false
+	return place_service_config_matches(state, expected)
+
+
+static func _place_service_state_is_untouched(state: Dictionary) -> bool:
+	return (
+		state.get("source_revision") is int
+		and int(state.get("source_revision")) == 0
+		and state.get("updated_at") is int
+		and int(state.get("updated_at")) == -1
+		and state.get("expires_at") is int
+		and int(state.get("expires_at")) == -1
+		and state.get("pending_request_ids") is Array
+		and (state.get("pending_request_ids") as Array).is_empty()
+	)
 
 
 static func _apply_activity_migration(
