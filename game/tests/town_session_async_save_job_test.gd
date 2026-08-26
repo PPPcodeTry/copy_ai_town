@@ -92,9 +92,11 @@ class SlowStore:
 class AgentStore:
 	extends RefCounted
 	var calls := 0
+	var last_resident_count := 0
 
-	func save_snapshot(_context: Variant, _resident_payloads: Variant) -> Dictionary:
+	func save_snapshot(_context: Variant, resident_payloads: Variant) -> Dictionary:
 		calls += 1
+		last_resident_count = (resident_payloads as Dictionary).size()
 		return {"ok": true}
 
 
@@ -139,6 +141,35 @@ func _run() -> void:
 		"manifest 最后发布后台修订",
 	)
 
+	var fifteen_store := SlowStore.new()
+	fifteen_store.delay_msec = 25
+	var fifteen_agent_store := AgentStore.new()
+	var fifteen_job: RefCounted = ASYNC_SAVE_JOB.new()
+	var fifteen_started_usec := Time.get_ticks_usec()
+	var fifteen_started := fifteen_job.call(
+		"start",
+		fifteen_store,
+		_world_capture(15),
+		_agent_capture(15, 2 * 1024 * 1024),
+		fifteen_agent_store,
+		_save_request(15),
+	) as Dictionary
+	var fifteen_start_msec := float(
+		Time.get_ticks_usec() - fifteen_started_usec
+	) / 1000.0
+	_expect_equal(fifteen_started.get("pending"), true, "15 位居民存档任务被后台接收")
+	_expect_true(
+		fifteen_start_msec < 50.0,
+		"15 位居民的大载荷不会在启动后台任务时被主线程再次深拷贝",
+	)
+	var fifteen_completed := fifteen_job.call("finish") as Dictionary
+	_expect_equal(fifteen_completed.get("ok"), true, "15 位居民存档仍可完整发布")
+	_expect_equal(
+		fifteen_agent_store.last_resident_count,
+		15,
+		"后台事务完整消费 15 位居民载荷",
+	)
+
 	var failed_store := SlowStore.new()
 	failed_store.delay_msec = 25
 	failed_store.fail_world_write = true
@@ -165,7 +196,14 @@ func _run() -> void:
 	_finish()
 
 
-func _world_capture() -> Dictionary:
+func _world_capture(resident_count := 1) -> Dictionary:
+	var resident_ids := _resident_ids(resident_count)
+	var identities: Array[Dictionary] = []
+	for index in resident_count:
+		identities.append({
+			"residentId": resident_ids[index],
+			"residentName": "居民%d" % (index + 1),
+		})
 	return {
 		"candidate": {
 			"token": "captured-world",
@@ -173,12 +211,9 @@ func _world_capture() -> Dictionary:
 			"worldRevision": 42,
 			"identitySnapshot": {
 				"status": "confirmed",
-				"residents": [{
-					"residentId": "resident_a",
-					"residentName": "阿青",
-				}],
+				"residents": identities,
 			},
-			"residentIds": ["resident_a"],
+			"residentIds": resident_ids,
 		},
 		"snapshot": {
 			"schema": "town-world-save",
@@ -196,28 +231,57 @@ func _world_capture() -> Dictionary:
 	}
 
 
-func _agent_capture() -> Dictionary:
+func _agent_capture(
+	resident_count := 1,
+	payload_size := 3,
+) -> Dictionary:
+	var resident_ids: Array[String] = []
+	var resident_payloads := {}
+	for index in resident_count:
+		var resident_id := _resident_id(index, resident_count)
+		var payload := PackedByteArray()
+		payload.resize(payload_size)
+		if payload_size > 0:
+			payload[0] = index % 251
+		if payload_size > 1:
+			payload[payload_size - 1] = (index + 1) % 251
+		resident_ids.append(resident_id)
+		resident_payloads[resident_id] = {
+			"resident_name": "居民%d" % (index + 1),
+			"payload": payload,
+		}
 	return {
 		"context": {
 			"slot_id": "slot-async-test",
 			"session_id": "session-async-test",
 			"save_revision": 10,
 		},
-		"residentIds": ["resident_a"],
-		"residentPayloads": {
-			"resident_a": {
-				"resident_name": "阿青",
-				"payload": PackedByteArray([1, 2, 3]),
-			},
-		},
+		"residentIds": resident_ids,
+		"residentPayloads": resident_payloads,
 	}
 
 
-func _save_request() -> Dictionary:
-	var identities := [{
-		"residentId": "resident_a",
-		"residentName": "阿青",
-	}]
+func _save_request(resident_count := 1) -> Dictionary:
+	var resident_ids := _resident_ids(resident_count)
+	var identities: Array[Dictionary] = []
+	var bindings: Array[Dictionary] = []
+	var connected_residents: Array[String] = []
+	for index in resident_count:
+		var resident_id := resident_ids[index]
+		var resident_name := "居民%d" % (index + 1)
+		identities.append({
+			"residentId": resident_id,
+			"residentName": resident_name,
+		})
+		bindings.append({
+			"residentId": resident_id,
+			"llmBinding": {
+				"mode": "model",
+				"providerId": "fake",
+				"modelId": "fake",
+			},
+		})
+		connected_residents.append(resident_name)
 	return {
 		"slotId": "slot-async-test",
 		"sessionId": "session-async-test",
@@ -227,15 +291,8 @@ func _save_request() -> Dictionary:
 			"sessionId": "session-async-test",
 			"openingConfig": {"worldId": "town-main"},
 			"residentIdentities": identities.duplicate(true),
-			"residentBindings": [{
-				"residentId": "resident_a",
-				"llmBinding": {
-					"mode": "model",
-					"providerId": "fake",
-					"modelId": "fake",
-				},
-			}],
-			"connectedResidents": ["阿青"],
+			"residentBindings": bindings,
+			"connectedResidents": connected_residents,
 			"worldStartMode": "formal",
 			"useLiveModel": false,
 			"enablePlayerAvatar": false,
@@ -244,6 +301,17 @@ func _save_request() -> Dictionary:
 		"savedAt": "2026-08-25T19:00:00",
 		"residentMessages": [],
 	}
+
+
+func _resident_ids(resident_count: int) -> Array[String]:
+	var resident_ids: Array[String] = []
+	for index in resident_count:
+		resident_ids.append(_resident_id(index, resident_count))
+	return resident_ids
+
+
+func _resident_id(index: int, resident_count: int) -> String:
+	return "resident_a" if resident_count == 1 else "resident_%02d" % (index + 1)
 
 
 func _expect_true(value: bool, label: String) -> void:

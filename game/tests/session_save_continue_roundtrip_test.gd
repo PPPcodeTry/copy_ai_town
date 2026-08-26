@@ -205,6 +205,14 @@ func _run() -> void:
 		"reason": "roundtrip_async_regression",
 	}) as Dictionary
 	_expect_equal(async_started.get("pending"), true, "真实异步保存立即返回 pending")
+	var async_capture_step := async_service.call(
+		"poll_create_save_async",
+	) as Dictionary
+	_expect_equal(
+		async_capture_step.get("capturePending"),
+		true,
+		"多居民存档捕获按帧推进，不在启动调用中一次完成",
+	)
 	var manual_after_async := async_service.call("create_save", {
 		"reason": "manual_save_during_async_regression",
 	}) as Dictionary

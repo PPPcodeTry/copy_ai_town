@@ -24,7 +24,9 @@ class PreparedWorldParticipant:
 	var _world_revision := 0
 
 	func _init(capture: Dictionary) -> void:
-		_capture = capture.duplicate(true)
+		# The UI service passes a detached, immutable capture. Keeping the same
+		# reference avoids another full snapshot copy on the worker's first frame.
+		_capture = capture
 		_candidate_runtime = WORLD_CANDIDATE_RUNTIME.new()
 		var candidate := _capture.get("candidate", {}) as Dictionary
 		_source_generation = int(candidate.get("sourceGeneration", 0))
@@ -104,11 +106,11 @@ class PreparedAgentParticipant:
 	var _store: RefCounted
 
 	func _init(capture: Dictionary, store: RefCounted) -> void:
-		_context = (capture.get("context", {}) as Dictionary).duplicate(true)
-		_resident_ids = (capture.get("residentIds", []) as Array).duplicate()
-		_resident_payloads = (
-			capture.get("residentPayloads", {}) as Dictionary
-		).duplicate(true)
+		# AgentSystem has already encoded each resident into detached payload data.
+		# These structures are read-only during the worker transaction.
+		_context = capture.get("context", {}) as Dictionary
+		_resident_ids = capture.get("residentIds", []) as Array
+		_resident_payloads = capture.get("residentPayloads", {}) as Dictionary
 		_store = store
 
 	func save_game(next_context: Variant) -> Dictionary:
@@ -202,8 +204,10 @@ func start(
 	_started_usec = Time.get_ticks_usec()
 	var start_error := _thread.start(_run.bind(
 		store,
-		world_capture.duplicate(true),
-		agent_capture.duplicate(true),
+		# Captures are detached before start and are never mutated by the caller
+		# afterwards. Do not deep-copy them on the main thread or at thread start.
+		world_capture,
+		agent_capture,
 		agent_store,
 		request.duplicate(true),
 		options.duplicate(true),
