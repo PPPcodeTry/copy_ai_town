@@ -96,6 +96,12 @@ func configure_test_root(path_value: Variant) -> Dictionary:
 	return _success()
 
 
+func create_isolated_peer() -> RefCounted:
+	var peer: RefCounted = TownSessionSaveStore.new()
+	peer.set("_root", _root)
+	return peer
+
+
 func cleanup_test_root() -> Dictionary:
 	if not _root.begins_with("%s/" % TEST_ROOT):
 		return _failure("SESSION_SAVE_STORE_PATH_INVALID", false)

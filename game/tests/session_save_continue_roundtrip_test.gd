@@ -182,21 +182,71 @@ func _run() -> void:
 		1,
 		"发现入口返回已发布修订而不是临时文件",
 	)
-	var saved_again := save_coordinator.call("save", {
-		"slotId": slot_id,
-		"sessionId": session_id,
-		"residentIdentities": identities.duplicate(true),
-		"sessionConfig": session_config.duplicate(true),
-		"savedAt": Time.get_datetime_string_from_system(false, false),
-		"residentMessages": [],
-	}) as Dictionary
-	_expect_ok(saved_again, "修复故事先发布第二个完整修订")
-	_expect_equal(
-		(saved_again.get("context", {}) as Dictionary).get("save_revision"),
-		2,
-		"修复故事的待损坏修订号为 2",
+	var async_session_config := session_config.duplicate(true)
+	async_session_config["slotId"] = slot_id
+	async_session_config["capabilityMode"] = "formal"
+	async_session_config["formalReady"] = true
+	var async_service: RefCounted = SESSION_UI_SERVICE.new()
+	_expect_ok(
+		async_service.call("configure_test_store_root", test_root) as Dictionary,
+		"异步服务复用正式测试存储根目录",
 	)
-	var damaged_manifest := saved_again.get("manifest", {}) as Dictionary
+	_expect_ok(
+		async_service.call(
+			"configure",
+			source_runtime,
+			source_world,
+			source_agent,
+			async_session_config,
+		) as Dictionary,
+		"真实 World 与 Agent 可配置异步保存服务",
+	)
+	var async_started := async_service.call("begin_create_save_async", {
+		"reason": "roundtrip_async_regression",
+	}) as Dictionary
+	_expect_equal(async_started.get("pending"), true, "真实异步保存立即返回 pending")
+	var async_capture_step := async_service.call(
+		"poll_create_save_async",
+	) as Dictionary
+	_expect_equal(
+		async_capture_step.get("capturePending"),
+		true,
+		"多居民存档捕获按帧推进，不在启动调用中一次完成",
+	)
+	var manual_after_async := async_service.call("create_save", {
+		"reason": "manual_save_during_async_regression",
+	}) as Dictionary
+	_expect_ok(manual_after_async, "手动保存等待异步任务后继续发布")
+	_expect_equal(
+		(manual_after_async.get("context", {}) as Dictionary).get("save_revision"),
+		3,
+		"手动保存排在异步修订之后，不覆盖异步修订",
+	)
+	var async_saved := await _wait_for_async_save(async_service)
+	_expect_ok(async_saved, "真实异步保存发布第二个成对修订")
+	var async_context := (
+		async_saved.get("context", {}) as Dictionary
+	).duplicate(true)
+	_expect_equal(
+		async_context.get("save_revision"),
+		2,
+		"真实异步保存分配第二个修订号",
+	)
+	_expect_equal(
+		(source_agent.call("get_save_context") as Dictionary).get("save_revision"),
+		3,
+		"异步与手动 manifest 发布后 Agent 上下文保持最新",
+	)
+	var async_snapshot := async_service.call("get_save_snapshot") as Dictionary
+	_expect_equal(
+		((async_snapshot.get("slots", []) as Array)[0] as Dictionary).get(
+			"saveRevision",
+		),
+		3,
+		"正式发现入口只暴露已经发布的最新修订",
+	)
+
+	var damaged_manifest := manual_after_async.get("manifest", {}) as Dictionary
 	var damaged_world := (
 		(damaged_manifest.get("components", {}) as Dictionary)
 		.get("world", {}) as Dictionary
@@ -230,7 +280,7 @@ func _run() -> void:
 		"sessionConfig": session_config,
 		"identities": identities,
 		"bindings": bindings,
-		"context": context,
+		"context": async_context,
 	})
 	_expect_ok(prepared.get("gatewayConfiguration", {}), "恢复中的居民网关可配置")
 	_expect_ok(prepared.get("gatewayInjection", {}), "恢复网关可注入新小镇")
@@ -251,13 +301,13 @@ func _run() -> void:
 	var restored := restore_service.call(
 		"continue_revision",
 		session_id,
-		1,
+		2,
 		world_data,
 		identities,
 		restore_gateway,
 	) as Dictionary
 	_expect_ok(restored, "同一修订的世界与居民状态完整恢复")
-	_expect_equal(restored.get("context"), context, "恢复回执对应所选存档修订")
+	_expect_equal(restored.get("context"), async_context, "恢复回执对应异步存档修订")
 	_expect_equal(restored_world.call("get_time"), saved_time, "恢复后世界时间与保存时一致")
 	_expect_equal(
 		(restored_world.call("get_resident_ids") as Array).size(),
@@ -266,7 +316,7 @@ func _run() -> void:
 	)
 	_expect_equal(
 		restore_gateway.call("get_agent_save_context"),
-		context,
+		async_context,
 		"恢复后居民存档上下文与世界修订一致",
 	)
 	_expect_equal(
@@ -275,7 +325,7 @@ func _run() -> void:
 		"加载存档后始终从自由观察模式进入小镇",
 	)
 	_expect_ok(
-		restored_runtime.call("complete_restored_session", context) as Dictionary,
+		restored_runtime.call("complete_restored_session", async_context) as Dictionary,
 		"恢复完成状态可提交给小镇运行时",
 	)
 	var repaired_context := _verify_recovery_publication(
@@ -291,8 +341,8 @@ func _run() -> void:
 	)
 	_expect_equal(
 		(restored_runtime.get("session_config") as Dictionary).get("saveRevision"),
-		3,
-		"进入小镇前运行时上下文已指向修订 3",
+		4,
+		"进入小镇前运行时上下文已指向修订 4",
 	)
 	_expect_equal(
 		(restored_runtime.call("get_runtime_state") as Dictionary).get("viewMode"),
@@ -307,8 +357,8 @@ func _run() -> void:
 	_expect_ok(resaved, "五人存档恢复后可以再次成对保存")
 	_expect_equal(
 		(resaved.get("context", {}) as Dictionary).get("save_revision"),
-		4,
-		"恢复后的再次保存发布修订 4",
+		5,
+		"恢复后的再次保存不会覆盖已有异步修订",
 	)
 	_expect_equal(
 		(restored_world.call("get_resident_ids") as Array).size(),
@@ -336,13 +386,13 @@ func _run() -> void:
 	_expect_ok(reopened, "修复后的修订可由全新 Runtime 重开")
 	_expect_equal(
 		(reopened.get("restoredContext", {}) as Dictionary).get("save_revision"),
-		3,
-		"全新 Runtime 读取修复发布的修订 3",
+		4,
+		"全新 Runtime 读取修复发布的修订 4",
 	)
 	_expect_equal(
 		(reopened.get("savedContext", {}) as Dictionary).get("save_revision"),
-		5,
-		"重开后继续运行并再次保存为修订 5",
+		6,
+		"重开后继续运行并再次保存为修订 6",
 	)
 	var final_catalog := (recovery_case.get("catalog") as RefCounted).call(
 		"get_catalog",
@@ -353,7 +403,7 @@ func _run() -> void:
 	_expect_equal(final_slot.get("state"), "healthy", "再次保存后槽位保持健康")
 	_expect_equal(
 		(final_slot.get("summary", {}) as Dictionary).get("saveRevision"),
-		5,
+		6,
 		"再次启动会选择修复后继续产生的最新修订",
 	)
 	_expect_ok(
@@ -657,8 +707,8 @@ func _inspect_recovery_case(
 			"slotId": slot_id,
 			"classification": "older_complete_revision_available",
 			"errorCode": "SESSION_SAVE_REFERENCE_HASH_MISMATCH",
-			"latestEvidenceRevision": 2,
-			"latestCompleteRevision": 1,
+			"latestEvidenceRevision": 3,
+			"latestCompleteRevision": 2,
 			"repairable": true,
 		},
 		"只读检查报告只保留制定计划所需的证据",
@@ -670,8 +720,8 @@ func _inspect_recovery_case(
 		"restore_complete_pair_and_publish",
 		"只读检查给出恢复完整配对并发布新修订的计划",
 	)
-	_expect_equal(plan.get("sourceSaveRevision"), 1, "修复计划固定旧完整来源修订")
-	_expect_equal(plan.get("damagedSaveRevision"), 2, "修复计划记录损坏修订证据")
+	_expect_equal(plan.get("sourceSaveRevision"), 2, "修复计划固定异步完整来源修订")
+	_expect_equal(plan.get("damagedSaveRevision"), 3, "修复计划记录损坏修订证据")
 	return {
 		"catalog": catalog,
 		"slotDefinitions": slot_definitions,
@@ -708,8 +758,8 @@ func _verify_recovery_publication(
 	) as Dictionary
 	_expect_ok(repaired, "确认后将恢复状态发布为新的完整修订")
 	var receipt := repaired.get("repairReceipt", {}) as Dictionary
-	_expect_equal(receipt.get("sourceSaveRevision"), 1, "修复回执记录实际恢复来源")
-	_expect_equal(receipt.get("publishedSaveRevision"), 3, "修复不覆盖原档而是发布修订 3")
+	_expect_equal(receipt.get("sourceSaveRevision"), 2, "修复回执记录异步恢复来源")
+	_expect_equal(receipt.get("publishedSaveRevision"), 4, "修复不覆盖原档而是发布修订 4")
 	_expect_equal(
 		receipt.get("rebuiltDerivedData"),
 		["manifest_index", "session_config_projection", "startup_summary"],
@@ -754,6 +804,19 @@ func _verify_recovery_publication(
 		"再次启动不再重复生成同一修复计划",
 	)
 	return (repaired.get("context", {}) as Dictionary).duplicate(true)
+
+
+func _wait_for_async_save(service: RefCounted) -> Dictionary:
+	for _index in 600:
+		var result := service.call("poll_create_save_async") as Dictionary
+		if not bool(result.get("pending", false)):
+			return result
+		await process_frame
+	return {
+		"ok": false,
+		"errorCode": "SESSION_ASYNC_SAVE_TEST_TIMEOUT",
+		"retryable": true,
+	}
 
 
 func _identities(bindings: Array[Dictionary]) -> Array[Dictionary]:

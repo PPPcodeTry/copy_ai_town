@@ -49,6 +49,12 @@ func configure_test_root(test_root: String) -> Dictionary:
 	return {"ok": true}
 
 
+func create_isolated_peer() -> RefCounted:
+	var peer: RefCounted = AgentSaveStore.new()
+	peer.set("_store_root", _store_root)
+	return peer
+
+
 func cleanup_test_root() -> Dictionary:
 	if not _store_root.begins_with("%s/" % TEST_STORE_ROOT):
 		return {"ok": false, "errors": ["当前 Agent Store 未配置测试根目录"]}

@@ -14,6 +14,9 @@ const RUNTIME_GATE := preload(
 const COORDINATOR := preload(
 	"res://world/presentation/session/TownSessionSaveCoordinator.gd"
 )
+const ASYNC_SAVE_JOB := preload(
+	"res://world/presentation/session/TownSessionAsyncSaveJob.gd"
+)
 const MANIFEST := preload(
 	"res://world/presentation/session/TownSessionSaveManifest.gd"
 )
@@ -33,6 +36,7 @@ const AGENT_STORE := preload("res://agent/lifecycle/AgentSaveStore.gd")
 
 const FORMAL_WORLD_REQUIRED := "SESSION_SAVE_FORMAL_WORLD_REQUIRED"
 const SERVICE_NOT_CONFIGURED := "SESSION_SAVE_SERVICE_NOT_CONFIGURED"
+const ASYNC_SAVE_RESIDENTS_PER_FRAME := 1
 
 var _runtime: Node
 var _world: Object
@@ -44,6 +48,11 @@ var _coordinator: RefCounted
 var _configuration_error: Dictionary = {}
 var _last_result: Dictionary = {}
 var _test_store_root := ""
+var _async_save_job: RefCounted
+var _async_save_previous_agent_context: Dictionary = {}
+var _async_save_completion: Dictionary = {}
+var _async_save_capture_msec := 0.0
+var _async_save_capture: Dictionary = {}
 
 
 func configure_test_store_root(path: String) -> Dictionary:
@@ -67,12 +76,18 @@ func configure(
 	agent: Object,
 	session_config: Dictionary,
 ) -> Dictionary:
+	if _async_save_job != null or not _async_save_capture.is_empty():
+		return _failure("SESSION_SAVE_BUSY", true)
 	_runtime = runtime
 	_world = world
 	_agent = agent
 	_session_config = session_config.duplicate(true)
 	_configuration_error.clear()
 	_last_result.clear()
+	_async_save_previous_agent_context.clear()
+	_async_save_completion.clear()
+	_async_save_capture_msec = 0.0
+	_async_save_capture.clear()
 	if (
 		runtime == null
 		or world == null
@@ -161,6 +176,9 @@ func get_save_snapshot() -> Dictionary:
 		),
 		"slots": slots,
 		"selectedSaveId": selected_save_id,
+		"saveInProgress": (
+			_async_save_job != null or not _async_save_capture.is_empty()
+		),
 		"source": String(_session_config.get("source", "runtime")),
 		"capabilityMode": String(
 			_session_config.get("capabilityMode", "development"),
@@ -256,28 +274,23 @@ func update_resident_roster(
 
 
 func create_save(payload: Dictionary = {}) -> Dictionary:
+	if _async_save_job != null or not _async_save_capture.is_empty():
+		var background_result := finish_create_save_async()
+		if (
+			not bool(background_result.get("ok", false))
+			and bool(
+				(background_result.get("meta", {}) as Dictionary).get(
+					"published",
+					false,
+				)
+			)
+		):
+			return background_result
 	var blocker := _save_blocker()
 	if not blocker.is_empty():
 		_last_result = _failure(blocker, false)
 		return _last_result.duplicate(true)
-	var identities_value: Variant = _session_config.get("residentIdentities")
-	var identities: Array = (
-		(identities_value as Array).duplicate(true)
-		if identities_value is Array
-		else []
-	)
-	var result := _coordinator.call("save", {
-		"slotId": _session_config.get("slotId"),
-		"sessionId": _session_config.get("sessionId"),
-		"residentIdentities": identities,
-		"sessionConfig": _manifest_session_config(),
-		"savedAt": Time.get_datetime_string_from_system(false, false),
-		"residentMessages": (
-			(payload.get("residentMessages", []) as Array).duplicate(true)
-			if payload.get("residentMessages", []) is Array
-			else payload.get("residentMessages")
-		),
-	}) as Dictionary
+	var result := _coordinator.save(_save_request(payload)) as Dictionary
 	_last_result = result.duplicate(true)
 	return result
 
@@ -445,6 +458,113 @@ func restore_discovered_revision(
 	)
 
 
+func begin_create_save_async(payload: Dictionary = {}) -> Dictionary:
+	var capture_started_usec := Time.get_ticks_usec()
+	var blocker := _save_blocker()
+	if not blocker.is_empty():
+		return _remember_async_result(_failure(blocker, false))
+	if _async_save_job != null or not _async_save_capture.is_empty():
+		return _failure("SESSION_SAVE_BUSY", true)
+	if (
+		_world == null
+		or not _world.has_method("prepare_save_candidate")
+		or _agent == null
+		or (
+			not _agent.has_method("prepare_save_candidate")
+			and not (
+				_agent.has_method("begin_save_capture")
+				and _agent.has_method("continue_save_capture")
+			)
+		)
+		or not _agent.has_method("create_save_store_peer")
+		or not _agent.has_method("accept_published_save_context")
+		or _store == null
+		or not _store.has_method("create_isolated_peer")
+	):
+		return _remember_async_result(
+			_failure("SESSION_ASYNC_SAVE_CONTRACT_INVALID", false),
+		)
+	var prepared := _world.prepare_save_candidate() as Dictionary
+	if not bool(prepared.get("ok", false)):
+		prepared["pending"] = false
+		return _remember_async_result(prepared)
+	var world_capture := {
+		# World preparation already returns detached save data. The async job
+		# treats this capture as immutable, so copying it here would only add a
+		# full main-thread pause before the worker can start.
+		"candidate": prepared.get("candidate", {}) as Dictionary,
+		"snapshot": prepared.get("snapshot", {}) as Dictionary,
+		"worldLogSnapshot": prepared.get("worldLogSnapshot", {}) as Dictionary,
+	}
+	var supports_incremental_capture := (
+		_agent.has_method("begin_save_capture")
+		and _agent.has_method("continue_save_capture")
+	)
+	if supports_incremental_capture:
+		var capture_result := _agent.begin_save_capture() as Dictionary
+		if not bool(capture_result.get("ok", false)):
+			_release_live_world_candidate(prepared)
+			return _remember_async_result(capture_result)
+		var agent_capture := capture_result.get("capture", {}) as Dictionary
+		if agent_capture.is_empty():
+			_release_live_world_candidate(prepared)
+			return _remember_async_result(_failure(
+				"SESSION_SAVE_AGENT_CAPTURE_FAILED",
+				true,
+			))
+		_async_save_capture = {
+			"prepared": prepared,
+			"worldCapture": world_capture,
+			"agentCapture": agent_capture,
+			"payload": payload.duplicate(true),
+			"startedUsec": capture_started_usec,
+		}
+		return {
+			"ok": true,
+			"errorCode": "",
+			"retryable": false,
+			"pending": true,
+			"capturePending": true,
+		}
+	var agent_capture := _agent.prepare_save_candidate() as Dictionary
+	return _start_async_save_job(
+		prepared,
+		world_capture,
+		agent_capture,
+		payload,
+		capture_started_usec,
+	)
+
+
+func poll_create_save_async() -> Dictionary:
+	if not _async_save_capture.is_empty():
+		return _poll_async_save_capture(false)
+	if _async_save_job == null:
+		if not _async_save_completion.is_empty():
+			var completed := _async_save_completion.duplicate(true)
+			_async_save_completion.clear()
+			return completed
+		return {"ok": true, "pending": false, "idle": true}
+	var result := _complete_async_save_job(false)
+	if not bool(result.get("pending", false)):
+		_async_save_completion.clear()
+	return result
+
+
+func finish_create_save_async() -> Dictionary:
+	if not _async_save_capture.is_empty():
+		var captured := _poll_async_save_capture(true)
+		if not bool(captured.get("pending", false)):
+			return captured
+	if _async_save_job == null:
+		return poll_create_save_async()
+	return _complete_async_save_job(true)
+
+
+func has_active_create_save_async() -> bool:
+	return _async_save_job != null or not _async_save_capture.is_empty()
+
+
 func continue_latest(
 	world_data: Dictionary,
 	resident_identities: Array,
@@ -505,6 +625,200 @@ func continue_revision(
 	) as Dictionary
 	_last_result = result.duplicate(true)
 	return result
+
+
+func _save_request(payload: Dictionary) -> Dictionary:
+	var identities_value: Variant = _session_config.get("residentIdentities")
+	var identities: Array = (
+		(identities_value as Array).duplicate(true)
+		if identities_value is Array
+		else []
+	)
+	return {
+		"slotId": _session_config.get("slotId"),
+		"sessionId": _session_config.get("sessionId"),
+		"residentIdentities": identities,
+		"sessionConfig": _manifest_session_config(),
+		"savedAt": Time.get_datetime_string_from_system(false, false),
+		"residentMessages": (
+			(payload.get("residentMessages", []) as Array).duplicate(true)
+			if payload.get("residentMessages", []) is Array
+			else payload.get("residentMessages")
+		),
+	}
+
+
+func _poll_async_save_capture(wait_for_completion: bool) -> Dictionary:
+	if _async_save_capture.is_empty():
+		return {"ok": true, "pending": false, "idle": true}
+	var capture_state := _async_save_capture
+	var agent_capture := capture_state.get("agentCapture", {}) as Dictionary
+	var resident_limit := ASYNC_SAVE_RESIDENTS_PER_FRAME
+	if wait_for_completion:
+		resident_limit = maxi(
+			1,
+			(agent_capture.get("residentIds", []) as Array).size(),
+		)
+	var step := _agent.continue_save_capture(
+		agent_capture,
+		resident_limit,
+	) as Dictionary
+	if not bool(step.get("ok", false)):
+		var prepared_for_release := capture_state.get(
+			"prepared",
+			{},
+		) as Dictionary
+		_async_save_capture.clear()
+		var released := _release_live_world_candidate(
+			prepared_for_release,
+		)
+		var failure := step
+		if not bool(released.get("ok", false)):
+			failure = released
+		return _remember_async_result(failure)
+	var next_agent_capture := step.get("capture", {}) as Dictionary
+	if bool(step.get("pending", false)):
+		capture_state["agentCapture"] = next_agent_capture
+		_async_save_capture = capture_state
+		return {
+			"ok": true,
+			"errorCode": "",
+			"retryable": false,
+			"pending": true,
+			"capturePending": true,
+			"residentCaptureIndex": int(
+				next_agent_capture.get("nextIndex", 0),
+			),
+			"residentCaptureTotal": (
+				(next_agent_capture.get("residentIds", []) as Array).size()
+			),
+		}
+	var prepared := capture_state.get("prepared", {}) as Dictionary
+	var world_capture := capture_state.get("worldCapture", {}) as Dictionary
+	var payload := capture_state.get("payload", {}) as Dictionary
+	var started_usec := int(
+		capture_state.get("startedUsec", Time.get_ticks_usec())
+	)
+	_async_save_capture.clear()
+	var completed_agent_capture := {
+		"ok": true,
+		"context": next_agent_capture.get("context", {}) as Dictionary,
+		"residentIds": next_agent_capture.get("residentIds", []) as Array,
+		"residentPayloads": next_agent_capture.get(
+			"residentPayloads",
+			{},
+		) as Dictionary,
+	}
+	return _start_async_save_job(
+		prepared,
+		world_capture,
+		completed_agent_capture,
+		payload,
+		started_usec,
+	)
+
+
+func _start_async_save_job(
+	prepared: Dictionary,
+	world_capture: Dictionary,
+	agent_capture: Dictionary,
+	payload: Dictionary,
+	capture_started_usec: int,
+) -> Dictionary:
+	var release_result := _release_live_world_candidate(prepared)
+	if not bool(release_result.get("ok", false)):
+		return _remember_async_result(release_result)
+	if not bool(agent_capture.get("ok", false)):
+		return _remember_async_result(_failure(
+			"SESSION_SAVE_AGENT_CAPTURE_FAILED",
+			true,
+		))
+	var store_peer := _store.create_isolated_peer() as RefCounted
+	var agent_store_peer := _agent.create_save_store_peer() as RefCounted
+	if store_peer == null or agent_store_peer == null:
+		return _remember_async_result(
+			_failure("SESSION_ASYNC_SAVE_STORE_MISSING", false),
+		)
+	var job: RefCounted = ASYNC_SAVE_JOB.new()
+	_async_save_previous_agent_context = (
+		agent_capture.get("context", {}) as Dictionary
+	).duplicate(true)
+	var started := job.start(
+		store_peer,
+		world_capture,
+		agent_capture,
+		agent_store_peer,
+		_save_request(payload),
+	) as Dictionary
+	if not bool(started.get("ok", false)):
+		_async_save_previous_agent_context.clear()
+		return _remember_async_result(started)
+	_async_save_capture_msec = (
+		float(Time.get_ticks_usec() - capture_started_usec) / 1000.0
+	)
+	_async_save_job = job
+	return started
+
+
+func _release_live_world_candidate(prepared: Dictionary) -> Dictionary:
+	var token := String(
+		(prepared.get("candidate", {}) as Dictionary).get("token", ""),
+	)
+	if token.is_empty():
+		return _failure("SESSION_SAVE_WORLD_PREPARE_FAILED", false)
+	var aborted := _world.abort_save_candidate(token) as Dictionary
+	if not bool(aborted.get("ok", false)):
+		return _failure("SESSION_SAVE_WORLD_CLEANUP_FAILED", false)
+	var cleaned := _world.cleanup_save_candidate(token) as Dictionary
+	if not bool(cleaned.get("ok", false)):
+		return _failure("SESSION_SAVE_WORLD_CLEANUP_FAILED", false)
+	return {"ok": true, "errorCode": "", "retryable": false}
+
+
+func _complete_async_save_job(wait_for_completion: bool) -> Dictionary:
+	if _async_save_job == null:
+		return {"ok": true, "pending": false, "idle": true}
+	var result := (
+		_async_save_job.finish()
+		if wait_for_completion
+		else _async_save_job.poll()
+	) as Dictionary
+	if bool(result.get("pending", false)):
+		return result
+	_async_save_job = null
+	if bool(result.get("ok", false)):
+		var accepted := _agent.accept_published_save_context(
+			result.get("context", {}),
+			_async_save_previous_agent_context,
+		) as Dictionary
+		if not bool(accepted.get("ok", false)):
+			var context_failure := _failure(
+				"SESSION_SAVE_AGENT_CONTEXT_COMMIT_FAILED",
+				false,
+			)
+			context_failure["meta"] = {
+				"published": true,
+				"publishedContext": (
+					result.get("context", {}) as Dictionary
+				).duplicate(true),
+			}
+			result = context_failure
+	_async_save_previous_agent_context.clear()
+	var timing := (result.get("timing", {}) as Dictionary).duplicate(true)
+	timing["captureMsec"] = _async_save_capture_msec
+	result["timing"] = timing
+	_async_save_capture_msec = 0.0
+	result["pending"] = false
+	_async_save_completion = result.duplicate(true)
+	_last_result = result.duplicate(true)
+	return result
+
+
+func _remember_async_result(result: Dictionary) -> Dictionary:
+	var remembered := result.duplicate(true)
+	remembered["pending"] = false
+	_last_result = remembered.duplicate(true)
+	return remembered
 
 
 func _save_blocker() -> String:
