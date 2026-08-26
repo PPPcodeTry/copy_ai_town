@@ -47,6 +47,13 @@ const INTERIOR_GROUND_SHADOW_Z_INDEX := -9
 const DOOR_THRESHOLD_TRIGGER_SIZE := (
 	PORTAL_CATALOG.DOOR_THRESHOLD_TRIGGER_SIZE
 )
+# Start preparing the closest not-yet-built room while the player is still
+# walking toward its door.  At the normal player speed this gives the queue
+# roughly two seconds to finish without eagerly constructing every interior.
+const INTERIOR_APPROACH_PREWARM_DISTANCE := 720.0
+const INTERIOR_APPROACH_PREWARM_DISTANCE_SQUARED := (
+	INTERIOR_APPROACH_PREWARM_DISTANCE * INTERIOR_APPROACH_PREWARM_DISTANCE
+)
 const PORTAL_FADE_OUT_SECONDS := 0.22
 const PORTAL_BLACK_HOLD_SECONDS := 0.08
 const PORTAL_FADE_IN_SECONDS := 0.28
@@ -609,6 +616,7 @@ func _physics_process(delta: float) -> void:
 		if current_frame_column != previous_frame_column and current_frame_column in [1, 3]:
 			_emit_footstep_effect()
 	_check_interior_auto_portals()
+	_prewarm_approaching_interior()
 	_update_camera_target()
 	_update_camera_feedback(delta)
 	_update_status()
@@ -898,6 +906,44 @@ func _prewarm_nearest_interior() -> void:
 		)
 
 
+func _prewarm_approaching_interior() -> void:
+	if (
+		not is_inside_tree()
+		or not is_instance_valid(_player)
+		or not _player.is_inside_tree()
+		or _is_inside_interior()
+		or _portal_transition_active
+		or not is_instance_valid(_interior_build_queue)
+	):
+		return
+	var nearest_interior_id := ""
+	var nearest_distance_squared := INF
+	for portal_spec in EXTERIOR_INTERIOR_PORTALS:
+		var interior_id := String(portal_spec.get("interior_id", ""))
+		if (
+			interior_id.is_empty()
+			or _interior_roots.has(interior_id)
+			or _interior_build_queue.is_pending(interior_id)
+		):
+			continue
+		var door := portal_spec.get("door", Vector2.INF) as Vector2
+		if not door.is_finite():
+			continue
+		var distance_squared := _player.position.distance_squared_to(door)
+		if distance_squared < nearest_distance_squared:
+			nearest_distance_squared = distance_squared
+			nearest_interior_id = interior_id
+	if (
+		nearest_interior_id.is_empty()
+		or nearest_distance_squared > INTERIOR_APPROACH_PREWARM_DISTANCE_SQUARED
+	):
+		return
+	var definition := INTERIOR_DEFINITIONS.get(nearest_interior_id, {}) as Dictionary
+	if definition.is_empty():
+		return
+	_interior_build_queue.request(nearest_interior_id, definition, true)
+
+
 func _bind_interior_occlusion_presentation(presentation: Node) -> bool:
 	return (
 		is_instance_valid(_interior_occlusion_controller)
@@ -1077,6 +1123,15 @@ func _enter_interior(body: Node2D, portal_id: String) -> void:
 	var previous_visual_state := _portal_visual_state_snapshot()
 	_portal_transition_active = true
 	_player.velocity = Vector2.ZERO
+	# The approach prewarm normally has this job pending already.  Request it
+	# here as a fallback for teleports or an immediate threshold crossing so the
+	# fade-to-black itself overlaps as much of room preparation as possible.
+	if (
+		not _interior_roots.has(interior_id)
+		and is_instance_valid(_interior_build_queue)
+		and not _interior_build_queue.is_pending(interior_id)
+	):
+		_interior_build_queue.request(interior_id, definition, true)
 	await _fade_portal_to_black()
 	if not is_inside_tree():
 		return

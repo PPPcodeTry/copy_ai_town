@@ -8,6 +8,9 @@ const ResidentRuntimeScript := preload("res://agent/ResidentRuntime.gd")
 const AgentSaveStoreScript := preload("res://agent/lifecycle/AgentSaveStore.gd")
 const AgentSessionEpochScript := preload("res://agent/lifecycle/AgentSessionEpoch.gd")
 const ResidentStateCodecScript := preload("res://agent/lifecycle/ResidentStateCodec.gd")
+const ResidentStateMigrationScript := preload(
+	"res://agent/lifecycle/AgentResidentStateMigration.gd"
+)
 const RUNTIME_MEMORY_ROOT := "user://agent_runtime_memory"
 const DEFAULT_AVATAR_PERSON_ID := "person_7f3a91c2d8e4"
 const DEFAULT_AVATAR_NAME := "旅行者"
@@ -163,6 +166,15 @@ func restore_game(context: Variant) -> Dictionary:
 		"status": "pending_hydration",
 		"context": (result["context"] as Dictionary).duplicate(true),
 		"resident_ids": resident_ids,
+		"migration_receipt": {
+			"module": "resident_payload",
+			"migrationVersion": int(
+				decode_result.get("migration_version", 0),
+			),
+			"applied": (
+				decode_result.get("migration_ids", []) as Array
+			).duplicate(),
+		},
 	}
 
 
@@ -1047,6 +1059,8 @@ func _capture_resident_payloads(residents: Dictionary) -> Dictionary:
 
 func _decode_resident_payloads(payloads: Dictionary) -> Dictionary:
 	var resident_states := {}
+	var migration_ids: Array[String] = []
+	var migration_version := 0
 	for resident_id: Variant in payloads:
 		var payload_record := payloads[resident_id] as Dictionary
 		var decode_result: Dictionary = _resident_state_codec.call(
@@ -1057,8 +1071,24 @@ func _decode_resident_payloads(payloads: Dictionary) -> Dictionary:
 		)
 		if not bool(decode_result.get("ok", false)):
 			return decode_result
-		resident_states[resident_id] = decode_result["resident_state"]
-	return {"ok": true, "resident_states": resident_states}
+		var migration := ResidentStateMigrationScript.migrate(
+			decode_result["resident_state"] as Dictionary,
+		) as Dictionary
+		resident_states[resident_id] = migration.get("state", {})
+		migration_version = maxi(
+			migration_version,
+			int(migration.get("migrationVersion", 0)),
+		)
+		for migration_id_value: Variant in migration.get("applied", []) as Array:
+			var migration_id := String(migration_id_value)
+			if not migration_ids.has(migration_id):
+				migration_ids.append(migration_id)
+	return {
+		"ok": true,
+		"resident_states": resident_states,
+		"migration_ids": migration_ids,
+		"migration_version": migration_version,
+	}
 
 
 func _commit_restore_transaction(transaction: Dictionary) -> Dictionary:

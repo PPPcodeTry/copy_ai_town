@@ -1054,6 +1054,25 @@ func complete_restored_session(context: Dictionary) -> Dictionary:
 	}
 
 
+func record_published_save(context: Dictionary) -> Dictionary:
+	var revision := int(context.get("save_revision", 0))
+	if (
+		bool(session_config.get("restorePending", false))
+		or String(context.get("slot_id", ""))
+		!= String(session_config.get("slotId", ""))
+		or String(context.get("session_id", ""))
+		!= String(session_config.get("sessionId", ""))
+		or revision <= int(session_config.get("saveRevision", 0))
+	):
+		return RESULT_SHAPES.failure("SESSION_SAVE_CONTEXT_MISMATCH")
+	session_config["saveRevision"] = revision
+	return {
+		"ok": true,
+		"errorCode": "",
+		"retryable": false,
+	}
+
+
 func get_lifecycle_state() -> Dictionary:
 	return _lifecycle_state.duplicate(true)
 

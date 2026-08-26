@@ -105,6 +105,28 @@ func _run() -> void:
 			) >= 1,
 			"delayed prewarm completes its one nearest room in bounded frames",
 		)
+	var approach_spec := _portal_spec_for("dock_warehouse")
+	var approach_door := approach_spec.get("door", Vector2.INF) as Vector2
+	if not approach_door.is_finite():
+		_expect(false, "dock warehouse portal exposes a finite door position")
+	else:
+		player.position = approach_door + Vector2(
+			0.0,
+			TOWN_BASE.INTERIOR_APPROACH_PREWARM_DISTANCE - 20.0,
+		)
+		town.call("_prewarm_approaching_interior")
+		_expect(
+			build_queue != null and build_queue.is_pending("dock_warehouse"),
+			"approaching a cold room queues it before the door threshold",
+		)
+		for _index in 120:
+			if (town.get("_interior_roots") as Dictionary).has("dock_warehouse"):
+				break
+			await process_frame
+		_expect(
+			(town.get("_interior_roots") as Dictionary).has("dock_warehouse"),
+			"approaching room finishes before entering through its door",
+		)
 	var max_first_entry_msec := 0
 	var first_entry_msec := 0
 	var controller_checked := false
@@ -444,6 +466,13 @@ func _count_exterior_portals(town: Node) -> int:
 		if town.get_node_or_null(String(portal_spec.get("node_name", ""))) != null:
 			count += 1
 	return count
+
+
+func _portal_spec_for(interior_id: String) -> Dictionary:
+	for portal_spec in TOWN_BASE.EXTERIOR_INTERIOR_PORTALS:
+		if String(portal_spec.get("interior_id", "")) == interior_id:
+			return portal_spec
+	return {}
 
 
 func _serialized_cell(value: Variant) -> Vector2i:
