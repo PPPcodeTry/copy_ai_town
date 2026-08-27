@@ -2,6 +2,11 @@ class_name ResidentModelAssignmentService
 extends RefCounted
 
 
+const FEEDBACK_POLICY := preload(
+	"res://ui/resident_model_assignment/runtime/ResidentModelAssignmentFeedbackPolicy.gd"
+)
+
+
 signal view_model_changed(scope: String, view_model: Dictionary)
 signal operation_completed(scope: String, operation: Dictionary)
 signal draft_applied(draft: Dictionary, revision: int)
@@ -70,6 +75,7 @@ var _operation := _idle_operation()
 var _error: Variant = null
 var _apply_handler := Callable()
 var _single_resident_mode := false
+var _automatic_binding_repair_allowed := true
 var _slot_count := SLOT_COUNT
 var _allowed_space_ids: Array[String] = []
 
@@ -82,6 +88,9 @@ func configure(
 ) -> Dictionary:
 	_reset()
 	_single_resident_mode = bool(context.get("singleResidentMode", false))
+	_automatic_binding_repair_allowed = bool(
+		context.get("allowAutomaticBindingRepair", true),
+	)
 	var draft_slots_value: Variant = session_draft.get("slots", [])
 	if _single_resident_mode:
 		_slot_count = 1
@@ -418,6 +427,12 @@ func _apply_draft() -> Dictionary:
 	var provider_validation := _provider_service.call("validate_resident_bindings", bindings) as Dictionary
 	var automatic_repair: Dictionary = {}
 	if not bool(provider_validation.get("ok", false)):
+		if not _automatic_binding_repair_allowed:
+			return _failure(
+				String(provider_validation.get("errorCode", "SESSION_LLM_BINDINGS_INVALID")),
+				bool(provider_validation.get("retryable", false)),
+				provider_validation.get("errors", []) as Array,
+			)
 		automatic_repair = _try_auto_repair_draft_bindings(
 			bindings,
 			provider_validation,
@@ -1214,27 +1229,10 @@ func _error_payload(error_code: String, retryable: bool, details: Array = []) ->
 	return {
 		"kind": "transport" if retryable else "validation",
 		"code": error_code,
-		"message": _error_message(error_code),
+		"message": FEEDBACK_POLICY.error_message(error_code),
 		"retryable": retryable,
 		"details": details.duplicate(true),
 	}
-
-
-func _error_message(error_code: String) -> String:
-	match error_code:
-		"RESIDENT_MODEL_ASSIGNMENT_REVISION_STALE":
-			return "页面数据已更新，请按最新状态继续操作。"
-		"RESIDENT_MODEL_ASSIGNMENT_DRAFT_INCOMPLETE", "SESSION_DRAFT_INVALID":
-			return "仍有居民未完成有效模型绑定，草稿已保留。"
-		"SESSION_LLM_BINDINGS_INVALID", "SESSION_LLM_PROVIDER_REQUIRED", "SESSION_LLM_MODEL_REQUIRED":
-			return "当前模型连接不可用，系统已尝试自动迁移但没有找到可用模型，草稿已保留。"
-		"PROVIDER_HEALTH_UNAVAILABLE", "PROVIDER_HEALTH_QUERY_FAILED", "PROVIDER_HEALTH_SNAPSHOT_INVALID", "PROVIDER_CATALOG_UNAVAILABLE", "PROVIDER_MODEL_CATALOG_INVALID", "PROVIDER_MODEL_CATALOG_DUPLICATED", "PROVIDER_HEALTH_CATALOG_INVALID", "PROVIDER_HEALTH_CATALOG_DUPLICATED", "PROVIDER_FORMAL_RUNTIME_REQUIRED", "LLM_PROVIDER_UNAVAILABLE", "LLM_MODEL_UNAVAILABLE", "LLM_MODEL_UNKNOWN":
-			return "目标 Provider 或模型当前不可用，原绑定与草稿已保留。"
-		"SESSION_DRAFT_SCHEMA_UNSUPPORTED", "SESSION_DRAFT_SOURCE_INVALID", "SESSION_DRAFT_REVISION_INVALID", "SESSION_DRAFT_SLOTS_INVALID", "SESSION_DRAFT_SLOT_INVALID", "SESSION_RESIDENT_COUNT_OUT_OF_RANGE", "SESSION_HOME_SPACE_COUNT_MISMATCH", "SESSION_HOME_SPACE_REQUIRED", "SESSION_HOME_SPACE_UNKNOWN", "SESSION_HOME_SPACE_DUPLICATED", "SESSION_HOME_SPACE_MISSING", "SESSION_RESIDENT_ID_REQUIRED", "SESSION_RESIDENT_ID_UNKNOWN", "SESSION_RESIDENT_ID_DUPLICATED", "SESSION_LLM_BINDING_INVALID":
-			return "居民选择草稿无效，未进入模型分配；原草稿未被修改。"
-		"RESIDENT_MODEL_ASSIGNMENT_BATCH_EMPTY":
-			return "请先在批量模式选择至少一位居民。"
-	return "操作未完成，已保留最近一次确认数据。"
 
 
 func _operation_payload(request_id: String, intent: String, status: String) -> Dictionary:
@@ -1325,5 +1323,6 @@ func _reset() -> void:
 	_error = null
 	_apply_handler = Callable()
 	_single_resident_mode = false
+	_automatic_binding_repair_allowed = true
 	_slot_count = SLOT_COUNT
 	_allowed_space_ids.clear()

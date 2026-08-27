@@ -41,6 +41,12 @@ const SAVE_RECONCILIATION_SERVICE := preload(
 const SAVE_RECOVERY_PLANNER := preload(
 	"res://world/presentation/session/TownSaveRecoveryPlanner.gd"
 )
+const STARTUP_OFFLINE_REBIND_COORDINATOR := preload(
+	"res://world/presentation/game_flow/TownStartupOfflineResidentModelRebindCoordinator.gd"
+)
+const RESIDENT_MODEL_ASSIGNMENT_PROJECTION := preload(
+	"res://world/presentation/session/TownResidentModelAssignmentProjection.gd"
+)
 const AUDIO_DISPLAY_SETTINGS_SERVICE := preload(
 	"res://world/presentation/ui/TownAudioDisplaySettingsService.gd"
 )
@@ -219,6 +225,7 @@ var _town_ui_adapter: Node
 var _startup_provider_service: RefCounted
 var _startup_provider_settings_service: RefCounted
 var _startup_save_store: RefCounted
+var _startup_agent_save_store: RefCounted
 var _startup_save_catalog: RefCounted
 var _delete_archive_service_override: RefCounted
 var _formal_archive_service_override: RefCounted
@@ -226,6 +233,7 @@ var _startup_settings_page: Control
 var _startup_load_game_page: Control
 var _startup_load_game_mode := ""
 var _pending_load_game_new_game_payload: Dictionary = {}
+var _startup_save_model_coordinator: TownStartupOfflineResidentModelRebindCoordinator
 var _startup_overwrite_page: Control
 var _custom_resident_creator_page: Control
 var _custom_resident_creator_service: RefCounted
@@ -1769,6 +1777,8 @@ func _bind_current_scene() -> void:
 	_startup_load_game_page = null
 	_startup_load_game_mode = ""
 	_pending_load_game_new_game_payload.clear()
+	if _startup_save_model_coordinator != null:
+		_startup_save_model_coordinator.close()
 	_custom_resident_creator_page = null
 	_resident_model_assignment_page = null
 	_resident_selection = null
@@ -1969,6 +1979,7 @@ func _initialize_startup_settings_services() -> void:
 	_startup_save_store = SESSION_SAVE_STORE.new()
 	_startup_save_catalog = STARTUP_SAVE_CATALOG.new()
 	var startup_agent_save_store: RefCounted = AGENT_SAVE_STORE.new()
+	_startup_agent_save_store = startup_agent_save_store
 	var save_catalog_configuration := _startup_save_catalog.call(
 		"configure",
 		_startup_save_store,
@@ -2165,6 +2176,66 @@ func _on_startup_load_game_intent_requested(
 			var delete_discovery := _startup_delete_discovery(delete_slot)
 			_close_startup_load_game()
 			_open_save_handling("delete_save", {}, delete_discovery)
+		"save.edit_resident_models":
+			if _startup_load_game_mode != "load":
+				_last_result = _failure(
+					"STARTUP_SAVE_MODEL_EDIT_NOT_AUTHORIZED",
+					false,
+				)
+				return
+			var edit_slot_id := String(payload.get("slotId", "")).strip_edges()
+			var edit_catalog := _startup_catalog_snapshot()
+			var edit_slot := _startup_slot_by_id(edit_catalog, edit_slot_id)
+			var edit_projection := _startup_slot_projection(edit_slot)
+			var selected_target := {
+				"slotId": edit_slot_id,
+				"sessionId": String(payload.get("sessionId", "")),
+				"saveRevision": int(payload.get("saveRevision", -1)),
+			}
+			var current_target := {
+				"slotId": String(edit_projection.get("slotId", "")),
+				"sessionId": String(edit_projection.get("sessionId", "")),
+				"saveRevision": int(edit_projection.get(
+					"modelEditSaveRevision",
+					-2,
+				)),
+			}
+			if edit_slot.is_empty() or selected_target != current_target:
+				_publish_startup_load_game_model_edit_failure(
+					_failure("STARTUP_SAVE_MODEL_EDIT_TARGET_STALE", false),
+					edit_slot_id,
+				)
+				return
+			if (
+				not bool(edit_projection.get("modelEditAvailable", false))
+			):
+				_publish_startup_load_game_model_edit_failure(_failure(
+					String(edit_projection.get(
+						"modelEditDisabledReason",
+						"SESSION_SAVE_NO_COMPLETE_REVISION",
+					)),
+					false,
+				), edit_slot_id)
+				return
+			var configured := _ensure_startup_save_model_coordinator()
+			if configured.get("ok") != true:
+				_publish_startup_action_failure(intent, configured)
+				return
+			var selected := (
+				_startup_save_model_coordinator.select_target(edit_slot) as Dictionary
+			)
+			if selected.get("ok") != true:
+				_publish_startup_action_failure(intent, selected)
+				return
+			if bool(edit_projection.get("modelEditRecoveryRequired", false)):
+				var recovery := _catalog_slot_discovery(edit_slot, false)
+				if recovery.get("ok") != true:
+					_publish_startup_action_failure(intent, recovery)
+					return
+				_close_startup_load_game()
+				_open_continue_recovery(recovery, "edit_resident_models")
+			else:
+				_open_startup_save_model_assignment(edit_slot)
 		"startup.select_overwrite_slot":
 			if _startup_load_game_mode != "overwrite_selection":
 				_last_result = _failure(
@@ -2201,6 +2272,79 @@ func _on_startup_load_game_intent_requested(
 			_on_startup_intent_requested(&"session.new_game", route_payload)
 		_:
 			_last_result = _failure("STARTUP_LOAD_GAME_INTENT_UNSUPPORTED", false)
+
+
+func _open_startup_save_model_assignment(slot: Dictionary) -> void:
+	if (
+		_startup_save_model_coordinator != null
+		and _startup_save_model_coordinator.is_open()
+	):
+		return
+	var startup := get_tree().current_scene as Control
+	if startup == null or startup.name != "StartupScreen":
+		_record_route_open_failure(
+			"STARTUP_SAVE_MODEL_EDIT_HOST_UNAVAILABLE",
+			"居民模型页面暂时打不开，请稍后再试。",
+		)
+		return
+	var configured := _ensure_startup_save_model_coordinator()
+	if configured.get("ok") != true:
+		_publish_startup_action_failure(&"save.edit_resident_models", configured)
+		return
+	var opened := _startup_save_model_coordinator.open(startup, slot)
+	if opened.get("ok") != true:
+		_publish_startup_action_failure(&"save.edit_resident_models", opened)
+		return
+	_close_startup_load_game()
+	_last_result = opened.duplicate(true)
+
+
+func _ensure_startup_save_model_coordinator() -> Dictionary:
+	if _startup_save_model_coordinator != null:
+		return {"ok": true, "errorCode": "", "retryable": false}
+	if (
+		_startup_save_store == null
+		or _startup_provider_service == null
+		or _startup_ui_adapter == null
+	):
+		return _failure("STARTUP_SAVE_MODEL_COORDINATOR_DEPENDENCY_MISSING", false)
+	if _startup_agent_save_store == null:
+		_startup_agent_save_store = AGENT_SAVE_STORE.new()
+	_startup_save_model_coordinator = STARTUP_OFFLINE_REBIND_COORDINATOR.new()
+	_startup_save_model_coordinator.name = "StartupOfflineResidentModelRebindCoordinator"
+	add_child(_startup_save_model_coordinator)
+	var configured := _startup_save_model_coordinator.configure(
+		_startup_save_store,
+		_startup_agent_save_store,
+		_startup_provider_service,
+		_startup_ui_adapter as TownUiAdapter,
+		FORMAL_CATALOG.load_catalog(),
+	)
+	if configured.get("ok") != true:
+		_startup_save_model_coordinator.queue_free()
+		_startup_save_model_coordinator = null
+		return configured
+	_startup_save_model_coordinator.route_finished.connect(
+		_on_startup_save_model_route_finished,
+	)
+	_startup_save_model_coordinator.action_blocked.connect(
+		_on_startup_action_blocked,
+	)
+	return configured
+
+
+func _on_startup_save_model_route_finished(
+	saved: bool,
+	destination: String,
+	result: Dictionary,
+) -> void:
+	_last_result = result.duplicate(true)
+	if destination == "provider_settings":
+		_open_startup_settings(&"provider_settings")
+		return
+	_open_startup_load_game("load")
+	if saved:
+		_last_result["routeReturnedToLoadGame"] = true
 
 
 func _open_new_game_overwrite(
@@ -2314,18 +2458,29 @@ func _on_new_game_overwrite_intent_requested(
 			var pending_plan := (
 				_pending_new_game_discovery.get("recoveryPlan", {}) as Dictionary
 			)
-			if (
+			var pending_origin := _pending_save_handling_origin
+			var is_reconciliation := (
 				String(pending_plan.get("action", ""))
 				== SAVE_RECONCILIATION_SERVICE.RECONCILE_ACTION
+			)
+			var manifest_is_missing := (
+				_pending_new_game_discovery.get("manifest", {}) as Dictionary
+			).is_empty()
+			if (
+				is_reconciliation
 				and (
-					_pending_new_game_discovery.get("manifest", {}) as Dictionary
-				).is_empty()
+					manifest_is_missing
+					or pending_origin == "edit_resident_models"
+				)
 			):
-				var reconciliation_store := SESSION_SAVE_STORE.new()
 				var reconciliation := SAVE_RECONCILIATION_SERVICE.new()
 				var configured := reconciliation.configure(
-					reconciliation_store,
-					AGENT_SAVE_STORE.new(),
+					_startup_save_store
+					if _startup_save_store != null
+					else SESSION_SAVE_STORE.new(),
+					_startup_agent_save_store
+					if _startup_agent_save_store != null
+					else AGENT_SAVE_STORE.new(),
 				) as Dictionary
 				var reconciled := (
 					reconciliation.execute(pending_plan, {
@@ -2339,6 +2494,8 @@ func _on_new_game_overwrite_intent_requested(
 				_close_new_game_overwrite()
 				if reconciled.get("ok") != true:
 					_publish_startup_action_failure(intent, reconciled)
+				elif pending_origin == "edit_resident_models":
+					_resume_startup_save_model_assignment()
 				else:
 					_refresh_startup_main_menu_view_models()
 				return
@@ -2657,7 +2814,57 @@ func _on_startup_settings_intent_requested(
 		"provider_settings.back",
 		"audio_display_settings.back",
 	]:
+		var resume_offline_assignment := (
+			_startup_save_model_coordinator != null
+			and _startup_save_model_coordinator.awaiting_provider_settings()
+		)
 		_close_startup_settings()
+		if resume_offline_assignment:
+			call_deferred("_resume_startup_save_model_assignment")
+
+
+func _resume_startup_save_model_assignment() -> void:
+	if _startup_save_model_coordinator == null:
+		_return_to_load_game_with_model_edit_failure(
+			_failure("STARTUP_SAVE_MODEL_EDIT_TARGET_STALE", false),
+			{},
+		)
+		return
+	var target := _startup_save_model_coordinator.target()
+	var catalog := _startup_catalog_snapshot()
+	var slot := _startup_slot_by_id(catalog, String(target.get("slotId", "")))
+	if slot.is_empty():
+		_return_to_load_game_with_model_edit_failure(
+			_failure("STARTUP_SAVE_MODEL_EDIT_TARGET_STALE", false),
+			target,
+		)
+		return
+	var startup := get_tree().current_scene as Control
+	var resumed := _startup_save_model_coordinator.resume(startup, slot)
+	if resumed.get("ok") != true:
+		_return_to_load_game_with_model_edit_failure(resumed, target)
+		return
+	_close_startup_load_game()
+	_last_result = resumed.duplicate(true)
+
+
+func _return_to_load_game_with_model_edit_failure(
+	result: Dictionary,
+	target: Dictionary,
+) -> void:
+	_publish_startup_action_failure(&"save.edit_resident_models", result)
+	_open_startup_load_game("load")
+	_publish_startup_load_game_result(result, {
+		"slotId": String(target.get("slotId", "")),
+	})
+
+
+func _publish_startup_load_game_model_edit_failure(
+	result: Dictionary,
+	slot_id: String,
+) -> void:
+	_last_result = result.duplicate(true)
+	_publish_startup_load_game_result(result, {"slotId": slot_id})
 
 
 func _startup_new_game_payload_is_authorized(payload: Dictionary) -> bool:
@@ -4952,95 +5159,17 @@ func _configure_in_session_resident_model_assignment(
 			"RESIDENT_MODEL_ASSIGNMENT_RUNTIME_DEPENDENCY_MISSING",
 			false,
 		)
-	var opening := _active_session_config.get("openingConfig", {}) as Dictionary
-	var opening_residents_value: Variant = opening.get("residents", [])
-	var bindings_value: Variant = _active_session_config.get(
-		"residentBindings",
-		[],
+	var projected := RESIDENT_MODEL_ASSIGNMENT_PROJECTION.build(
+		_active_session_config,
+		FORMAL_CATALOG.load_catalog(),
 	)
-	if (
-		not opening_residents_value is Array
-		or not bindings_value is Array
-		or (opening_residents_value as Array).is_empty()
-		or (opening_residents_value as Array).size()
-		!= (bindings_value as Array).size()
-	):
-		return _failure("SESSION_LLM_BINDINGS_INVALID", false)
-	var base_entries_by_id: Dictionary = {}
-	for entry_value: Variant in (
-		FORMAL_CATALOG.load_catalog().get("residents", []) as Array
-	):
-		if not entry_value is Dictionary:
-			continue
-		var entry := entry_value as Dictionary
-		base_entries_by_id[String(entry.get("residentId", ""))] = (
-			entry.duplicate(true)
-		)
-	var catalog_residents: Array[Dictionary] = []
-	for resident_value: Variant in opening_residents_value as Array:
-		if not resident_value is Dictionary:
-			return _failure("SESSION_RESIDENT_IDENTITIES_INVALID", false)
-		var opening_resident := resident_value as Dictionary
-		var resident_id := String(
-			opening_resident.get("residentId", "")
-		).strip_edges()
-		if resident_id.is_empty():
-			return _failure("SESSION_RESIDENT_IDENTITIES_INVALID", false)
-		if base_entries_by_id.has(resident_id):
-			catalog_residents.append(
-				(base_entries_by_id[resident_id] as Dictionary).duplicate(true)
-			)
-		else:
-			# Save 内的自定义居民已经带着显示名与灵魂属性；模型分配页
-			# 只依赖这些字段，头像缺失时会使用姓名首字作为稳定回退。
-			catalog_residents.append({
-				"residentId": resident_id,
-				"attributes": (
-					opening_resident.get("attributes", {}) as Dictionary
-				).duplicate(true),
-				"presentation": {},
-			})
-	var bindings_by_id: Dictionary = {}
-	for binding_value: Variant in bindings_value as Array:
-		if not binding_value is Dictionary:
-			return _failure("SESSION_LLM_BINDINGS_INVALID", false)
-		var binding := binding_value as Dictionary
-		var resident_id := String(binding.get("residentId", "")).strip_edges()
-		if (
-			resident_id.is_empty()
-			or bindings_by_id.has(resident_id)
-			or not binding.get("llmBinding", {}) is Dictionary
-		):
-			return _failure("SESSION_LLM_BINDINGS_INVALID", false)
-		bindings_by_id[resident_id] = (
-			binding.get("llmBinding", {}) as Dictionary
-		).duplicate(true)
-	var ordered_resident_ids: Array[String] = []
-	for resident in catalog_residents:
-		ordered_resident_ids.append(String(resident.get("residentId", "")))
-	ordered_resident_ids.sort()
-	var slots: Array[Dictionary] = []
-	for index in ordered_resident_ids.size():
-		var resident_id := ordered_resident_ids[index]
-		if not bindings_by_id.has(resident_id):
-			return _failure("SESSION_LLM_BINDINGS_INVALID", false)
-		slots.append({
-			"residentId": resident_id,
-			"spaceId": "home_%02d" % (index + 1),
-			"llmBinding": (
-				bindings_by_id[resident_id] as Dictionary
-			).duplicate(true),
-		})
+	if projected.get("ok") != true:
+		return projected
 	_resident_model_assignment_service = RESIDENT_MODEL_ASSIGNMENT_SERVICE.new()
 	var configured := _resident_model_assignment_service.configure(
 		_provider_service,
-		{"residents": catalog_residents},
-		{
-			"schemaVersion": 1,
-			"sourceScope": "resident_selection",
-			"draftRevision": 1,
-			"slots": slots,
-		},
+		projected.get("residentCatalog", {}) as Dictionary,
+		projected.get("draft", {}) as Dictionary,
 		{
 			"revision": 1,
 			"applyHandler": _apply_in_session_resident_model_bindings,
@@ -5321,7 +5450,14 @@ func _start_formal_continue(
 			false,
 		))
 		return
-	_provider_service = PROVIDER_SERVICE.new()
+	# Startup already owns the provider instance configured by the settings page.
+	# Continue must use that same catalog and health state so returning from model
+	# settings cannot race a freshly constructed provider with stale configuration.
+	_provider_service = (
+		_startup_provider_service
+		if _startup_provider_service != null
+		else PROVIDER_SERVICE.new()
+	)
 	var provider_configuration := _provider_service.call("configure", {
 		"capabilityMode": "formal",
 		"source": "runtime",
@@ -6634,7 +6770,8 @@ func _build_startup_view_models() -> Dictionary:
 
 func _startup_slot_projection(slot: Dictionary) -> Dictionary:
 	var summary := slot.get("summary", {}) as Dictionary
-	return {
+	var edit := STARTUP_OFFLINE_REBIND_COORDINATOR.project_slot_edit(slot)
+	var projection := {
 		"slotId": String(slot.get("slotId", "")),
 		"displayName": String(slot.get("displayName", "")),
 		"sessionId": String(summary.get("sessionId", "")),
@@ -6670,6 +6807,8 @@ func _startup_slot_projection(slot: Dictionary) -> Dictionary:
 		).duplicate(true),
 		"agentIntegrity": String(slot.get("agentIntegrity", "not_applicable")),
 	}
+	projection.merge(edit, true)
+	return projection
 
 
 func get_startup_load_game_view_model(mode := "load") -> Dictionary:
@@ -6680,10 +6819,12 @@ func get_startup_load_game_view_model(mode := "load") -> Dictionary:
 			if slot_value is Dictionary:
 				slots.append(_startup_slot_projection(slot_value as Dictionary))
 	var delete_available := false
+	var model_edit_available := false
 	for projected_slot: Dictionary in slots:
 		if String(projected_slot.get("state", "empty")) != "empty":
 			delete_available = true
-			break
+		if bool(projected_slot.get("modelEditAvailable", false)):
+			model_edit_available = true
 	var error_code := String(catalog.get("errorCode", ""))
 	return {
 		"scope": "save",
@@ -6726,6 +6867,17 @@ func get_startup_load_game_view_model(mode := "load") -> Dictionary:
 					""
 					if String(mode) == "load" and delete_available
 					else "SESSION_SAVE_NO_PUBLISHED_REVISION"
+					if String(mode) == "load"
+					else "ACTION_NOT_AVAILABLE_IN_MODE"
+				),
+			},
+			"editResidentModels": {
+				"intent": "save.edit_resident_models",
+				"enabled": String(mode) == "load" and model_edit_available,
+				"disabledReason": (
+					""
+					if String(mode) == "load" and model_edit_available
+					else "SESSION_SAVE_NO_COMPLETE_REVISION"
 					if String(mode) == "load"
 					else "ACTION_NOT_AVAILABLE_IN_MODE"
 				),
