@@ -109,13 +109,17 @@ func _test_save_slot_page(prepared: Dictionary) -> void:
 	var snapshot := screen.call("runtime_gate_snapshot") as Dictionary
 	_expect_equal(snapshot.get("routeMode"), "save_slot", "模型分配页使用单一 save_slot RouteMode")
 	var original_viewport_size := root.size
+	var original_content_scale_size := root.content_scale_size
 	var layout_cases := [
-		[Vector2i(1920, 1080), "wide", "宽屏"],
-		[Vector2i(960, 540), "compact", "紧凑横屏"],
-		[Vector2i(540, 960), "portrait", "紧凑竖屏"],
+		[Vector2i(1920, 1080), "wide", "宽屏", "composite"],
+		[Vector2i(1280, 720), "standard", "实机横屏", "composite"],
+		[Vector2i(1024, 576), "compact", "Retina 实机横屏", "composite"],
+		[Vector2i(960, 540), "compact", "紧凑横屏", "responsive"],
+		[Vector2i(540, 960), "portrait", "紧凑竖屏", "responsive"],
 	]
 	for layout_case_value: Variant in layout_cases:
 		var layout_case := layout_case_value as Array
+		root.content_scale_size = layout_case[0] as Vector2i
 		root.size = layout_case[0] as Vector2i
 		for _index in 5:
 			await process_frame
@@ -126,6 +130,12 @@ func _test_save_slot_page(prepared: Dictionary) -> void:
 			layout_case[1],
 			"%s 使用预期布局" % String(layout_case[2]),
 		)
+		_expect_equal(
+			(snapshot.get("completionModal", {}) as Dictionary).get("variant"),
+			layout_case[3],
+			"%s 使用预期资产路线" % String(layout_case[2]),
+		)
+		var uses_composite := String(layout_case[3]) == "composite"
 		_expect(
 			screen.is_visible_in_tree()
 			and screen.get_global_rect().intersects(Rect2(Vector2.ZERO, screen.size)),
@@ -133,7 +143,7 @@ func _test_save_slot_page(prepared: Dictionary) -> void:
 		)
 		var page_scroll := screen.get("_page_scroll") as ScrollContainer
 		var page_panel := screen.get("_page_panel") as Control
-		if String(layout_case[1]) in ["compact", "portrait"]:
+		if not uses_composite and String(layout_case[1]) in ["compact", "portrait"]:
 			_expect(
 				page_scroll != null and page_scroll.is_visible_in_tree(),
 				"%s 页面滚动容器可见" % String(layout_case[2]),
@@ -151,6 +161,7 @@ func _test_save_slot_page(prepared: Dictionary) -> void:
 			var physical_rect := _physical_gate_rect(
 				target.get("rect", []) as Array,
 				screen,
+				uses_composite,
 			)
 			_expect(
 				physical_rect.size.x >= 48.0 and physical_rect.size.y >= 48.0,
@@ -160,9 +171,35 @@ func _test_save_slot_page(prepared: Dictionary) -> void:
 					physical_rect,
 				],
 			)
-		_expect_touch_targets_do_not_overlap(touch_targets, screen, String(layout_case[2]))
-		if String(layout_case[1]) in ["compact", "portrait"]:
+		_expect_touch_targets_do_not_overlap(
+			touch_targets,
+			screen,
+			String(layout_case[2]),
+			uses_composite,
+		)
+		if not uses_composite and String(layout_case[1]) in ["compact", "portrait"]:
 			await _exercise_gamepad(screen, assignment, String(layout_case[2]))
+	# macOS Retina can expose a backing window larger than the logical canvas.
+	# Keep those two sizes deliberately different so layout code cannot regress
+	# to scaling the composite from physical window pixels again.
+	root.content_scale_size = Vector2i(1280, 720)
+	root.size = Vector2i(2048, 1152)
+	for _index in 5:
+		await process_frame
+	var retina_composite_frame := screen.get("_composite_frame") as Control
+	snapshot = screen.call("runtime_gate_snapshot") as Dictionary
+	_expect_equal(
+		(snapshot.get("completionModal", {}) as Dictionary).get("variant"),
+		"composite",
+		"Retina 窗口与逻辑画布不同时仍使用完整资产界面",
+	)
+	_expect(
+		retina_composite_frame != null
+		and retina_composite_frame.size.x <= 1281.0
+		and retina_composite_frame.size.y <= 721.0,
+		"Retina 物理窗口不会把完整资产界面二次放大并裁出逻辑画布",
+	)
+	root.content_scale_size = Vector2i(960, 540)
 	root.size = Vector2i(960, 540)
 	for _index in 5:
 		await process_frame
@@ -187,6 +224,7 @@ func _test_save_slot_page(prepared: Dictionary) -> void:
 			"mode": "single",
 		},
 	)
+	root.content_scale_size = Vector2i(1920, 1080)
 	root.size = Vector2i(1920, 1080)
 	for _index in 5:
 		await process_frame
@@ -253,6 +291,7 @@ func _test_save_slot_page(prepared: Dictionary) -> void:
 	screen.call("_close_completion_modal")
 	await process_frame
 	await _assert_shared_failure_copy(screen, assignment, simplified)
+	root.content_scale_size = original_content_scale_size
 	root.size = original_viewport_size
 	for _index in 3:
 		await process_frame
@@ -347,6 +386,7 @@ func _expect_touch_targets_do_not_overlap(
 	targets: Array,
 	screen: Control,
 	layout_name: String,
+	uses_composite: bool,
 ) -> void:
 	var key_ids := [
 		"BackButton", "ProviderSettingsButton", "ModeButton", "RefreshButton",
@@ -360,10 +400,18 @@ func _expect_touch_targets_do_not_overlap(
 			key_targets.append(target)
 	for left_index in key_targets.size():
 		var left := key_targets[left_index]
-		var left_rect := _physical_gate_rect(left.get("rect", []) as Array, screen)
+		var left_rect := _physical_gate_rect(
+			left.get("rect", []) as Array,
+			screen,
+			uses_composite,
+		)
 		for right_index in range(left_index + 1, key_targets.size()):
 			var right := key_targets[right_index]
-			var right_rect := _physical_gate_rect(right.get("rect", []) as Array, screen)
+			var right_rect := _physical_gate_rect(
+				right.get("rect", []) as Array,
+				screen,
+				uses_composite,
+			)
 			_expect(
 				not left_rect.intersects(right_rect),
 				"%s 关键操作区 %s 与 %s 不重叠" % [
@@ -374,7 +422,11 @@ func _expect_touch_targets_do_not_overlap(
 			)
 
 
-func _physical_gate_rect(values: Array, screen: Control) -> Rect2:
+func _physical_gate_rect(
+	values: Array,
+	screen: Control,
+	already_scaled: bool = false,
+) -> Rect2:
 	if values.size() != 4 or screen == null or screen.size.x <= 0.0 or screen.size.y <= 0.0:
 		return Rect2()
 	var rect := Rect2(
@@ -383,6 +435,8 @@ func _physical_gate_rect(values: Array, screen: Control) -> Rect2:
 		float(values[2]),
 		float(values[3]),
 	)
+	if already_scaled:
+		return rect
 	var to_display := Vector2(root.size) / screen.size
 	return Rect2(rect.position * to_display, rect.size * to_display)
 

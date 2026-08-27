@@ -42,6 +42,7 @@ const MAP_TEXTURE_PATH := (
 const TOUCH_TARGET_MIN := 48.0
 const SLOT_COUNT := POPULATION_RULES.DEFAULT_RESIDENT_COUNT
 const COMPOSITE_SIZE := Vector2(1672.0, 941.0)
+const DESKTOP_COMPOSITE_MINIMUM_VIEWPORT := Vector2(1024.0, 576.0)
 const MOBILE_COMPOSITE_MINIMUM_VIEWPORT := Vector2(960.0, 540.0)
 const PROVIDER_AUTO_REFRESH_INTERVAL_SECONDS := 0.75
 const PROVIDER_AUTO_REFRESH_MAX_ATTEMPTS := 20
@@ -1659,7 +1660,14 @@ func _apply_responsive_layout() -> void:
 	if not is_node_ready():
 		_layout_queued = false
 		return
-	_apply_responsive_layout_for_size(_runtime_display_size())
+	# Layout coordinates live in this Control's canvas, not in the platform
+	# window's backing pixels. On Retina macOS the window can report a much
+	# larger physical size than this canvas; using that value here scales the
+	# 1672×941 composite twice and crops most of the page.
+	var canvas_size := get_viewport_rect().size
+	if canvas_size.x <= 0.0 or canvas_size.y <= 0.0:
+		canvas_size = size
+	_apply_responsive_layout_for_size(canvas_size)
 	_layout_queued = false
 
 
@@ -1676,8 +1684,9 @@ func _apply_responsive_layout_for_size(viewport_size: Vector2) -> void:
 	var use_accepted_composite := (
 		(
 			not mobile_runtime
-			and viewport_size.x >= 1720.0
-			and viewport_size.y >= 981.0
+			and viewport_size.x >= viewport_size.y
+			and viewport_size.x >= DESKTOP_COMPOSITE_MINIMUM_VIEWPORT.x
+			and viewport_size.y >= DESKTOP_COMPOSITE_MINIMUM_VIEWPORT.y
 		)
 		or (
 			mobile_runtime
@@ -1754,7 +1763,7 @@ func _apply_responsive_layout_for_size(viewport_size: Vector2) -> void:
 			if mobile_runtime
 			else ScrollContainer.SCROLL_MODE_AUTO
 		)
-	_apply_physical_touch_minimums(viewport_size)
+	_apply_physical_touch_minimums(_runtime_display_size())
 	_sync_completion_modal_visibility()
 
 

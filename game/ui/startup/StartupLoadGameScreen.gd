@@ -496,7 +496,7 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 		else &"StartupLoadHealthyAction"
 	)
 	var primary_action_rect := (
-		Rect2(1012.0, 311.0 + float(index) * 159.0, 132.0, 79.0)
+		Rect2(1044.0, 311.0 + float(index) * 159.0, 162.0, 79.0)
 		if not _is_overwrite_selection_mode()
 		else Rect2(1044.0, 311.0 + float(index) * 159.0, 162.0, 79.0)
 	)
@@ -536,9 +536,9 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 	if not _is_overwrite_selection_mode():
 		var delete_contract := _action("deleteSlot")
 		var delete_source_rect := Rect2(
-			1150.0,
+			1218.0,
 			282.0 + float(index) * 159.0,
-			138.0,
+			68.0,
 			64.0,
 		)
 		var delete_button := _button(
@@ -571,20 +571,21 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 		)
 		var edit_contract := _action("editResidentModels")
 		var edit_source_rect := Rect2(
-			1150.0,
+			1218.0,
 			348.0 + float(index) * 159.0,
-			138.0,
+			137.0,
 			64.0,
 		)
 		var edit_button := _button(
 			"%sModelEditAction" % slot_id,
-			"更改居民模型",
+			"",
 			_source_rect(edit_source_rect),
-			&"StartupLoadHealthyAction",
+			&"StartupLoadModelEditAction",
 			_request_edit_resident_models.bind(slot.duplicate(true)),
 			_slot_layer,
 		)
 		_register_slot_action_layout(edit_button, index, "edit", edit_source_rect)
+		_decorate_model_edit_button(edit_button)
 		edit_button.set_meta("slot_id", slot_id)
 		edit_button.set_meta("action_key", "editResidentModels")
 		edit_button.add_theme_font_size_override(&"font_size", 18)
@@ -592,6 +593,7 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 			not bool(edit_contract.get("enabled", false))
 			or not bool(slot.get("modelEditAvailable", false))
 		)
+		_sync_model_edit_button_visual(edit_button, "normal")
 		edit_button.tooltip_text = (
 			_model_edit_copy(slot)
 			if not edit_button.disabled
@@ -600,6 +602,90 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 				edit_contract.get("disabledReason", "ACTION_NOT_AVAILABLE"),
 			)))
 		)
+
+
+func _decorate_model_edit_button(button: Button) -> void:
+	if button == null:
+		return
+	for state: StringName in [
+		&"normal", &"hover", &"pressed", &"focus", &"disabled",
+	]:
+		button.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	button.add_theme_color_override(&"font_color", Color.TRANSPARENT)
+	button.add_theme_color_override(&"font_hover_color", Color.TRANSPARENT)
+	button.add_theme_color_override(&"font_pressed_color", Color.TRANSPARENT)
+	button.add_theme_color_override(&"font_focus_color", Color.TRANSPARENT)
+	button.add_theme_color_override(&"font_disabled_color", Color.TRANSPARENT)
+	var texture := ResourceLoader.load(
+		LOAD_GAME_IMAGE_THEME.MODEL_EDIT_ACTION_PATH,
+		"Texture2D",
+	) as Texture2D
+	var text_texture := ResourceLoader.load(
+		LOAD_GAME_IMAGE_THEME.MODEL_EDIT_TEXT_PATH,
+		"Texture2D",
+	) as Texture2D
+	if texture == null or text_texture == null:
+		push_error("加载游戏页居民改绑底牌或文字图缺失。")
+		return
+	var visual := TextureRect.new()
+	visual.name = "ResidentRebindVisual"
+	visual.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	visual.texture = texture
+	visual.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	visual.stretch_mode = TextureRect.STRETCH_SCALE
+	visual.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	visual.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(visual)
+	var text_visual := TextureRect.new()
+	text_visual.name = "ResidentRebindTextImage"
+	text_visual.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	text_visual.texture = text_texture
+	text_visual.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	text_visual.stretch_mode = TextureRect.STRETCH_SCALE
+	text_visual.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	text_visual.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(text_visual)
+	button.set_meta("model_edit_visual", visual)
+	button.set_meta("model_edit_text_visual", text_visual)
+	button.mouse_entered.connect(
+		_sync_model_edit_button_visual.bind(button, "hover"),
+	)
+	button.mouse_exited.connect(
+		_sync_model_edit_button_visual.bind(button, "normal"),
+	)
+	button.focus_entered.connect(
+		_sync_model_edit_button_visual.bind(button, "hover"),
+	)
+	button.focus_exited.connect(
+		_sync_model_edit_button_visual.bind(button, "normal"),
+	)
+	button.button_down.connect(
+		_sync_model_edit_button_visual.bind(button, "pressed"),
+	)
+	button.button_up.connect(
+		_sync_model_edit_button_visual.bind(button, "hover"),
+	)
+
+
+func _sync_model_edit_button_visual(button: Button, state: String) -> void:
+	if button == null:
+		return
+	var visual := button.get_meta("model_edit_visual", null) as TextureRect
+	var text_visual := button.get_meta(
+		"model_edit_text_visual",
+		null,
+	) as TextureRect
+	var color := Color.WHITE
+	if button.disabled:
+		color = Color("928a78")
+	elif state == "hover":
+		color = Color("fff0c9")
+	elif state == "pressed":
+		color = Color("cbb58e")
+	if visual != null:
+		visual.modulate = color
+	if text_visual != null:
+		text_visual.modulate = color
 
 
 func _model_edit_copy(slot: Dictionary) -> String:

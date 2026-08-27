@@ -22,9 +22,9 @@
    "id": "res://tests/interior_occlusion_asset_generator_test.gd",
    "min_checks": 57
   },
-  {
-   "id": "res://tests/town_world_save_test.gd",
-   "min_checks": 177
+	{
+		"id": "res://tests/town_world_save_test.gd",
+		"min_checks": 193
   },
   {
    "id": "res://tests/town_resident_content_test.gd",
@@ -90,13 +90,13 @@
     "id": "res://tests/offline_resident_model_rebind_ui_route_test.gd",
     "min_checks": 45
   },
-  {
-    "id": "res://tests/offline_resident_model_assignment_page_test.gd",
-    "min_checks": 95
-  },
-  {
-    "id": "res://tests/offline_resident_model_rebind_load_page_test.gd",
-    "min_checks": 139
+	{
+		"id": "res://tests/offline_resident_model_assignment_page_test.gd",
+		"min_checks": 130
+	},
+	{
+		"id": "res://tests/offline_resident_model_rebind_load_page_test.gd",
+		"min_checks": 145
   },
   {
     "id": "res://tests/windows_directory_cleanup_test.gd",

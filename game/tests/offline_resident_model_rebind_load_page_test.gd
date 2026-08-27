@@ -469,8 +469,61 @@ func _test_load_page_action() -> void:
 	for _index in 3:
 		await process_frame
 	var edit_button := screen.find_child("slot-aModelEditAction", true, false) as Button
+	var delete_button := screen.find_child("slot-aDeleteAction", true, false) as Button
 	_expect(edit_button != null, "完整修订卡片显示更改居民模型按钮")
 	if edit_button != null:
+		var rebind_visual := edit_button.find_child(
+			"ResidentRebindVisual",
+			true,
+			false,
+		) as TextureRect
+		var text_visual := edit_button.find_child(
+			"ResidentRebindTextImage",
+			true,
+			false,
+		) as TextureRect
+		_expect(
+			rebind_visual != null and not rebind_visual.flip_h,
+			"加载页按原方向复用正式居民改绑资产",
+		)
+		_expect(
+			text_visual != null and text_visual.texture != null,
+			"居民改绑文字使用固定位置的透明图像层",
+		)
+		_expect_equal(
+			text_visual.texture.get_size()
+			if text_visual != null and text_visual.texture != null
+			else Vector2.ZERO,
+			rebind_visual.texture.get_size()
+			if rebind_visual != null and rebind_visual.texture != null
+			else Vector2.ZERO,
+			"居民改绑文字图与底牌保持同一原始尺寸和缩放坐标",
+		)
+		_expect_equal(
+			edit_button.get_meta("slot_action_source_rect", Rect2()),
+			Rect2(1218.0, 348.0, 137.0, 64.0),
+			"居民改绑扩展牌位于第一行纸张右侧下方",
+		)
+		_expect_equal(
+			delete_button.get_meta("slot_action_source_rect", Rect2())
+			if delete_button != null
+			else Rect2(),
+			Rect2(1218.0, 282.0, 68.0, 64.0),
+			"垃圾桶位于第一行纸张右侧上方",
+		)
+		var delete_source_rect := (
+			delete_button.get_meta("slot_action_source_rect", Rect2()) as Rect2
+			if delete_button != null
+			else Rect2()
+		)
+		var edit_source_rect := edit_button.get_meta(
+			"slot_action_source_rect",
+			Rect2(),
+		) as Rect2
+		_expect(
+			delete_source_rect.end.y <= edit_source_rect.position.y,
+			"纸张右侧操作保持垃圾桶在上、居民改绑在下",
+		)
 		_expect(
 			edit_button.size.y >= 48.0,
 			"更改居民模型按钮满足触控高度",
