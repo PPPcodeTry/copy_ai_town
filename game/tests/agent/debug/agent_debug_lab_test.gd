@@ -135,6 +135,17 @@ func _run() -> void:
 	var snapshot := session.call("snapshot") as Dictionary
 	_expect_equal(snapshot.get("status"), "running", "正式 Town Runtime 启动完成")
 	_expect_equal(snapshot.get("residentCount"), 15, "观察台连接全部 15 位居民")
+	var save_store := session.get("_store") as RefCounted
+	_expect_ok(
+		save_store.call(
+			"configure_test_root",
+			"user://tests/town_session_saves/agent-debug-%d-%d" % [
+				OS.get_process_id(),
+				Time.get_ticks_usec(),
+			],
+		) as Dictionary,
+		"Agent 调试测试使用隔离存档根目录",
+	)
 	var residents := snapshot.get("residents", []) as Array
 	if not residents.is_empty():
 		var resident_id := String((residents[0] as Dictionary).get("residentId", ""))
@@ -220,4 +231,8 @@ func _run() -> void:
 	)
 	session.call("stop")
 	await process_frame
+	_expect_ok(
+		save_store.call("cleanup_test_root") as Dictionary,
+		"Agent 调试测试清理隔离存档根目录",
+	)
 	_finish_suite("AGENT_DEBUG_LAB_TEST_PASS")

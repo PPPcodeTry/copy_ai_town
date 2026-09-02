@@ -663,6 +663,12 @@
       "func": "_published_pair_is_complete",
       "call": "string:.call( \"read_world_log_snapshot\", String(world_log.get(\"snapshot_ref\", \"\")), String(world_log.get(\"snapshot_sha256\", \"\")), )",
       "reason": "事务协调服务通过固定 Store 契约恢复分段 world log，并交给正式日志 Store 校验完整结构。"
+    },
+    {
+      "path": "game/world/presentation/session/TownOfflineResidentModelRebindService.gd",
+      "func": "apply_bindings",
+      "call": "string:.call( \"validate_resident_bindings\", bindings, )",
+      "reason": "离线提交点复核当前 Provider 配置，兼容正式服务与隔离测试替身，防止目录变化后写入失效目标绑定。"
     }
   ]
 }

@@ -9,6 +9,8 @@ signal action_blocked(intent: StringName, reason: String)
 const BUTTON_THEME := preload("res://ui/startup/StartupButtonImageTheme.gd")
 const UiViewModel := preload("res://ui/common/AiTownUiViewModel.gd")
 const UiNodeRetirement := preload("res://ui/common/AiTownUiNodeRetirement.gd")
+const MOBILE_UI_PROFILE := preload("res://ui/mobile/MobileUiProfile.gd")
+const MOBILE_LAYOUT := preload("res://ui/mobile/StartupLoadGameMobileLayout.gd")
 const LOAD_GAME_IMAGE_THEME := preload(
 	"res://ui/startup/StartupLoadGameImageTheme.gd"
 )
@@ -20,6 +22,7 @@ const BACK_INTENT := "startup.close_load_game"
 const CONTINUE_SLOT_INTENT := "session.continue_slot"
 const SELECT_OVERWRITE_SLOT_INTENT := "startup.select_overwrite_slot"
 const REQUEST_DELETE_SLOT_INTENT := "save.request_delete_slot"
+const EDIT_RESIDENT_MODELS_INTENT := "save.edit_resident_models"
 const VISUAL_STATE_HEALTHY := "healthy"
 const VISUAL_STATE_RECOVERABLE := "recoverable"
 const VISUAL_STATE_DISABLED := "disabled"
@@ -32,6 +35,7 @@ const VALID_SLOT_STATES: Array[String] = [
 	"recoverable",
 	"incomplete",
 	"corrupt",
+	"read_only",
 	# Keep the old projection name readable while all callers migrate to
 	# TownStartupSaveCatalog's `healthy` state.
 	"complete",
@@ -63,6 +67,20 @@ func _ready() -> void:
 	_build_interface()
 	if not _view_model.is_empty():
 		_render()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED and is_node_ready():
+		_apply_platform_slot_action_layout.call_deferred()
+
+
+func runtime_layout_snapshot() -> Dictionary:
+	return {
+		"mode": "mobile" if _mobile_runtime_enabled() else "desktop_reference",
+		"usesPlatformAdapter": _mobile_runtime_enabled(),
+		"canvasSize": size,
+		"displaySize": _display_size(),
+	}
 
 
 func deactivate_modal_ownership() -> void:
@@ -119,6 +137,7 @@ func get_contract_snapshot() -> Dictionary:
 			"empty": VISUAL_STATE_DISABLED,
 			"incomplete": VISUAL_STATE_DISABLED,
 			"corrupt": VISUAL_STATE_DISABLED,
+			"read_only": VISUAL_STATE_DISABLED,
 		},
 		"olderRevisionSelectionEnabled": false,
 		"olderRevisionSelectionDisabledReason": (
@@ -130,6 +149,7 @@ func get_contract_snapshot() -> Dictionary:
 			"continueSlot": CONTINUE_SLOT_INTENT,
 			"selectOverwriteSlot": SELECT_OVERWRITE_SLOT_INTENT,
 			"deleteSlot": REQUEST_DELETE_SLOT_INTENT,
+			"editResidentModels": EDIT_RESIDENT_MODELS_INTENT,
 		},
 		"ownsOverwriteSelection": true,
 		"ownsOverwriteConfirmation": false,
@@ -172,6 +192,18 @@ func debug_request_delete_slot(slot_id: String) -> bool:
 	return _block(&"save.request_delete_slot", "STARTUP_SAVE_SLOT_ID_INVALID")
 
 
+func debug_request_edit_resident_models(slot_id: String) -> bool:
+	for slot_value: Variant in (
+		(_view_model.get("data", {}) as Dictionary).get("slots", []) as Array
+	):
+		if (
+			slot_value is Dictionary
+			and String((slot_value as Dictionary).get("slotId", "")) == slot_id
+		):
+			return _request_edit_resident_models(slot_value as Dictionary)
+	return _block(&"save.edit_resident_models", "STARTUP_SAVE_SLOT_ID_INVALID")
+
+
 func _validate_view_model(view_model: Dictionary) -> PackedStringArray:
 	var issues := PackedStringArray()
 	if String(view_model.get("scope", "")) != "save":
@@ -208,6 +240,7 @@ func _validate_view_model(view_model: Dictionary) -> PackedStringArray:
 	else:
 		expected_intents["continueSlot"] = CONTINUE_SLOT_INTENT
 		expected_intents["deleteSlot"] = REQUEST_DELETE_SLOT_INTENT
+		expected_intents["editResidentModels"] = EDIT_RESIDENT_MODELS_INTENT
 	for action_key: String in expected_intents:
 		var action_value: Variant = actions.get(action_key)
 		if not action_value is Dictionary:
@@ -319,6 +352,7 @@ func _render() -> void:
 		)
 	)
 	_restore_focus_identity(focus_identity)
+	_apply_platform_slot_action_layout.call_deferred()
 
 
 func _capture_focus_identity() -> String:
@@ -370,6 +404,12 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 	accent.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	accent.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	accent.set_meta("visual_state_family", visual_family)
+	_register_slot_content_layout(
+		accent,
+		index,
+		"accent",
+		Rect2(446.0, 274.0 + float(index) * 159.0, 51.0, 142.0),
+	)
 	_slot_layer.add_child(accent)
 	var title := _label(
 		"%sTitle" % slot_id,
@@ -380,6 +420,12 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title.add_theme_font_size_override(&"font_size", 28)
 	title.text = "%s · %s" % [display_name, _state_copy(state)]
+	_register_slot_content_layout(
+		title,
+		index,
+		"title",
+		Rect2(512.0, source_y, 492.0, 31.0),
+	)
 
 	var body := _label(
 		"%sBody" % slot_id,
@@ -391,6 +437,12 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 	body.add_theme_font_size_override(&"font_size", 22)
 	body.add_theme_color_override(&"font_color", Color("4e3826"))
 	body.text = _slot_body(slot)
+	_register_slot_content_layout(
+		body,
+		index,
+		"body",
+		Rect2(512.0, source_y + 32.0, 492.0, 31.0),
+	)
 	var recovery := _label(
 		"%sRecovery" % slot_id,
 		_source_rect(Rect2(512.0, source_y + 64.0, 492.0, 31.0)),
@@ -403,6 +455,12 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 		recovery.add_theme_color_override(&"font_color", Color("4e3826"))
 	recovery.text = _recovery_copy(slot)
 	recovery.tooltip_text = _damage_detail_copy(slot)
+	_register_slot_content_layout(
+		recovery,
+		index,
+		"recovery",
+		Rect2(512.0, source_y + 64.0, 492.0, 31.0),
+	)
 	var detail := _label(
 		"%sDetail" % slot_id,
 		_source_rect(Rect2(512.0, source_y + 96.0, 492.0, 31.0)),
@@ -414,6 +472,12 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 	detail.add_theme_color_override(&"font_color", Color("4e3826"))
 	detail.text = _slot_detail_copy(slot)
 	detail.tooltip_text = _damage_detail_copy(slot)
+	_register_slot_content_layout(
+		detail,
+		index,
+		"detail",
+		Rect2(512.0, source_y + 96.0, 492.0, 31.0),
+	)
 
 	var action_key := (
 		"selectOverwriteSlot"
@@ -444,6 +508,7 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 		_request_slot.bind(slot.duplicate(true)),
 		_slot_layer,
 	)
+	_register_slot_action_layout(action, index, "primary", primary_action_rect)
 	action.set_meta("slot_id", slot_id)
 	action.set_meta("visual_state_family", visual_family)
 	action.disabled = (
@@ -470,19 +535,21 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 	)
 	if not _is_overwrite_selection_mode():
 		var delete_contract := _action("deleteSlot")
+		var delete_source_rect := Rect2(
+			1218.0,
+			282.0 + float(index) * 159.0,
+			68.0,
+			64.0,
+		)
 		var delete_button := _button(
 			"%sDeleteAction" % slot_id,
 			"",
-			_source_rect(Rect2(
-				1228.0,
-				322.0 + float(index) * 159.0,
-				60.0,
-				58.0,
-			)),
+			_source_rect(delete_source_rect),
 			&"StartupLoadDeleteBadgeAction",
 			_request_delete_slot.bind(slot.duplicate(true)),
 			_slot_layer,
 		)
+		_register_slot_action_layout(delete_button, index, "delete", delete_source_rect)
 		delete_button.icon = _delete_icon_texture
 		delete_button.expand_icon = true
 		delete_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -502,6 +569,263 @@ func _build_slot_card(index: int, slot: Dictionary) -> void:
 				))
 			)
 		)
+		var edit_contract := _action("editResidentModels")
+		var edit_source_rect := Rect2(
+			1218.0,
+			348.0 + float(index) * 159.0,
+			137.0,
+			64.0,
+		)
+		var edit_button := _button(
+			"%sModelEditAction" % slot_id,
+			"",
+			_source_rect(edit_source_rect),
+			&"StartupLoadModelEditAction",
+			_request_edit_resident_models.bind(slot.duplicate(true)),
+			_slot_layer,
+		)
+		_register_slot_action_layout(edit_button, index, "edit", edit_source_rect)
+		_decorate_model_edit_button(edit_button)
+		edit_button.set_meta("slot_id", slot_id)
+		edit_button.set_meta("action_key", "editResidentModels")
+		edit_button.add_theme_font_size_override(&"font_size", 18)
+		edit_button.disabled = (
+			not bool(edit_contract.get("enabled", false))
+			or not bool(slot.get("modelEditAvailable", false))
+		)
+		_sync_model_edit_button_visual(edit_button, "normal")
+		edit_button.tooltip_text = (
+			_model_edit_copy(slot)
+			if not edit_button.disabled
+			else UiViewModel.player_reason(String(slot.get(
+				"modelEditDisabledReason",
+				edit_contract.get("disabledReason", "ACTION_NOT_AVAILABLE"),
+			)))
+		)
+
+
+func _decorate_model_edit_button(button: Button) -> void:
+	if button == null:
+		return
+	for state: StringName in [
+		&"normal", &"hover", &"pressed", &"focus", &"disabled",
+	]:
+		button.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	button.add_theme_color_override(&"font_color", Color.TRANSPARENT)
+	button.add_theme_color_override(&"font_hover_color", Color.TRANSPARENT)
+	button.add_theme_color_override(&"font_pressed_color", Color.TRANSPARENT)
+	button.add_theme_color_override(&"font_focus_color", Color.TRANSPARENT)
+	button.add_theme_color_override(&"font_disabled_color", Color.TRANSPARENT)
+	var texture := ResourceLoader.load(
+		LOAD_GAME_IMAGE_THEME.MODEL_EDIT_ACTION_PATH,
+		"Texture2D",
+	) as Texture2D
+	var text_texture := ResourceLoader.load(
+		LOAD_GAME_IMAGE_THEME.MODEL_EDIT_TEXT_PATH,
+		"Texture2D",
+	) as Texture2D
+	if texture == null or text_texture == null:
+		push_error("加载游戏页居民改绑底牌或文字图缺失。")
+		return
+	var visual := TextureRect.new()
+	visual.name = "ResidentRebindVisual"
+	visual.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	visual.texture = texture
+	visual.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	visual.stretch_mode = TextureRect.STRETCH_SCALE
+	visual.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	visual.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(visual)
+	var text_visual := TextureRect.new()
+	text_visual.name = "ResidentRebindTextImage"
+	text_visual.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	text_visual.texture = text_texture
+	text_visual.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	text_visual.stretch_mode = TextureRect.STRETCH_SCALE
+	text_visual.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	text_visual.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(text_visual)
+	button.set_meta("model_edit_visual", visual)
+	button.set_meta("model_edit_text_visual", text_visual)
+	button.mouse_entered.connect(
+		_sync_model_edit_button_visual.bind(button, "hover"),
+	)
+	button.mouse_exited.connect(
+		_sync_model_edit_button_visual.bind(button, "normal"),
+	)
+	button.focus_entered.connect(
+		_sync_model_edit_button_visual.bind(button, "hover"),
+	)
+	button.focus_exited.connect(
+		_sync_model_edit_button_visual.bind(button, "normal"),
+	)
+	button.button_down.connect(
+		_sync_model_edit_button_visual.bind(button, "pressed"),
+	)
+	button.button_up.connect(
+		_sync_model_edit_button_visual.bind(button, "hover"),
+	)
+
+
+func _sync_model_edit_button_visual(button: Button, state: String) -> void:
+	if button == null:
+		return
+	var visual := button.get_meta("model_edit_visual", null) as TextureRect
+	var text_visual := button.get_meta(
+		"model_edit_text_visual",
+		null,
+	) as TextureRect
+	var color := Color.WHITE
+	if button.disabled:
+		color = Color("928a78")
+	elif state == "hover":
+		color = Color("fff0c9")
+	elif state == "pressed":
+		color = Color("cbb58e")
+	if visual != null:
+		visual.modulate = color
+	if text_visual != null:
+		text_visual.modulate = color
+
+
+func _model_edit_copy(slot: Dictionary) -> String:
+	var revision := int(slot.get(
+		"modelEditSaveRevision",
+		slot.get("saveRevision", 0),
+	))
+	if (
+		String(slot.get("state", "")) == "recoverable"
+		and String(slot.get("recoveryState", ""))
+		== "older_complete_revision_available"
+	):
+		return "编辑完整修订 %d，损坏修订不会被修改" % revision
+	return "编辑完整修订 %d" % revision
+
+
+func _register_slot_action_layout(
+	button: Button,
+	index: int,
+	role: String,
+	source_rect: Rect2,
+) -> void:
+	button.set_meta("slot_index", index)
+	button.set_meta("slot_action_role", role)
+	button.set_meta("slot_action_source_rect", source_rect)
+	button.set_meta(
+		"slot_action_source_font_size",
+		18 if role == "edit" else button.get_theme_font_size("font_size"),
+	)
+
+
+func _register_slot_content_layout(
+	control: Control,
+	index: int,
+	role: String,
+	source_rect: Rect2,
+) -> void:
+	control.set_meta("slot_index", index)
+	control.set_meta("slot_content_role", role)
+	control.set_meta("slot_content_source_rect", source_rect)
+
+
+func _apply_platform_slot_action_layout() -> void:
+	if not is_instance_valid(_slot_layer) or size.x <= 0.0 or size.y <= 0.0:
+		return
+	var actions_by_slot: Dictionary = {}
+	var content_by_slot: Dictionary = {}
+	for child: Node in _slot_layer.get_children():
+		if child is Control and child.has_meta("slot_content_role"):
+			var content_index := int(child.get_meta("slot_index", -1))
+			if content_index >= 0:
+				if not content_by_slot.has(content_index):
+					content_by_slot[content_index] = {}
+				(content_by_slot[content_index] as Dictionary)[String(
+					child.get_meta("slot_content_role", ""),
+				)] = child
+		if not child is Button or not child.has_meta("slot_action_role"):
+			continue
+		var index := int(child.get_meta("slot_index", -1))
+		if index < 0:
+			continue
+		if not actions_by_slot.has(index):
+			actions_by_slot[index] = {}
+		(actions_by_slot[index] as Dictionary)[String(
+			child.get_meta("slot_action_role", ""),
+		)] = child
+	for actions_value: Variant in actions_by_slot.values():
+		for button_value: Variant in (actions_value as Dictionary).values():
+			var button := button_value as Button
+			_apply_reference_rect(
+				button,
+				_source_rect(button.get_meta(
+					"slot_action_source_rect",
+					Rect2(),
+				) as Rect2),
+			)
+			var role := String(button.get_meta("slot_action_role", ""))
+			if role == "primary":
+				button.remove_theme_font_size_override(&"font_size")
+			elif role == "edit":
+				button.add_theme_font_size_override(&"font_size", 18)
+	for content_value: Variant in content_by_slot.values():
+		for control_value: Variant in (content_value as Dictionary).values():
+			var control := control_value as Control
+			_apply_reference_rect(
+				control,
+				_source_rect(control.get_meta(
+					"slot_content_source_rect",
+					Rect2(),
+				) as Rect2),
+			)
+	if not _mobile_runtime_enabled():
+		return
+	var row_count := actions_by_slot.size()
+	var display_size := _display_size()
+	var display_scale_y := display_size.y / maxf(size.y, 1.0)
+	for index_value: Variant in actions_by_slot.keys():
+		var index := int(index_value)
+		var actions := actions_by_slot[index] as Dictionary
+		if not actions.has("primary") or not actions.has("delete") or not actions.has("edit"):
+			continue
+		var rects := MOBILE_LAYOUT.slot_rects(
+			size,
+			display_size,
+			index,
+			row_count,
+		)
+		var content := content_by_slot.get(index, {}) as Dictionary
+		for role: String in ["accent", "title", "body", "recovery", "detail"]:
+			var content_control := content.get(role) as Control
+			if content_control != null and rects.has(role):
+				_apply_absolute_rect(content_control, rects[role] as Rect2)
+		for role: String in ["primary", "delete", "edit"]:
+			var button := actions.get(role) as Button
+			_apply_absolute_rect(
+				button,
+				rects.get(role, Rect2()) as Rect2,
+			)
+			button.add_theme_font_size_override(
+				&"font_size",
+				maxi(1, roundi(
+					float(button.get_meta("slot_action_source_font_size", 18))
+					/ maxf(display_scale_y, 0.1),
+				)),
+			)
+
+
+func _mobile_runtime_enabled() -> bool:
+	return MOBILE_UI_PROFILE.is_mobile_runtime()
+
+
+func _display_size() -> Vector2:
+	var window := get_tree().root if get_tree() != null else null
+	return Vector2(window.size) if window != null else size
+
+
+func _apply_absolute_rect(control: Control, rect: Rect2) -> void:
+	control.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	control.position = rect.position
+	control.size = rect.size
 
 
 func _slot_body(slot: Dictionary) -> String:
@@ -512,7 +836,17 @@ func _slot_body(slot: Dictionary) -> String:
 		return "尚无可用的完整保存"
 	if state == "corrupt" and not bool(slot.get("continueAvailable", false)):
 		return "无法读取可进入的小镇存档"
+	if state == "read_only":
+		return "此存档来自较新版本"
 	if state == "recoverable":
+		if String(slot.get("recoveryState", "")) in [
+			"save_reconciliation_required",
+			"restore_reconciliation_required",
+		]:
+			return "%s · World %d" % [
+				_full_saved_at(String(slot.get("savedAt", ""))),
+				int(slot.get("worldRevision", 0)),
+			]
 		var damage := slot.get("damageDetails", {}) as Dictionary
 		return "完整修订 %d · %s · World %d" % [
 			int(damage.get("fallbackSaveRevision", slot.get("saveRevision", 0))),
@@ -533,20 +867,24 @@ func _recovery_copy(slot: Dictionary) -> String:
 	var damage := slot.get("damageDetails", {}) as Dictionary
 	if state == "empty":
 		return "没有可加载的存档"
+	if state == "read_only":
+		return "当前版本只能查看，不能进入或改绑"
 	if state == "incomplete":
 		return (
 			"上次保存未完成；将使用最近完整存档"
 			if bool(slot.get("continueAvailable", false))
 			else "保存未完成，尚无可恢复版本"
 		)
+	if recovery_state == "save_reconciliation_required":
+		return "上次保存未完成，需要先完成存档协调"
+	if recovery_state == "restore_reconciliation_required":
+		return "上次恢复未完成，需要先完成存档协调"
 	if state == "recoverable" or recovery_state == "older_complete_revision_available":
 		return "损坏修订 %d · %s · World %d" % [
 			int(damage.get("damagedSaveRevision", 0)),
 			_full_saved_at(String(damage.get("damagedSavedAt", ""))),
 			int(damage.get("damagedWorldRevision", 0)),
 		]
-	if recovery_state == "restore_reconciliation_required":
-		return "上次恢复未完成，需要先完成存档协调"
 	if state == "corrupt" or recovery_state.begins_with("corrupt"):
 		if not bool(slot.get("continueAvailable", false)):
 			return "存档损坏，且没有可恢复的完整版本"
@@ -562,6 +900,11 @@ func _recovery_copy(slot: Dictionary) -> String:
 func _slot_detail_copy(slot: Dictionary) -> String:
 	var state := String(slot.get("state", "empty"))
 	if state == "recoverable":
+		if String(slot.get("recoveryState", "")) in [
+			"save_reconciliation_required",
+			"restore_reconciliation_required",
+		]:
+			return "协调后可编辑完整修订 %d" % int(slot.get("saveRevision", 0))
 		var damage := slot.get("damageDetails", {}) as Dictionary
 		return "恢复至第 %d 天 · %d 位居民" % [
 			int(damage.get("fallbackDay", slot.get("day", 0))),
@@ -576,6 +919,8 @@ func _slot_detail_copy(slot: Dictionary) -> String:
 		]
 	if state in ["empty", "incomplete", "corrupt"]:
 		return "当前无法进入"
+	if state == "read_only":
+		return "当前版本不支持"
 	return "请检查存档状态"
 
 
@@ -641,6 +986,8 @@ func _state_copy(state: String) -> String:
 			return "保存未完成"
 		"corrupt":
 			return "存档损坏"
+		"read_only":
+			return "版本不兼容"
 		"empty":
 			return "空槽"
 	return "状态未知"
@@ -733,6 +1080,41 @@ func _request_delete_slot(slot: Dictionary) -> bool:
 	return true
 
 
+func _request_edit_resident_models(slot: Dictionary) -> bool:
+	var action := _action("editResidentModels")
+	var intent := StringName(String(action.get("intent", "")))
+	if _is_overwrite_selection_mode():
+		return _block(intent, "ACTION_NOT_AVAILABLE_IN_MODE")
+	if not bool(action.get("enabled", false)):
+		return _block(
+			intent,
+			String(action.get("disabledReason", "ACTION_NOT_AVAILABLE")),
+		)
+	if not bool(slot.get("modelEditAvailable", false)):
+		return _block(
+			intent,
+			String(slot.get(
+				"modelEditDisabledReason",
+				"SESSION_SAVE_NO_COMPLETE_REVISION",
+			)),
+		)
+	intent_requested.emit(intent, {
+		"scope": "save",
+		"actionKey": "editResidentModels",
+		"revision": _revision,
+		"routeOrigin": "startup_load_game",
+		"slotId": String(slot.get("slotId", "")),
+		"sessionId": String(slot.get("sessionId", "")),
+		"saveRevision": int(slot.get(
+			"modelEditSaveRevision",
+			slot.get("saveRevision", 0),
+		)),
+		"state": String(slot.get("state", "")),
+		"recoveryState": String(slot.get("recoveryState", "none")),
+	})
+	return true
+
+
 func _request_back() -> bool:
 	var action := _action("back")
 	var intent := StringName(String(action.get("intent", "")))
@@ -762,6 +1144,8 @@ func _block(intent: StringName, reason: String) -> bool:
 			if _is_overwrite_selection_mode()
 			else "当前存档无法删除。"
 			if intent == &"save.request_delete_slot"
+			else "当前存档没有可编辑的完整修订。"
+			if intent == &"save.edit_resident_models"
 			else "当前存档无法进入。"
 		)
 	return false

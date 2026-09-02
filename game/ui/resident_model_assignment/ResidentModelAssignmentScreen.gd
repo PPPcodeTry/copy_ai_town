@@ -6,6 +6,7 @@ signal intent_requested(intent: String, payload: Dictionary)
 signal action_dispatch_started(intent: String, payload: Dictionary)
 signal action_blocked(intent: String, reason: String)
 signal back_requested(revision: int)
+signal provider_settings_requested(revision: int)
 
 
 var return_to_provider_settings := false
@@ -24,6 +25,12 @@ const PageTheme = preload(
 const CompositeDesktop = preload(
 	"res://ui/resident_model_assignment/runtime/ResidentModelAssignmentSimplifiedDesktop.gd"
 )
+const RouteMode = preload(
+	"res://ui/resident_model_assignment/runtime/ResidentModelAssignmentRouteMode.gd"
+)
+const FeedbackPolicy = preload(
+	"res://ui/resident_model_assignment/runtime/ResidentModelAssignmentFeedbackPolicy.gd"
+)
 const FormalDialog = preload(
 	"res://ui/common/formal_dialog/FormalConfirmationDialog.gd"
 )
@@ -35,6 +42,7 @@ const MAP_TEXTURE_PATH := (
 const TOUCH_TARGET_MIN := 48.0
 const SLOT_COUNT := POPULATION_RULES.DEFAULT_RESIDENT_COUNT
 const COMPOSITE_SIZE := Vector2(1672.0, 941.0)
+const DESKTOP_COMPOSITE_MINIMUM_VIEWPORT := Vector2(1024.0, 576.0)
 const MOBILE_COMPOSITE_MINIMUM_VIEWPORT := Vector2(960.0, 540.0)
 const PROVIDER_AUTO_REFRESH_INTERVAL_SECONDS := 0.75
 const PROVIDER_AUTO_REFRESH_MAX_ATTEMPTS := 20
@@ -79,8 +87,7 @@ const REQUIRED_ACTIONS: Array[String] = [
 ]
 
 
-var in_session_mode := false
-var single_resident_mode := false
+var route_mode := RouteMode.NEW_GAME
 var _adapter: Object
 var _view_model: Dictionary = {}
 var _render_data: Dictionary = {}
@@ -125,6 +132,7 @@ var _model_status_detail: Label
 var _model_source_detail: Label
 var _mode_button: Button
 var _back_button: Button
+var _provider_settings_button: Button
 var _refresh_button: Button
 var _assign_button: Button
 var _apply_button: Button
@@ -171,12 +179,22 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func apply_route_payload(payload: Dictionary) -> void:
-	var route_mode := String(payload.get("mode", ""))
-	in_session_mode = route_mode in ["in_session", "resident_admission"]
-	single_resident_mode = route_mode == "resident_admission"
+	route_mode = RouteMode.normalize(payload.get("mode", RouteMode.NEW_GAME))
 	return_to_provider_settings = bool(
 		payload.get("returnToProviderSettings", false)
 	)
+
+
+func _is_in_session() -> bool:
+	return RouteMode.is_in_session(route_mode)
+
+
+func _is_single_resident() -> bool:
+	return RouteMode.is_single_resident(route_mode)
+
+
+func _is_save_slot() -> bool:
+	return RouteMode.is_save_slot(route_mode)
 
 
 func request_back() -> bool:
@@ -195,11 +213,13 @@ func _build_exit_confirmation() -> void:
 	_exit_confirmation.name = "UnsavedChangesDialog"
 	_exit_confirmation.title = (
 		"返回居民资料？"
-		if single_resident_mode
+		if _is_single_resident()
 		else "返回模型设置？"
 		if return_to_provider_settings
 		else "返回暂停菜单？"
-		if in_session_mode
+		if _is_in_session()
+		else "返回加载存档？"
+		if _is_save_slot()
 		else "返回居民选择？"
 	)
 	_exit_confirmation.dialog_text = "当前模型分配还没有应用，返回后仍会保留草稿。"
@@ -349,9 +369,13 @@ func runtime_gate_snapshot() -> Dictionary:
 		"scope": SCOPE,
 		"revision": _revision,
 		"profile": _layout_profile,
+		"canvasSize": size,
+		"displaySize": _runtime_display_size(),
+		"routeMode": route_mode,
 		"wholePageScale": false,
 		"formalReady": bool(_render_data.get("formalReady", false)),
 		"residentCount": int(_render_data.get("residentCount", 0)),
+		"saveSlotMode": _is_save_slot(),
 		"textSlots": text_slots,
 		"touchTargets": touch_targets,
 		"borderOwners": border_owners,
@@ -438,6 +462,7 @@ func _build_interface() -> void:
 
 	_build_header()
 	_build_body()
+	_wire_native_focus_neighbors()
 
 	_contract_label = _label("", 18, PageTheme.TERRACOTTA_DARK, "ContractError")
 	_contract_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -454,13 +479,16 @@ func _build_interface() -> void:
 	_composite_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_composite_host.add_child(_composite_frame)
 	_composite_desktop = CompositeDesktop.new()
-	_composite_desktop.set("in_session_mode", in_session_mode)
-	_composite_desktop.set("single_resident_mode", single_resident_mode)
+	_composite_desktop.set("route_mode", route_mode)
 	_composite_frame.add_child(_composite_desktop)
 	_composite_desktop.connect("action_requested", Callable(self, "_request_action"))
 	_composite_desktop.connect("back_pressed", Callable(self, "_request_back"))
 	_composite_desktop.connect("assign_pressed", Callable(self, "_assign_target"))
 	_composite_desktop.connect("apply_pressed", Callable(self, "_open_completion_modal"))
+	_composite_desktop.connect(
+		"provider_settings_pressed",
+		func() -> void: _request_provider_settings(),
+	)
 	_composite_desktop.connect(
 		"completion_modal_return_pressed",
 		Callable(self, "_close_completion_modal"),
@@ -515,16 +543,13 @@ func _build_native_completion_modal() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.custom_minimum_size.y = 52
 	stack.add_child(title)
+	var initial_completion := FeedbackPolicy.completion_copy(
+		route_mode,
+		return_to_provider_settings,
+		SLOT_COUNT,
+	)
 	_native_modal_body = _label(
-		(
-			"这位新居民的模型已经配置完成，可以确认入镇。"
-			if single_resident_mode
-			else "居民模型分配已更新，确认后返回模型设置。"
-			if return_to_provider_settings
-			else "全部居民的模型均已配置完成，可以保存到当前小镇。"
-			if in_session_mode
-			else "全部居民的模型均已配置完成，现在可以开始游戏。"
-		),
+		String(initial_completion.get("message", "")),
 		20,
 		PageTheme.INK_MUTED,
 		"ResponsiveModalBody",
@@ -543,15 +568,7 @@ func _build_native_completion_modal() -> void:
 	_native_modal_return_button.pressed.connect(_close_completion_modal)
 	actions.add_child(_native_modal_return_button)
 	_native_modal_start_button = _button(
-		(
-			"确认入镇"
-			if single_resident_mode
-			else "确认并返回"
-			if return_to_provider_settings
-			else "保存修改"
-			if in_session_mode
-			else "开始游戏"
-		),
+		String(initial_completion.get("confirm", "开始游戏")),
 		22,
 		"success",
 		"ResponsiveModalStart",
@@ -559,6 +576,36 @@ func _build_native_completion_modal() -> void:
 	_native_modal_start_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_native_modal_start_button.pressed.connect(_start_game_from_completion_modal)
 	actions.add_child(_native_modal_start_button)
+
+
+func _wire_native_focus_neighbors() -> void:
+	var header_buttons: Array[Button] = []
+	for button: Button in [_back_button, _provider_settings_button, _mode_button]:
+		if button != null and button.visible:
+			header_buttons.append(button)
+	for index in header_buttons.size():
+		var button: Button = header_buttons[index]
+		button.focus_neighbor_left = (
+			button.get_path_to(header_buttons[index - 1])
+			if index > 0
+			else NodePath()
+		)
+		button.focus_neighbor_right = (
+			button.get_path_to(header_buttons[index + 1])
+			if index + 1 < header_buttons.size()
+			else NodePath()
+		)
+		button.focus_neighbor_bottom = button.get_path_to(_assign_button)
+	var header_focus_target: Button = (
+		header_buttons.back()
+		if not header_buttons.is_empty()
+		else _back_button
+	)
+	_assign_button.focus_neighbor_top = _assign_button.get_path_to(
+		header_focus_target,
+	)
+	_assign_button.focus_neighbor_bottom = _assign_button.get_path_to(_apply_button)
+	_apply_button.focus_neighbor_top = _apply_button.get_path_to(_assign_button)
 
 
 func _reset_provider_auto_refresh() -> void:
@@ -663,6 +710,7 @@ func _current_focus_id_for_refresh() -> String:
 		return ""
 	for fixed: Array in [
 		["back", _back_button],
+		["provider_settings", _provider_settings_button],
 		["mode", _mode_button],
 		["refresh", _refresh_button],
 		["assign", _assign_button],
@@ -708,6 +756,8 @@ func _presentation_view_model() -> Dictionary:
 func _render_provider_auto_refresh_feedback() -> void:
 	if is_instance_valid(_operation_label):
 		_operation_label.text = PROVIDER_AUTO_REFRESH_EXHAUSTED_MESSAGE
+	if is_instance_valid(_provider_settings_button):
+		_provider_settings_button.visible = _is_save_slot()
 	if is_instance_valid(_composite_desktop):
 		_composite_desktop.call("apply_view_model", _presentation_view_model())
 
@@ -730,7 +780,11 @@ func _build_header() -> void:
 	header_stack.add_child(_header_top)
 
 	_back_button = _button(
-		"← 返回模型设置" if return_to_provider_settings else "← 返回居民选择",
+		"← 返回模型设置"
+		if return_to_provider_settings
+		else "← 返回加载存档"
+		if _is_save_slot()
+		else "← 返回居民选择",
 		20,
 		"paper",
 		"BackButton",
@@ -738,6 +792,18 @@ func _build_header() -> void:
 	_back_button.custom_minimum_size = Vector2(210, 56)
 	_back_button.pressed.connect(_request_back)
 	_header_top.add_child(_back_button)
+	_provider_settings_button = _button(
+		"返回模型配置",
+		20,
+		"blue",
+		"ProviderSettingsButton",
+	)
+	_provider_settings_button.custom_minimum_size = Vector2(210, 56)
+	_provider_settings_button.pressed.connect(
+		func() -> void: _request_provider_settings(),
+	)
+	_provider_settings_button.visible = false
+	_header_top.add_child(_provider_settings_button)
 
 	var title := _label("居民模型工作台", 42, PageTheme.INK, "PageTitle")
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -748,7 +814,7 @@ func _build_header() -> void:
 	_mode_button.custom_minimum_size = Vector2(190, 56)
 	_mode_button.pressed.connect(_toggle_mode)
 	_header_top.add_child(_mode_button)
-	_mode_button.visible = not single_resident_mode
+	_mode_button.visible = not _is_single_resident()
 
 	_summary_grid = GridContainer.new()
 	_summary_grid.name = "SummaryGrid"
@@ -797,7 +863,7 @@ func _build_resident_section() -> void:
 	stack.add_theme_constant_override("separation", 10)
 	_resident_section.add_child(stack)
 	stack.add_child(_section_title(
-		"入镇居民" if single_resident_mode else "居民队列",
+		"入镇居民" if _is_single_resident() else "居民队列",
 		"ResidentQueueTitle",
 	))
 
@@ -915,10 +981,10 @@ func _render() -> void:
 	_progress.value = completed
 	var mode := String(_render_data.get("mode", "single"))
 	_mode_button.text = "返回单人模式" if mode == "batch" else "切换批量模式"
-	_mode_button.visible = not single_resident_mode
+	_mode_button.visible = not _is_single_resident()
 	_selected_count_label.text = (
 		"仅显示本次入镇居民"
-		if single_resident_mode
+		if _is_single_resident()
 		else "批量已选 %d 人" % (_render_data.get("selectedBatchResidentIds", []) as Array).size()
 		if mode == "batch"
 		else "单人模式 · 点击居民查看绑定"
@@ -1225,7 +1291,6 @@ func _render_inspector() -> void:
 	else:
 		var operation := _view_model.get("operation", {}) as Dictionary
 		var operation_status := String(operation.get("status", "idle"))
-		var error_message := UiViewModel.error_message(_view_model)
 		match operation_status:
 			"loading":
 				_operation_label.text = "正在更新正式分配状态…"
@@ -1236,9 +1301,17 @@ func _render_inspector() -> void:
 					else "操作完成，草稿与完成数已更新。"
 				)
 			"rejected":
-				_operation_label.text = error_message if not error_message.is_empty() else "操作被拒绝，原数据已保留。"
+				_operation_label.text = FeedbackPolicy.operation_failure_copy(
+					_view_model,
+					route_mode,
+					"操作被拒绝，原数据已保留。",
+				)
 			"error":
-				_operation_label.text = error_message if not error_message.is_empty() else "连接异常，原数据已保留。"
+				_operation_label.text = FeedbackPolicy.operation_failure_copy(
+					_view_model,
+					route_mode,
+					"连接异常，原数据已保留。",
+				)
 			"disabled":
 				_operation_label.text = "正式接口不可用。"
 			_:
@@ -1251,11 +1324,13 @@ func _render_inspector() -> void:
 	)
 	_apply_button.text = (
 		"确认入镇"
-		if single_resident_mode
+		if _is_single_resident()
 		else "确认并返回模型设置"
 		if return_to_provider_settings
 		else "保存模型分配"
-		if in_session_mode
+		if _is_in_session()
+		else "保存到此存档"
+		if _is_save_slot()
 		else "确认 %d 人模型分配" % int(_render_data.get("residentCount", SLOT_COUNT))
 	)
 
@@ -1273,6 +1348,11 @@ func _render_action_states() -> void:
 	)
 	_apply_button.disabled = not apply_enabled
 	_native_modal_start_button.disabled = not apply_enabled
+	_provider_settings_button.visible = FeedbackPolicy.provider_settings_available(
+		_presentation_view_model(),
+		route_mode,
+	)
+	_wire_native_focus_neighbors()
 	_native_modal_return_button.disabled = false
 	var loading := String((_view_model.get("operation", {}) as Dictionary).get("status", "")) == "loading"
 	if loading:
@@ -1346,6 +1426,12 @@ func _dispatch_prepared_action(intent: String, payload: Dictionary) -> Dictionar
 
 func _request_back() -> void:
 	request_back()
+
+
+func _request_provider_settings() -> void:
+	if not _is_save_slot():
+		return
+	provider_settings_requested.emit(_revision)
 
 
 func _dispatch_back() -> void:
@@ -1463,17 +1549,13 @@ func _open_completion_modal() -> void:
 		return
 	_completion_modal_open = true
 	var resident_count := int(_render_data.get("residentCount", SLOT_COUNT))
-	_set_completion_modal_message(
-		(
-			"这位新居民的模型已经配置完成\n确认后会立即进入小镇。"
-			if single_resident_mode
-			else "居民模型分配已更新\n确认后返回模型设置。"
-			if return_to_provider_settings
-			else "%d 位居民的模型均已配置完成\n保存后会立即用于当前小镇。" % resident_count
-			if in_session_mode
-			else "%d 位居民的模型均已配置完成\n现在可以开始游戏。" % resident_count
-		)
+	var completion := FeedbackPolicy.completion_copy(
+		route_mode,
+		return_to_provider_settings,
+		resident_count,
 	)
+	_native_modal_start_button.text = String(completion.get("confirm", "开始游戏"))
+	_set_completion_modal_message(String(completion.get("message", "")))
 	_sync_completion_modal_visibility()
 
 
@@ -1496,7 +1578,7 @@ func _start_game_from_completion_modal() -> void:
 		_set_completion_modal_message(
 			(
 				"暂时无法保存模型分配\n%s\n当前草稿已保留。"
-				if in_session_mode or return_to_provider_settings
+				if _is_in_session() or return_to_provider_settings
 				else "暂时无法开始游戏\n%s\n当前草稿已保留。"
 			)
 			% UiViewModel.player_reason(blocked_reason)
@@ -1524,7 +1606,7 @@ func _start_game_from_completion_modal() -> void:
 	_set_completion_modal_message(
 		(
 			"暂时无法保存模型分配\n%s\n当前草稿已保留。"
-			if in_session_mode or return_to_provider_settings
+			if _is_in_session() or return_to_provider_settings
 			else "暂时无法开始游戏\n%s\n当前草稿已保留。"
 		)
 		% reason
@@ -1578,7 +1660,14 @@ func _apply_responsive_layout() -> void:
 	if not is_node_ready():
 		_layout_queued = false
 		return
-	_apply_responsive_layout_for_size(get_viewport_rect().size)
+	# Layout coordinates live in this Control's canvas, not in the platform
+	# window's backing pixels. On Retina macOS the window can report a much
+	# larger physical size than this canvas; using that value here scales the
+	# 1672×941 composite twice and crops most of the page.
+	var canvas_size := get_viewport_rect().size
+	if canvas_size.x <= 0.0 or canvas_size.y <= 0.0:
+		canvas_size = size
+	_apply_responsive_layout_for_size(canvas_size)
 	_layout_queued = false
 
 
@@ -1595,8 +1684,9 @@ func _apply_responsive_layout_for_size(viewport_size: Vector2) -> void:
 	var use_accepted_composite := (
 		(
 			not mobile_runtime
-			and viewport_size.x >= 1720.0
-			and viewport_size.y >= 981.0
+			and viewport_size.x >= viewport_size.y
+			and viewport_size.x >= DESKTOP_COMPOSITE_MINIMUM_VIEWPORT.x
+			and viewport_size.y >= DESKTOP_COMPOSITE_MINIMUM_VIEWPORT.y
 		)
 		or (
 			mobile_runtime
@@ -1673,7 +1763,42 @@ func _apply_responsive_layout_for_size(viewport_size: Vector2) -> void:
 			if mobile_runtime
 			else ScrollContainer.SCROLL_MODE_AUTO
 		)
+	_apply_physical_touch_minimums(_runtime_display_size())
 	_sync_completion_modal_visibility()
+
+
+func _runtime_display_size() -> Vector2:
+	var window := get_tree().root if get_tree() != null else null
+	return Vector2(window.size) if window != null else get_viewport_rect().size
+
+
+func _apply_physical_touch_minimums(display_size: Vector2) -> void:
+	if size.x <= 0.0 or size.y <= 0.0 or display_size.x <= 0.0 or display_size.y <= 0.0:
+		return
+	var canvas_per_display := size / display_size
+	var required := Vector2(
+		TOUCH_TARGET_MIN * canvas_per_display.x,
+		TOUCH_TARGET_MIN * canvas_per_display.y,
+	)
+	for node: Node in get_tree().get_nodes_in_group(
+		"resident_model_assignment_touch_target",
+	):
+		if not is_ancestor_of(node) or not node is Control:
+			continue
+		var control := node as Control
+		if not control.has_meta("resident_model_assignment_source_minimum"):
+			control.set_meta(
+				"resident_model_assignment_source_minimum",
+				control.custom_minimum_size,
+			)
+		var source := control.get_meta(
+			"resident_model_assignment_source_minimum",
+			Vector2.ZERO,
+		) as Vector2
+		control.custom_minimum_size = Vector2(
+			maxf(source.x, required.x),
+			maxf(source.y, required.y),
+		)
 
 
 func _apply_mobile_section_minimum_sizes() -> void:
@@ -1737,7 +1862,7 @@ func _validate_contract(view_model: Dictionary, data: Dictionary) -> PackedStrin
 	if String(data.get("source", "")) != "runtime":
 		issues.append("source 必须为 runtime")
 	var expected_count := int(data.get("residentCount", 0))
-	if single_resident_mode:
+	if _is_single_resident():
 		expected_count = 1
 	elif not POPULATION_RULES.supports_resident_count(expected_count):
 		issues.append("residentCount 必须在 %d～%d 之间" % [
@@ -2003,6 +2128,8 @@ func _restore_pending_focus() -> void:
 		target = _composite_desktop.call("focus_target", _pending_focus_id) as Control
 	if _pending_focus_id == "back":
 		target = target if target != null else _back_button
+	elif _pending_focus_id == "provider_settings":
+		target = target if target != null else _provider_settings_button
 	elif _pending_focus_id == "mode":
 		target = target if target != null else _mode_button
 	elif _pending_focus_id == "refresh":
