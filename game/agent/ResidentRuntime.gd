@@ -27,6 +27,7 @@ var _pending_request_count := 0
 var _on_retired_drained := Callable()
 var _persistent_state_applied := false
 var _model_provider: Object
+var _prompt_compiler: AgentPromptCompiler
 var _departure_message_proposals: Dictionary = {}
 var _cancelled_departure_ids: Dictionary = {}
 
@@ -47,7 +48,6 @@ func _init(
 	_memory_system = ResidentMemorySystemScript.new(
 		_initialization,
 		memory_root,
-		photo_content_resolver,
 	)
 	_avatar_memory_module = ResidentAvatarMemoryModuleScript.new(
 		_initialization,
@@ -55,13 +55,14 @@ func _init(
 		avatar_person_id,
 		avatar_name,
 	)
-	var prompt_compiler := PromptCompilerScript.new(
+	_prompt_compiler = PromptCompilerScript.new(
 		_initialization,
 		"res://prompts",
 		photo_content_resolver,
+		avatar_person_id,
 	)
-	_initialization_errors = prompt_compiler.get_load_errors()
-	_decision_execution = DecisionExecutionScript.new(model_provider, prompt_compiler)
+	_initialization_errors = _prompt_compiler.get_load_errors()
+	_decision_execution = DecisionExecutionScript.new(model_provider, _prompt_compiler)
 
 
 func get_initialization_errors() -> Array[String]:
@@ -507,6 +508,35 @@ func request_json(model_request: Dictionary, on_complete: Callable) -> Dictionar
 		return {"ok": false, "errors": ["居民模型提供方不可用"]}
 	_request_json(model_request.duplicate(true), on_complete)
 	return {"ok": true, "started": true}
+
+
+func photo_inputs_for_wake(wake_packet: Dictionary) -> Array[Dictionary]:
+	if _prompt_compiler == null:
+		return []
+	return _prompt_compiler.photo_inputs_for_wake(wake_packet)
+
+
+func request_photo_description(
+	photos: Array,
+	request_id: String,
+	on_complete: Callable,
+) -> Dictionary:
+	if not on_complete.is_valid():
+		return {"ok": false, "errors": ["图片转文字回调无效"]}
+	if _prompt_compiler == null:
+		return {"ok": false, "errors": ["图片转文字提示词编译器不可用"]}
+	var model_request := _prompt_compiler.build_photo_description_request(photos)
+	if model_request.get("ok") == false:
+		return model_request
+	var normalized_request_id := request_id.strip_edges()
+	if not normalized_request_id.is_empty():
+		model_request["_agent_request_id"] = normalized_request_id
+	_request_json(model_request, on_complete)
+	return {
+		"ok": true,
+		"started": true,
+		"requestId": normalized_request_id,
+	}
 
 
 func cancel_model_request(request_id: String) -> Dictionary:

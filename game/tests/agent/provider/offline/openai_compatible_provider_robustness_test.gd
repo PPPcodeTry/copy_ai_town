@@ -31,6 +31,7 @@ class ImmediateTransport:
 
 	var response: Dictionary = {}
 	var requests := 0
+	var last_body: Dictionary = {}
 
 	func request_json(
 		_url: String,
@@ -39,6 +40,7 @@ class ImmediateTransport:
 		on_complete: Callable,
 	) -> int:
 		requests += 1
+		last_body = _body.duplicate(true)
 		on_complete.call(response.duplicate(true))
 		return OK
 
@@ -55,6 +57,7 @@ func _run() -> void:
 		await _test_transport_watchdog_completes_hung_request(provider_script)
 		await _test_transport_watchdog_releases_after_completion(provider_script)
 		_test_synchronous_transport_releases_request_state(provider_script)
+		_test_photo_description_history_is_redacted(provider_script)
 		await _test_transport_cancellation_releases_active_request(provider_script)
 		await _test_transport_cancel_all_releases_active_requests(provider_script)
 		_test_env_file_cache(provider_script)
@@ -194,6 +197,54 @@ func _test_synchronous_transport_releases_request_state(provider_script: Script)
 	collector = null
 	await process_frame
 	_expect(provider_weak.get_ref() == null, "同步完成后 Provider 引用可以释放")
+
+
+func _test_photo_description_history_is_redacted(provider_script: Script) -> void:
+	var transport := ImmediateTransport.new()
+	transport.response = {
+		"status": 200,
+		"choices": [{
+			"finish_reason": "stop",
+			"message": {"content": "{\"descriptions\":[\"一只猫\"]}"},
+		}],
+	}
+	var provider: RefCounted = provider_script.new(null, transport, {
+		"api_key": "photo-redaction-key",
+		"endpoint": "https://compatible.example/v1/chat/completions",
+		"api_model": "vendor-model",
+		"input_modalities": ["text", "image"],
+	})
+	var raw_image_url := "data:image/png;base64,raw-picture-bytes"
+	var collector := ResultCollector.new()
+	provider.call(
+		"request_decision",
+		{
+			"request_kind": "photo_description",
+			"_agent_request_id": "photo-redaction-request",
+			"photo_count": 1,
+			"messages": [{
+				"role": "user",
+				"content": [
+					{"type": "text", "text": "描述照片"},
+					{"type": "image_url", "image_url": {"url": raw_image_url}},
+				],
+			}],
+		},
+		collector.collect,
+	)
+	_expect_equal(collector.values.size(), 1, "图片转文字请求正常完成")
+	_expect(
+		JSON.stringify(transport.last_body).contains(raw_image_url),
+		"图片原文只进入本次 transport 请求",
+	)
+	_expect(
+		not JSON.stringify(provider.call("get_model_requests")).contains(raw_image_url),
+		"Provider 模型请求历史不保留图片 data URL",
+	)
+	_expect(
+		not JSON.stringify(provider.call("get_requests")).contains(raw_image_url),
+		"Provider 请求审计历史不保留图片 data URL",
+	)
 
 
 func _test_transport_cancellation_releases_active_request(provider_script: Script) -> void:

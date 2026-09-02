@@ -425,20 +425,9 @@ func _test_photo_store_cleanup(suffix: String) -> void:
 	var session_root := "%s/%s/%s" % [photo_root, slot_id, session_id]
 	var photo_ref := "chat-photo-sha256-%s" % "a".repeat(64)
 	var destination := "%s/%s.bin" % [session_root, photo_ref]
-	var legacy_temporary := "%s.tmp" % destination
-	var short_temporary := String(store.call(
-		"_temporary_photo_path",
-		destination,
-	))
 	_expect(
-		_simulated_windows_path(legacy_temporary).length()
-			>= WINDOWS_LEGACY_MAX_PATH,
-		"旧式照片临时文件会越过传统 Windows 路径边界",
-	)
-	_expect(
-		_simulated_windows_path(short_temporary).length()
-			< WINDOWS_LEGACY_MAX_PATH,
-		"照片临时文件使用浅层固定长度路径",
+		not FileAccess.file_exists(destination),
+		"建立照片会话不会创建照片文件",
 	)
 	_expect(
 		_write_nested_fixture(session_root),
@@ -447,6 +436,11 @@ func _test_photo_store_cleanup(suffix: String) -> void:
 	_expect_ok(
 		store.call("discard_unpublished_session") as Dictionary,
 		"未发布照片会话可递归删除",
+	)
+	_expect_equal(
+		(store.call("audit_snapshot") as Dictionary).get("entryCount"),
+		0,
+		"清理未发布照片会话后不会残留内存条目",
 	)
 	_expect(
 		not DirAccess.dir_exists_absolute(

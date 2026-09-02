@@ -15,7 +15,6 @@ const ORGANIZER_PROMPT := "res://prompts/memory/10_memory_organizer.md"
 const ContinuityGuardScript := preload(
 	"res://agent/memory/MemoryContinuityGuard.gd",
 )
-const ModelImageContentScript := preload("res://agent/prompt/ModelImageContent.gd")
 const PromptTextScript := preload("res://agent/prompt/PromptText.gd")
 
 # 提示词文件是静态内容，进程级缓存一份；组装结果按实例缓存（initialization 不变）。
@@ -23,7 +22,6 @@ static var _prompt_text_cache: Dictionary = {}
 
 var _initialization: Dictionary
 var _store: RefCounted
-var _photo_content_resolver: Object
 var _resident_names: Dictionary = {}
 var _continuity_guard: RefCounted
 var _system_prompt_cache := ""
@@ -32,12 +30,10 @@ var _system_prompt_cache := ""
 func _init(
 	initialization: Dictionary,
 	store: RefCounted,
-	photo_content_resolver: Object = null,
 ) -> void:
 	# initialization 为共享只读数据（约定不可变），各组件持引用不再各存深拷贝。
 	_initialization = initialization
 	_store = store
-	_photo_content_resolver = photo_content_resolver
 	_continuity_guard = ContinuityGuardScript.new(_initialization)
 	_index_resident_names()
 
@@ -60,13 +56,6 @@ func build_request(
 	if not retry_feedback.strip_edges().is_empty():
 		sections.append("[压缩重试]\n%s" % _safe(retry_feedback))
 	var user_text := "\n\n".join(sections)
-	var content_result: Dictionary = ModelImageContentScript.build(
-		user_text,
-		evidence_items,
-		_photo_content_resolver,
-	)
-	if not bool(content_result.get("ok", false)):
-		return content_result
 	return {
 		"ok": true,
 		"request_kind": "memory_organization",
@@ -74,7 +63,7 @@ func build_request(
 		"old_memory": (old_validation["memory"] as Dictionary).duplicate(true),
 		"messages": [
 			{"role": "system", "content": prompt_result["content"]},
-			{"role": "user", "content": content_result["content"]},
+			{"role": "user", "content": user_text},
 		],
 	}
 
@@ -314,8 +303,7 @@ func _render_turn(value: Variant) -> String:
 		_safe(turn.get("say", "")),
 		_safe(turn.get("narration", "")),
 	]
-	var photo_refs := _render_photo_refs(turn.get("photos", []))
-	return rendered if photo_refs.is_empty() else "%s；%s" % [rendered, photo_refs]
+	return rendered
 
 
 func _render_action(action: Dictionary) -> String:
@@ -368,8 +356,7 @@ func _render_action(action: Dictionary) -> String:
 		_safe(action_type),
 		detail,
 	]
-	var photo_refs := _render_photo_refs(action.get("photos", []))
-	return rendered if photo_refs.is_empty() else "%s；%s" % [rendered, photo_refs]
+	return rendered
 
 
 func _index_resident_names() -> void:
@@ -392,19 +379,6 @@ func _person_label(name: Variant, resident_id: Variant) -> String:
 	if safe_id.strip_edges().is_empty():
 		return safe_name
 	return "%s（%s）" % [safe_name, safe_id]
-
-
-func _render_photo_refs(value: Variant) -> String:
-	if typeof(value) != TYPE_ARRAY:
-		return ""
-	var refs: Array[String] = []
-	for photo_value: Variant in value as Array:
-		if typeof(photo_value) != TYPE_DICTIONARY:
-			continue
-		var ref := _safe((photo_value as Dictionary).get("ref", ""))
-		if not ref.strip_edges().is_empty():
-			refs.append(ref)
-	return "" if refs.is_empty() else "照片引用：%s" % "、".join(refs)
 
 
 func _render_time(value: Variant) -> String:

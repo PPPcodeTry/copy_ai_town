@@ -859,6 +859,38 @@ func request_json_for_resident(
 	) as Dictionary
 
 
+func photo_inputs_for_resident(
+	resident_id: String,
+	wake_packet: Dictionary,
+) -> Array[Dictionary]:
+	if not _session_open or not _residents.has(resident_id):
+		return []
+	var resident := _residents[resident_id] as AgentResidentRuntime
+	return resident.photo_inputs_for_wake(wake_packet) if resident != null else []
+
+
+func request_photo_description_for_resident(
+	resident_id: String,
+	photos: Array,
+	request_id: String,
+	on_complete: Callable,
+) -> Dictionary:
+	if not _session_open:
+		return {"ok": false, "errors": ["Agent 会话已关闭"]}
+	if not _residents.has(resident_id):
+		return {"ok": false, "errors": ["居民 %s 尚未初始化" % resident_id]}
+	if not on_complete.is_valid():
+		return {"ok": false, "errors": ["图片转文字回调无效"]}
+	var resident := _residents[resident_id] as AgentResidentRuntime
+	if resident == null:
+		return {"ok": false, "errors": ["居民运行时类型无效"]}
+	return resident.request_photo_description(
+		photos,
+		request_id,
+		on_complete,
+	)
+
+
 func cancel_resident_model_request(
 	resident_id: String,
 	request_id: String,

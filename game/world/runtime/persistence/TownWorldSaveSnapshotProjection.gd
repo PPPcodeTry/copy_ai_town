@@ -87,6 +87,10 @@ static func capture(context: Dictionary) -> Dictionary:
 			"worldRevision": int(context.get("worldRevision", 0)),
 		},
 	}
+	# 照片不是存档数据。这里对完整快照再做一次递归清理，既覆盖
+	# 新运行时的所有副本，也兼容尚未迁移的旧内存状态；保留 photos=[]
+	# 是为了满足旧版 SaveCodec 的回合结构校验。
+	_strip_photo_fields(state)
 	if not SAVE_CODEC.has_exact_string_keys(
 		state,
 		SAVE_CODEC.STATE_KEYS + SAVE_CODEC.OPTIONAL_STATE_KEYS,
@@ -207,6 +211,7 @@ static func _resident_snapshot(
 	var pending_results := (resident.get("inflightResults", []) as Array).duplicate(true)
 	pending_results.append_array((resident.get("resultQueue", []) as Array).duplicate(true))
 	pending_results = ACTION_VALIDATION.deduplicated_action_results(pending_results)
+	_strip_photo_fields(pending_events)
 	var used_action_ids: Array = (resident.get("usedActionIds", {}) as Dictionary).keys()
 	used_action_ids.sort()
 	return {
@@ -246,7 +251,7 @@ static func _resident_snapshot(
 		),
 		"routeConnector": (resident.get("routeConnector", []) as Array).duplicate(true),
 		"conversationId": String(resident.get("conversationId", "")),
-		"conversation": _duplicate_optional_dictionary(resident.get("conversation")),
+		"conversation": _sanitized_optional_dictionary(resident.get("conversation")),
 		"pendingEvents": pending_events,
 		"pendingActionResults": pending_results,
 		"usedActionIds": used_action_ids,
@@ -255,6 +260,27 @@ static func _resident_snapshot(
 
 static func _duplicate_optional_dictionary(value: Variant) -> Variant:
 	return (value as Dictionary).duplicate(true) if value is Dictionary else null
+
+
+static func _sanitized_optional_dictionary(value: Variant) -> Variant:
+	var copied: Variant = _duplicate_optional_dictionary(value)
+	_strip_photo_fields(copied)
+	return copied
+
+
+static func _strip_photo_fields(value: Variant) -> void:
+	if value is Array:
+		for item: Variant in value as Array:
+			_strip_photo_fields(item)
+		return
+	if not value is Dictionary:
+		return
+	var data := value as Dictionary
+	if data.has("photos"):
+		data["photos"] = []
+	for key: Variant in data.keys():
+		if key != "photos":
+			_strip_photo_fields(data[key])
 
 
 static func _failure(errors: Array) -> Dictionary:

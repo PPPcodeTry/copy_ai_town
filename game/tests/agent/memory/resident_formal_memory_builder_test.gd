@@ -10,9 +10,9 @@ func _initialize() -> void:
 	_test_repeated_claim_updates_in_place()
 	_test_unrelated_reply_from_same_speaker_stays_separate()
 	_test_intervened_claim_can_be_discovered_by_conflicting_evidence()
-	_test_photo_only_turn_forms_traceable_memory()
-	_test_photo_evidence_reappraises_matching_memory()
-	_test_spoken_claim_with_photo_remains_hearsay()
+	_test_photo_only_turn_without_text_is_ignored()
+	_test_photo_evidence_is_not_used_as_memory()
+	_test_spoken_claim_with_photo_stays_text_only()
 	_test_item_clue_can_make_a_conflicting_memory_doubtful()
 	_test_weather_change_forms_persistent_memory()
 	_test_witnessed_conflict_forms_firsthand_memory()
@@ -134,28 +134,19 @@ func _test_unrelated_reply_from_same_speaker_stays_separate() -> void:
 	)
 
 
-func _test_photo_only_turn_forms_traceable_memory() -> void:
+func _test_photo_only_turn_without_text_is_ignored() -> void:
 	var evidence := _conversation_evidence("conversation-photo", "", "")
 	var turn := (
 		(((evidence["wake_packet"] as Dictionary)["events"] as Array)[0] as Dictionary)["turns"] as Array
 	)[0] as Dictionary
 	turn["photos"] = [{"ref": "photo-market-clock", "mime_type": "image/png"}]
 	var result := _build(_empty_archive(), _empty_log(), evidence)
-	_expect_ok(result, "photo-only conversation evidence builds")
+	_expect_ok(result, "photo-only conversation evidence is accepted without image memory")
 	var entries := ((result.get("archive", {}) as Dictionary).get("entries", []) as Array)
-	var heard := _entry_for_source(entries, "firsthand")
-	_expect(
-		(heard.get("evidence_refs", []) as Array).has("photo:photo-market-clock"),
-		"photo evidence reference remains traceable without exposing image data",
-	)
-	_expect_equal(
-		heard.get("claim_root_id"),
-		"photo:photo-market-clock",
-		"photo-only evidence keeps a stable photo claim root",
-	)
+	_expect_equal(entries.size(), 0, "a photo without converted text does not create a memory")
 
 
-func _test_photo_evidence_reappraises_matching_memory() -> void:
+func _test_photo_evidence_is_not_used_as_memory() -> void:
 	var first := _build(
 		_empty_archive(),
 		_empty_log(),
@@ -192,25 +183,25 @@ func _test_photo_evidence_reappraises_matching_memory() -> void:
 			"short_term_goals": "",
 		},
 	)
-	_expect_ok(result, "photo evidence is reappraised")
+	_expect_ok(result, "unconverted photo evidence is ignored")
 	var changed_entries := (
 		(result.get("archive", {}) as Dictionary).get("entries", []) as Array
 	)
 	var changed := _entry_for_id(changed_entries, target_id)
 	_expect_equal(
 		changed.get("state"),
-		"anomalous",
-		"a semantically matching contradictory photo can expose an intervention",
+		"influencing",
+		"an unconverted photo cannot add a new cognitive change",
 	)
 	_expect(
-		(changed.get("evidence_refs", []) as Array).has(
+		not (changed.get("evidence_refs", []) as Array).has(
 			"photo:photo-empty-counter",
 		),
-		"the cognitive change keeps the photo as its evidence",
+		"formal memory keeps no photo reference",
 	)
 
 
-func _test_spoken_claim_with_photo_remains_hearsay() -> void:
+func _test_spoken_claim_with_photo_stays_text_only() -> void:
 	var evidence := _conversation_evidence(
 		"conversation-spoken-photo",
 		"钟楼上的钟已经停了。",
@@ -231,8 +222,10 @@ func _test_spoken_claim_with_photo_remains_hearsay() -> void:
 	)
 	var photo_memory := _entry_for_source(entries, "firsthand")
 	_expect(
-		(photo_memory.get("evidence_refs", []) as Array).has("photo:photo-stopped-clock"),
-		"the attached photo forms independent firsthand evidence instead of changing the spoken claim's source",
+		not (photo_memory.get("evidence_refs", []) as Array).has(
+			"photo:photo-stopped-clock",
+		),
+		"the attached photo does not form independent evidence",
 	)
 
 

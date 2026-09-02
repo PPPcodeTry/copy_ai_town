@@ -184,47 +184,23 @@ func _event_evidence(event: Dictionary, summary: Dictionary) -> Array[Dictionary
 			var turn := turn_value as Dictionary
 			var say := String(turn.get("say", "")).strip_edges()
 			var narration := String(turn.get("narration", "")).strip_edges()
-			var photo_refs := _turn_photo_refs(turn)
-			if say.is_empty() and narration.is_empty() and photo_refs.is_empty():
+			if say.is_empty() and narration.is_empty():
 				continue
 			var speaker_id := String(turn.get("speaker_resident_id", ""))
 			var speaker_name := String(turn.get("speaker", "")).strip_edges()
-			var photo_only := say.is_empty() and narration.is_empty() and not photo_refs.is_empty()
 			var subject := "%s说：%s" % [speaker_name, say] if not say.is_empty() else "%s%s" % [speaker_name, narration]
 			var topic_text := say if not say.is_empty() else narration
-			if photo_only:
-				var photo_meaning := _photo_meaning(summary)
-				if photo_meaning.is_empty():
-					subject = "%s向我展示了一张照片。" % speaker_name
-					topic_text = "照片"
-				else:
-					subject = "%s向我展示的照片显示：%s" % [
-						speaker_name,
-						photo_meaning,
-					]
-					topic_text = photo_meaning
 			var claim_root := String(
 				turn.get("memory_claim_root_id", ""),
 			).strip_edges()
-			if claim_root.is_empty() and photo_only:
-				claim_root = photo_refs[0]
-			elif claim_root.is_empty():
+			if claim_root.is_empty():
 				claim_root = "conversation:%s:turn:%d" % [
 					String(event.get("conversation_id", "")),
 					int(turn.get("turn_id", 0)),
 				]
 			var evidence_refs: Array = [source_ref, claim_root]
-			if photo_only:
-				for photo_ref: String in photo_refs:
-					if not evidence_refs.has(photo_ref):
-						evidence_refs.append(photo_ref)
-			var source_kind := "firsthand" if speaker_id == _resident_id or photo_only else "hearsay"
+			var source_kind := "firsthand" if speaker_id == _resident_id else "hearsay"
 			var spoken_interpretation := _summary_interpretation(summary, subject)
-			if not photo_only and not photo_refs.is_empty():
-				# The organizer's first current-thought line describes the attached
-				# image. Do not also assign that meaning to the speaker's sentence,
-				# otherwise the speech trace can steal the photo's semantic match.
-				spoken_interpretation = subject
 			result.append(_evidence_record(
 				subject,
 				spoken_interpretation,
@@ -237,28 +213,6 @@ func _event_evidence(event: Dictionary, summary: Dictionary) -> Array[Dictionary
 				claim_root,
 				evidence_refs,
 			))
-			# A photo attached to spoken text carries two different sources:
-			# the speaker's words remain hearsay, while what the resident can see
-			# in the image is firsthand evidence. Keep both instead of letting the
-			# speech attribution swallow the photo's independent meaning.
-			if not photo_only and not photo_refs.is_empty():
-				var attached_photo_meaning := _photo_meaning(summary)
-				if not attached_photo_meaning.is_empty():
-					var attached_refs: Array = [source_ref]
-					for photo_ref: String in photo_refs:
-						attached_refs.append(photo_ref)
-					result.append(_evidence_record(
-						"照片显示：%s" % attached_photo_meaning,
-						attached_photo_meaning,
-						[],
-						[],
-						_topics(attached_photo_meaning),
-						event.get("time", {}),
-						"firsthand",
-						"",
-						photo_refs[0],
-						attached_refs,
-					))
 		return result
 	if event_type == "冲突见闻":
 		var conflict_summary := String(event.get("summary", "")).strip_edges()
@@ -322,19 +276,6 @@ func _event_evidence(event: Dictionary, summary: Dictionary) -> Array[Dictionary
 			"event:%s" % String(event.get("event_id", "")),
 			[source_ref],
 		))
-	return result
-
-
-func _turn_photo_refs(turn: Dictionary) -> Array[String]:
-	var result: Array[String] = []
-	if typeof(turn.get("photos")) != TYPE_ARRAY:
-		return result
-	for photo_value: Variant in turn.get("photos", []) as Array:
-		if typeof(photo_value) != TYPE_DICTIONARY:
-			continue
-		var photo_ref := String((photo_value as Dictionary).get("ref", "")).strip_edges()
-		if not photo_ref.is_empty():
-			result.append("photo:%s" % photo_ref)
 	return result
 
 
@@ -526,15 +467,6 @@ func _similarity_bigrams(text: String) -> Dictionary:
 	for index: int in maxi(0, stripped.length() - 1):
 		result[stripped.substr(index, 2)] = true
 	return result
-
-
-func _photo_meaning(summary: Dictionary) -> String:
-	var current := String(summary.get("current_thoughts", "")).strip_edges()
-	for line_value: Variant in current.replace("\r", "\n").split("\n", false):
-		var line := String(line_value).strip_edges()
-		if not line.is_empty():
-			return line.left(360)
-	return ""
 
 
 func _result_label(status: String) -> String:
