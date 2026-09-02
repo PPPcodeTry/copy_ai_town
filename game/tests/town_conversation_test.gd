@@ -1270,6 +1270,22 @@ func _test_store_contract(photo_path: String) -> void:
 		"取消选择没有释放未提交照片",
 	)
 	var prepared_store: RefCounted = PHOTO_STORE.new()
+	var transient_photo_root := "user://tests/town_conversation_photos/transient-%d" % Time.get_ticks_usec()
+	var transient_save_root := "user://tests/town_session_saves/transient-%d" % Time.get_ticks_usec()
+	_expect_equal(
+		(prepared_store.call(
+			"configure_test_roots",
+			transient_photo_root,
+			transient_save_root,
+		) as Dictionary).get("ok"),
+		true,
+		"照片暂存测试目录配置成功",
+	)
+	_expect_equal(
+		(prepared_store.call("configure_session", "slot", "session") as Dictionary).get("ok"),
+		true,
+		"照片暂存会话配置成功",
+	)
 	var prepared := prepared_store.call(
 		"stage_file",
 		photo_path,
@@ -1305,6 +1321,37 @@ func _test_store_contract(photo_path: String) -> void:
 			"resident-lin",
 		)),
 		"预检后的照片无法完成提交",
+	)
+	var committed_photo_path := "%s/%s/%s/%s.bin" % [
+		transient_photo_root,
+		"slot",
+		"session",
+		String(prepared.get("ref", "")),
+	]
+	_expect(
+		not FileAccess.file_exists(committed_photo_path),
+		"照片提交没有把原始字节写入会话目录",
+	)
+	var consumed := prepared_store.call(
+		"consume_photo",
+		prepared.get("ref"),
+		prepared.get("mimeType"),
+	) as Dictionary
+	_expect(
+		bool(consumed.get("ok", false))
+		and consumed.get("bytes") is PackedByteArray
+		and not (consumed.get("bytes") as PackedByteArray).is_empty(),
+		"一次性图片转文字入口可以取得内存字节",
+	)
+	_expect_equal(
+		(prepared_store.call("audit_snapshot") as Dictionary).get("entryCount"),
+		0,
+		"图片被消费后内存暂存立即清空",
+	)
+	_expect_equal(
+		(prepared_store.call("discard_unpublished_session") as Dictionary).get("ok"),
+		true,
+		"图片暂存测试会话可以清理",
 	)
 	var invalid_path := "%s.invalid" % photo_path
 	var invalid_file := FileAccess.open(invalid_path, FileAccess.WRITE)
@@ -1530,8 +1577,8 @@ func _test_formal_adapter_and_screen(photo_path: String) -> void:
 	var history_snapshot := screen.call("runtime_gate_snapshot") as Dictionary
 	_expect_equal(
 		history_snapshot.get("historyPhotoPreviewCount"),
-		1,
-		"照片发送成功后聊天记录没有显示照片预览",
+		0,
+		"照片发送后聊天记录只保留文字，不保留照片预览",
 	)
 
 	screen.call("_on_photo_selected", photo_path)

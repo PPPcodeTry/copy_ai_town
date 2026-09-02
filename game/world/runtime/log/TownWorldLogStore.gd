@@ -87,6 +87,7 @@ func append_public_event(source: Dictionary) -> Dictionary:
 			payload.get("placeId", payload.get("place_name", "")),
 		),
 	).strip_edges()
+	var sanitized_payload := _sanitize_payload_for_log(payload)
 	var record := {
 		"schemaVersion": SCHEMA_VERSION,
 		"timelineId": _timeline_id,
@@ -118,8 +119,8 @@ func append_public_event(source: Dictionary) -> Dictionary:
 		"status": _record_status(source, payload),
 		"attention": _attention(source, payload),
 		"references": _references(source, payload, reference),
-		"payload": _sanitize_payload_for_log(payload),
-		"attachmentRefs": _attachment_refs(payload),
+		"payload": sanitized_payload,
+		"attachmentRefs": _attachment_refs(sanitized_payload),
 	}
 	return append_batch([record])
 
@@ -1847,7 +1848,21 @@ func _sanitize_payload_for_log(payload: Dictionary) -> Dictionary:
 	sanitized.erase("storyEventId")
 	sanitized.erase("storyType")
 	sanitized.erase("storyRootEventIds")
+	_strip_photo_fields(sanitized)
 	return sanitized
+
+
+func _strip_photo_fields(value: Variant) -> void:
+	if value is Array:
+		for item: Variant in value as Array:
+			_strip_photo_fields(item)
+		return
+	if not value is Dictionary:
+		return
+	var data := value as Dictionary
+	data.erase("photos")
+	for key: Variant in data.keys():
+		_strip_photo_fields(data[key])
 
 
 func _sanitize_record_output(record: Dictionary) -> Dictionary:

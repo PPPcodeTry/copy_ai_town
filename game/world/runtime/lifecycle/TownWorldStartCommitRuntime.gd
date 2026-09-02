@@ -108,6 +108,7 @@ static func start(
 	host.activity_routine_state.reset()
 	host.activity_work_task_bindings.reset()
 	host.private_message_runtime.reset()
+	host.conversation_state.clear_transient_photo_conversations()
 	host.world_definition.opening = opening_config.duplicate(true)
 	host.world_definition.owners = (opening_config.get("ownerAssignments", {}) as Dictionary).duplicate(true)
 	host.resident_registry.records.clear()

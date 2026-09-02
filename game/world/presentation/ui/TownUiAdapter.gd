@@ -2341,7 +2341,8 @@ func _project_conversation_messages(conversation: Dictionary) -> Array[Dictionar
 			"narration": str(turn.get("narration", "")),
 			"action": public_action,
 			"expressionId": str(turn.get("expression_id", turn.get("expressionId", ""))),
-			"photos": (turn.get("photos", []) as Array).duplicate(true),
+			# 对话历史只展示图片转成的文字；原始图片不会进入表现层历史。
+			"photos": [],
 		})
 	return messages
 

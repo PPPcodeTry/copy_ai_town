@@ -670,7 +670,7 @@ var actor_presentation_state: TownWorldActorPresentationState = (
 	ACTOR_PRESENTATION_STATE.new()
 )
 var _traveler_relationship_state := TownTravelerRelationshipState.new()
-var conversation_state: TownConversationState = CONVERSATION_STATE.new()
+var conversation_state: TownConversationState = CONVERSATION_STATE.new(_traveler_relationship_state)
 var world_log_domain: TownWorldLogDomainState = WORLD_LOG_DOMAIN_STATE.new()
 var event_journal: TownWorldEventJournalRuntime:
 	get:

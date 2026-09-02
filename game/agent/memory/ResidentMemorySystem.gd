@@ -80,7 +80,6 @@ static var _standalone_generation := 0
 func _init(
 	initialization: Dictionary,
 	memory_root: String = "",
-	photo_content_resolver: Object = null,
 ) -> void:
 	# initialization 为共享只读数据（约定不可变），各组件持引用不再各存深拷贝。
 	_initialization = initialization
@@ -123,7 +122,6 @@ func _init(
 	_organizer = MemoryOrganizerScript.new(
 		_initialization,
 		_store,
-		photo_content_resolver,
 	)
 
 

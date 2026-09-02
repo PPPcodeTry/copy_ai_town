@@ -2,10 +2,8 @@ class_name AgentModelImageContent
 extends RefCounted
 
 
-# 照片 ref 为内容寻址（字节 SHA-256），data URL 按 ref+mime 缓存不会失效；
-# base64 使字节膨胀 33%，重复编译请求不再重复编码。
-const MAX_DATA_URL_CACHE_ENTRIES := 24
-static var _data_url_cache: Dictionary = {}
+# 照片只用于一次性的图片转文字请求。不能按 ref 缓存 data URL，否则图片
+# 即使已经转成文字，仍会在进程内被保留，并且可能被后续请求意外复用。
 
 
 static func build(
@@ -31,13 +29,6 @@ static func build(
 		var mime_type := String(photo["mime_type"])
 		if not _safe_image_mime_type(mime_type):
 			return {"ok": false, "errors": ["照片媒体类型不受支持：%s" % mime_type]}
-		var cache_key := "%s|%s" % [ref, mime_type]
-		if _data_url_cache.has(cache_key):
-			parts.append({
-				"type": "image_url",
-				"image_url": {"url": _data_url_cache[cache_key]},
-			})
-			continue
 		var resolved: Variant = photo_content_resolver.call(
 			"resolve_photo",
 			ref,
@@ -61,9 +52,6 @@ static func build(
 			mime_type,
 			Marshalls.raw_to_base64(bytes_value as PackedByteArray),
 		]
-		if _data_url_cache.size() >= MAX_DATA_URL_CACHE_ENTRIES:
-			_data_url_cache.clear()
-		_data_url_cache[cache_key] = data_url
 		parts.append({
 			"type": "image_url",
 			"image_url": {"url": data_url},

@@ -13,6 +13,11 @@ const ACTION_PREVIEW_RUNTIME := preload(
 static func create_snapshot(host) -> Dictionary:
 	if not host._running:
 		return host._command_failure("WORLD_NOT_RUNNING", ["世界尚未运行"])
+	if host.conversation_state.has_unmaterialized_photo_conversations():
+		return host._command_failure(
+			"CONVERSATION_PHOTO_PROCESSING",
+			["照片正在转换为文字，请稍后保存"],
+		)
 	ACTION_PREVIEW_RUNTIME.release_observed(host)
 	var interrupted_results: Array[Dictionary] = (
 		host._activity_runtime.reconcile_activity_routines_before_save(

@@ -25,17 +25,20 @@ var _baseline_prompt: String
 var _prompt_root: String
 var _load_errors: Array[String] = []
 var _photo_content_resolver: Object
+var _avatar_person_id := ""
 
 
 func _init(
 	initialization: Dictionary,
 	prompt_root: String = DEFAULT_PROMPT_ROOT,
 	photo_content_resolver: Object = null,
+	avatar_person_id: String = "",
 ) -> void:
 	# initialization 为共享只读数据（约定不可变），各组件持引用不再各存深拷贝。
 	_initialization = initialization
 	_prompt_root = prompt_root.trim_suffix("/")
 	_photo_content_resolver = photo_content_resolver
+	_avatar_person_id = avatar_person_id.strip_edges()
 	_index_resident_names()
 	var static_prompt: String
 	if _static_prompt_cache.has(_prompt_root):
@@ -60,6 +63,10 @@ func compile(
 	retry_feedback: String = "",
 ) -> Dictionary:
 	var wake_copy := wake_packet.duplicate(true)
+	# 居民决策永远只接收文字。照片在进入这一步之前，已经由 Gateway
+	# 完成一次性图片转文字；这里再做一层清理，防止旧事件或迟到快照把
+	# 图片引用重新带进普通决策请求。
+	_strip_photos_from_model_wake(wake_copy)
 	var derived_constraints := _build_derived_constraints(wake_copy)
 	var dynamic_context := _build_dynamic_context(
 		wake_copy,
@@ -67,13 +74,6 @@ func compile(
 		derived_constraints,
 		retry_feedback,
 	)
-	var content_result: Dictionary = ModelImageContentScript.build(
-		dynamic_context,
-		wake_copy,
-		_photo_content_resolver,
-	)
-	if not bool(content_result.get("ok", false)):
-		return content_result
 	return {
 		"request_kind": "resident_decision",
 		"initialization": _initialization.duplicate(true),
@@ -83,10 +83,110 @@ func compile(
 			{"role": "system", "content": _baseline_prompt},
 			{
 				"role": "user",
-				"content": content_result["content"],
+				"content": dynamic_context,
 			},
 		],
 	}
+
+
+func photo_inputs_for_wake(wake_packet: Dictionary) -> Array[Dictionary]:
+	# 只有当前居民与玩家的普通直聊，才允许触发一次图片转文字。
+	# 旁听、诊疗链和历史回合都不读取照片。
+	var latest_player_turn := _latest_player_turn_with_photos(wake_packet)
+	var allowed_photos: Array[Dictionary] = []
+	if typeof(latest_player_turn.get("photos")) == TYPE_ARRAY:
+		for photo_value: Variant in latest_player_turn.get("photos", []) as Array:
+			if photo_value is Dictionary:
+				allowed_photos.append((photo_value as Dictionary).duplicate(true))
+	return allowed_photos
+
+
+func build_photo_description_request(photos: Array) -> Dictionary:
+	if photos.is_empty():
+		return {"ok": false, "errors": ["图片转文字请求缺少照片"]}
+	if (
+		_photo_content_resolver == null
+		or not _photo_content_resolver.has_method("resolve_photo")
+	):
+		return {"ok": false, "errors": ["图片转文字没有可用的照片内容解析器"]}
+	var content_result := ModelImageContentScript.build(
+		"请按图片顺序描述照片中可直接看见的客观内容。只描述人物、物品、环境、文字和明显动作；看不清就说看不清，不要猜测身份、意图或伤口，不要给出医疗判断。只返回 JSON：{\"descriptions\":[\"描述1\",\"描述2\"]}。每条不超过 120 字。",
+		photos,
+		_photo_content_resolver,
+	) as Dictionary
+	if not bool(content_result.get("ok", false)):
+		return content_result
+	return {
+		"request_kind": "photo_description",
+		"photo_count": photos.size(),
+		"max_tokens": 220,
+		"messages": [
+			{
+				"role": "system",
+				"content": "你是一次性图片转文字工具。图片只允许被读取一次，输出后不要保留或引用图片。严格返回 JSON，不要解释。",
+			},
+			{"role": "user", "content": content_result.get("content", "")},
+		],
+	}
+
+
+func _latest_player_turn_with_photos(wake_packet: Dictionary) -> Dictionary:
+	if not _is_direct_player_chat(wake_packet):
+		return {}
+	var snapshot := wake_packet.get("snapshot", {}) as Dictionary
+	var conversation := snapshot.get("conversation", {}) as Dictionary
+	var conversation_id := String(conversation.get("conversation_id", ""))
+	var events := wake_packet.get("events", []) as Array
+	for index in range(events.size() - 1, -1, -1):
+		if not events[index] is Dictionary:
+			continue
+		var event := events[index] as Dictionary
+		if (
+			String(event.get("conversation_id", "")) != conversation_id
+			or String(event.get("type", "")) not in ["搭话", "对方答话"]
+			or not event.get("turn") is Dictionary
+		):
+			continue
+		var turn := event["turn"] as Dictionary
+		if String(turn.get("speaker_resident_id", "")) != _avatar_person_id:
+			continue
+		return {
+			"event_index": index,
+			"photos": (turn.get("photos", []) as Array).duplicate(true),
+		}
+	return {}
+
+
+func _is_direct_player_chat(wake_packet: Dictionary) -> bool:
+	if _avatar_person_id.is_empty():
+		return false
+	var snapshot := wake_packet.get("snapshot", {}) as Dictionary
+	var conversation_value: Variant = snapshot.get("conversation")
+	if not conversation_value is Dictionary:
+		return false
+	var conversation := conversation_value as Dictionary
+	if (
+		String(conversation.get("conversation_id", "")).strip_edges().is_empty()
+		or String(conversation.get("with_resident_id", "")) != _avatar_person_id
+	):
+		return false
+	var medical_context: Variant = conversation.get("medical_context")
+	return not medical_context is Dictionary or (medical_context as Dictionary).is_empty()
+
+
+func _strip_photos_from_model_wake(value: Variant) -> void:
+	if value is Array:
+		for item: Variant in value as Array:
+			_strip_photos_from_model_wake(item)
+		return
+	if not value is Dictionary:
+		return
+	var data := value as Dictionary
+	if data.has("photos"):
+		data["photos"] = []
+	for key: Variant in data.keys():
+		if key != "photos":
+			_strip_photos_from_model_wake(data[key])
 
 
 func _build_dynamic_context(
@@ -1348,12 +1448,11 @@ func _render_turns(turns: Array) -> Array[String]:
 	var lines: Array[String] = []
 	for turn_value: Variant in turns:
 		var turn := turn_value as Dictionary
-		lines.append("  - 第%s轮 %s：说“%s”；动作：%s；照片：%s" % [
+		lines.append("  - 第%s轮 %s：说“%s”；动作：%s" % [
 			_safe(turn.get("turn_id", "")),
 			_person(turn.get("speaker_resident_id", ""), turn.get("speaker", "")),
 			_safe(turn.get("say", "")),
 			_safe(turn.get("narration", "")),
-			_render_photos(turn.get("photos", []) as Array),
 		])
 	return lines
 
@@ -1379,19 +1478,6 @@ func _render_target_refs(target_refs: Dictionary) -> String:
 	for key: String in keys:
 		parts.append("%s=%s" % [key, _safe(target_refs.get(key, ""))])
 	return "、".join(parts)
-
-
-func _render_photos(photos: Array) -> String:
-	if photos.is_empty():
-		return "无"
-	var values: Array[String] = []
-	for photo_value: Variant in photos:
-		var photo := photo_value as Dictionary
-		values.append("%s（%s）" % [
-			_safe(photo.get("ref", "")),
-			_safe(photo.get("mime_type", "")),
-		])
-	return "、".join(values)
 
 
 func _render_people_pairs(ids_value: Variant, names_value: Variant) -> String:

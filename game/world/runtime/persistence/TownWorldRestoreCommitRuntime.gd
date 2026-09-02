@@ -140,6 +140,7 @@ static func install_core(host, context: Dictionary) -> void:
 	PERCEPTION_RUNTIME._rebuild_membership_grid_lookup(host)
 	host._dynamic_prop_runtime.reset()
 	host._agent_wake_preparation_runtime.clear()
+	host.conversation_state.clear_transient_photo_conversations()
 	host._animal_fact_runtime.restore_prepared(
 		prepared.get("animalFactsPrepared", {}) as Dictionary,
 	)

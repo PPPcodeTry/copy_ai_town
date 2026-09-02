@@ -80,7 +80,7 @@ func complete_next(repeat_count := 1) -> bool:
 
 
 func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
-	_requests.append(model_request.duplicate(true))
+	_requests.append(_request_record(model_request))
 	var result: Dictionary
 	if not _queued_results.is_empty():
 		result = (_queued_results.pop_front() as Dictionary).duplicate(true)
@@ -105,6 +105,11 @@ func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
 
 func _default_result_value(model_request: Dictionary) -> Dictionary:
 	var request_kind := String(model_request.get("request_kind", ""))
+	if request_kind == "photo_description":
+		var descriptions: Array[String] = []
+		for _index in maxi(1, int(model_request.get("photo_count", 1))):
+			descriptions.append("照片中可以看到清晰的日常场景。")
+		return {"descriptions": descriptions}
 	if request_kind == "memory_organization":
 		return (model_request.get("old_memory", {}) as Dictionary).duplicate(true)
 	if request_kind == "avatar_memory_organization":
@@ -122,6 +127,29 @@ func _default_result_value(model_request: Dictionary) -> Dictionary:
 	if request_kind == "departure_message":
 		return {"write": false, "message": ""}
 	return _build_default_decision(model_request)
+
+
+func _request_record(model_request: Dictionary) -> Dictionary:
+	var record := model_request.duplicate(true)
+	if String(record.get("request_kind", "")) != "photo_description":
+		return record
+	# 测试 Provider 也有请求历史；图片转文字完成后，历史只能留下类型和
+	# 数量，不能把 data URL 或原始照片字节继续挂在调试快照上。
+	var messages := record.get("messages", []) as Array
+	for message_value: Variant in messages:
+		if not message_value is Dictionary:
+			continue
+		var message := message_value as Dictionary
+		var content: Variant = message.get("content")
+		if not content is Array:
+			continue
+		for part_value: Variant in content as Array:
+			if not part_value is Dictionary:
+				continue
+			var part := part_value as Dictionary
+			if String(part.get("type", "")) == "image_url":
+				part["image_url"] = {"url": "[one-time image omitted]"}
+	return record
 
 
 func _build_default_decision(model_request: Dictionary) -> Dictionary:

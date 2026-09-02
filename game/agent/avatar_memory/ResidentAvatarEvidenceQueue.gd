@@ -388,7 +388,8 @@ func _append_turns(
 			"speaker": String(turn.get("speaker", "")),
 			"say": say,
 			"narration": narration,
-			"photos": (turn.get("photos", []) as Array).duplicate(true),
+			# 图片只允许在转文字阶段短暂存在；化身记忆只接收文字。
+			"photos": [],
 		}
 		target.append(_evidence_item(
 			source_ref,

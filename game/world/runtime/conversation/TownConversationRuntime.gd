@@ -91,6 +91,11 @@ static func _start_conversation(
 		)
 	action["conversationId"] = conversation_id
 	world.conversation_state.records[conversation_id] = conversation
+	if not (turn.get("photos", []) as Array).is_empty():
+		world.conversation_state.mark_transient_photo_conversation(
+			conversation_id,
+			true,
+		)
 	world.conversation_state.autonomous_idle_seconds[conversation_id] = 0.0
 	_hold_conversation_invitation_target(world, target_name)
 	_update_conversation_snapshots(world, traveler_relationship_state, conversation)
@@ -152,6 +157,11 @@ static func _apply_conversation_reply(
 		int(turn.get("turn_id", turns.size() + 1)),
 	)
 	turns.append(turn)
+	if not (turn.get("photos", []) as Array).is_empty():
+		world.conversation_state.mark_transient_photo_conversation(
+			conversation_id,
+			true,
+		)
 	_record_traveler_reply(
 		world,
 		traveler_relationship_state,
@@ -618,6 +628,140 @@ static func _conversation_turn(world, speaker_name: String, action: Dictionary, 
 	}
 
 
+static func materialize_conversation_photo_text(
+	world,
+	conversation_id: String,
+	descriptions: Dictionary,
+) -> Dictionary:
+	if (
+		conversation_id.strip_edges().is_empty()
+		or not world.conversation_state.records.has(conversation_id)
+	):
+		return {"ok": false, "changed": false, "errorCode": "CONVERSATION_NOT_FOUND"}
+	var conversation := world.conversation_state.records[conversation_id] as Dictionary
+	var changed := false
+	for turn_value: Variant in conversation.get("turns", []) as Array:
+		if turn_value is Dictionary:
+			changed = _materialize_photo_turn(
+				turn_value as Dictionary,
+				descriptions,
+			) or changed
+	# 对话回合、居民事件队列和 pending wake 都是不同的副本。统一替换，
+	# 保证图片不会在下一次唤醒或旁听时重新出现。
+	for resident_id: String in world.resident_registry.order:
+		var resident := world.resident_registry.records.get(resident_id, {}) as Dictionary
+		if resident.is_empty():
+			continue
+		var resident_changed := false
+		for field_name: String in ["eventQueue", "inflightEvents"]:
+			var events := resident.get(field_name, []) as Array
+			for event_value: Variant in events:
+				resident_changed = _materialize_photo_value(
+					event_value,
+					conversation_id,
+					descriptions,
+				) or resident_changed
+		var pending_wake := resident.get("pendingWake", {}) as Dictionary
+		if not pending_wake.is_empty():
+			resident_changed = _materialize_photo_value(
+				pending_wake,
+				conversation_id,
+				descriptions,
+			) or resident_changed
+		if resident_changed:
+			changed = true
+			world.AGENT_WAKE_STATE_RUNTIME.mark_dirty(resident)
+	if not changed:
+		world.conversation_state.mark_transient_photo_conversation(
+			conversation_id,
+			false,
+		)
+		return {"ok": true, "changed": false, "errorCode": ""}
+	_update_conversation_snapshots(
+		world,
+		world.conversation_state.traveler_relationship_state,
+		conversation,
+	)
+	world.bump_world_revision(false)
+	world.conversation_changed.emit(
+		conversation_id,
+		conversation.duplicate(true),
+	)
+	world.world_revision_changed.emit(world.get_world_revision())
+	world.conversation_state.mark_transient_photo_conversation(
+		conversation_id,
+		false,
+	)
+	return {"ok": true, "changed": true, "errorCode": ""}
+
+
+static func _materialize_photo_value(
+	value: Variant,
+	conversation_id: String,
+	descriptions: Dictionary,
+) -> bool:
+	if value is Array:
+		var changed := false
+		for item: Variant in value as Array:
+			changed = _materialize_photo_value(
+				item,
+				conversation_id,
+				descriptions,
+			) or changed
+		return changed
+	if not value is Dictionary:
+		return false
+	var data := value as Dictionary
+	var changed := false
+	if String(data.get("conversation_id", "")) == conversation_id:
+		if data.get("turn") is Dictionary:
+			changed = _materialize_photo_turn(
+				data.get("turn") as Dictionary,
+				descriptions,
+			) or changed
+		if data.get("turns") is Array:
+			for turn_value: Variant in data.get("turns", []) as Array:
+				if turn_value is Dictionary:
+					changed = _materialize_photo_turn(
+						turn_value as Dictionary,
+						descriptions,
+					) or changed
+	for key: Variant in data.keys():
+		if key in ["turn", "turns"]:
+			continue
+		changed = _materialize_photo_value(
+			data[key],
+			conversation_id,
+			descriptions,
+		) or changed
+	return changed
+
+
+static func _materialize_photo_turn(
+	turn: Dictionary,
+	descriptions: Dictionary,
+) -> bool:
+	var photos: Variant = turn.get("photos", [])
+	if not photos is Array or (photos as Array).is_empty():
+		return false
+	var notes: Array[String] = []
+	for photo_value: Variant in photos as Array:
+		if not photo_value is Dictionary:
+			continue
+		var ref := String((photo_value as Dictionary).get("ref", ""))
+		var description := String(descriptions.get(ref, "")).strip_edges()
+		if description.is_empty():
+			description = "照片内容暂时无法识别"
+		notes.append("照片内容：%s" % description)
+	var narration := String(turn.get("narration", "")).strip_edges()
+	for note: String in notes:
+		if not narration.contains(note):
+			narration = note if narration.is_empty() else "%s；%s" % [narration, note]
+	turn["narration"] = narration
+	turn["photos"] = []
+	return true
+
+
 static func _record_traveler_reply(
 	world,
 	traveler_relationship_state: TownTravelerRelationshipState,
@@ -741,13 +885,17 @@ static func _queue_overhear_events(world, conversation: Dictionary, turn: Dictio
 			var nearby_name := String(nearby_value)
 			if world.resident_registry.records.has(nearby_name) and not participant_names.has(nearby_name):
 				recipients[nearby_name] = true
+	var overhear_turn := turn.duplicate(true)
+	# 旁听居民没有图片输入权限；他们只接收最终会进入文字记忆的
+	# 对话内容，避免把同一张图片复制到整座小镇的事件队列。
+	overhear_turn["photos"] = []
 	for recipient_name_value: Variant in recipients:
 		world.WORLD_EVENT_DELIVERY_RUNTIME.queue(world, String(recipient_name_value), {
 			"type": "旁听",
 			"conversation_id": String(conversation.get("conversationId", "")),
 			"speaker_resident_ids": speaker_resident_ids.duplicate(),
 			"speakers": speakers.duplicate(),
-			"turn": turn.duplicate(true),
+			"turn": overhear_turn.duplicate(true),
 		})
 
 
