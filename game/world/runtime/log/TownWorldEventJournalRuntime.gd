@@ -39,7 +39,9 @@ func restore_public_events(values: Array) -> void:
 	_public_events.clear()
 	for value: Variant in values:
 		if value is Dictionary:
-			_public_events.append((value as Dictionary).duplicate(true))
+			var restored := (value as Dictionary).duplicate(true)
+			_strip_photo_fields(restored)
+			_public_events.append(restored)
 
 
 func append_public_event(
@@ -63,6 +65,8 @@ func append_public_event(
 	var normalized_resident_name := resident_name.strip_edges()
 	if normalized_resident_id.is_empty():
 		normalized_resident_name = ""
+	var stored_payload := payload.duplicate(true)
+	_strip_photo_fields(stored_payload)
 	var record := {
 		"eventId": normalized_id,
 		"kind": normalized_kind,
@@ -71,7 +75,7 @@ func append_public_event(
 		"residentId": normalized_resident_id,
 		"residentName": normalized_resident_name,
 		"placeName": place_name.strip_edges(),
-		"payload": payload.duplicate(true),
+		"payload": stored_payload,
 	}
 	_public_events.append(record)
 	if _public_events.size() > MAX_PUBLIC_EVENTS:
@@ -325,4 +329,20 @@ static func sanitize_public_payload(payload: Dictionary) -> Dictionary:
 	sanitized.erase("storyEventId")
 	sanitized.erase("storyType")
 	sanitized.erase("storyRootEventIds")
+	_strip_photo_fields(sanitized)
 	return sanitized
+
+
+static func _strip_photo_fields(value: Variant) -> void:
+	if value is Array:
+		for item: Variant in value as Array:
+			_strip_photo_fields(item)
+		return
+	if not value is Dictionary:
+		return
+	var data := value as Dictionary
+	if data.has("photos"):
+		data["photos"] = []
+	for key: Variant in data.keys():
+		if key != "photos":
+			_strip_photo_fields(data[key])

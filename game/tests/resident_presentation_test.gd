@@ -3672,6 +3672,17 @@ func _test_player_starts_and_ends_conversation() -> void:
 	_expect_equal(started.get("ok"), true, "player can start a conversation with a nearby resident")
 	var conversation := started.get("conversation", {}) as Dictionary
 	var conversation_id := String(conversation.get("conversationId", ""))
+	var photo_text := CONVERSATION_RUNTIME.materialize_conversation_photo_text(
+		world,
+		conversation_id,
+		{"player-photo-1": "一张猫的照片"},
+	) as Dictionary
+	_expect_equal(photo_text.get("ok"), true, "player photo is converted to text before the conversation continues")
+	_expect_equal(
+		((world.call("get_conversation", conversation_id) as Dictionary).get("turns", []) as Array)[0].get("photos", []),
+		[],
+		"converted conversation turn no longer retains the original photo reference",
+	)
 	_expect_equal(conversation.get("initiator"), "player-avatar", "conversation records the avatar's stable residentId as initiator")
 	_expect_equal((conversation.get("turns", []) as Array)[0].get("speaker"), "旅行者", "first confirmed turn uses the avatar's world name")
 

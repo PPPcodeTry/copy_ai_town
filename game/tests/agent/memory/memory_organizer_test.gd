@@ -18,7 +18,7 @@ func _initialize() -> void:
 	_test_day_change_organizes_pending_evidence()
 	_test_stale_organization_cannot_overwrite_newer_evidence()
 	_test_organizer_renders_names_and_can_request_capacity_retry()
-	_test_organizer_request_failure_does_not_block_context()
+	_test_organizer_keeps_photo_evidence_text_only()
 	_finish_suite("MEMORY-ORGANIZER_PASS", [_test_root])
 
 
@@ -183,7 +183,7 @@ func _test_organizer_renders_names_and_can_request_capacity_retry() -> void:
 			"retry identifies the overflowing field",
 		)
 
-func _test_organizer_request_failure_does_not_block_context() -> void:
+func _test_organizer_keeps_photo_evidence_text_only() -> void:
 	var system := _new_memory_system("organizer-request-failure")
 	var wake := TestData.wake_packet("photo-conversation-end")
 	wake["events"] = [{
@@ -202,18 +202,32 @@ func _test_organizer_request_failure_does_not_block_context() -> void:
 		"reason": "主动结束",
 	}]
 	var preparation := system.call("prepare_context", wake) as Dictionary
-	_expect_ok(preparation, "organizer request failure keeps the decision context usable")
 	_expect(
-		not preparation.has("organization_request"),
-		"failed organizer request is not sent to the model",
+		preparation.has("organization_request"),
+		"photo evidence creates a text-only organization request",
 	)
+	if preparation.has("organization_request"):
+		var organization_request := preparation["organization_request"] as Dictionary
+		var messages := organization_request.get("messages", []) as Array
+		_expect_equal(messages.size(), 2, "photo organization request has system and user messages")
+		if messages.size() == 2:
+			var content: Variant = (messages[1] as Dictionary).get("content")
+			_expect_equal(
+				typeof(content),
+				TYPE_STRING,
+				"memory organization receives text instead of image content",
+			)
+			_expect(
+				not String(content).contains("data:image/"),
+				"memory organization request contains no embedded image",
+			)
 	var snapshot := system.call("get_debug_snapshot") as Dictionary
 	_expect_equal(
-		snapshot.get("last_update", {}).get("status"),
-		"organization_error",
-		"organizer request failure remains visible to debug",
+		snapshot.get("last_update", {}).get("status") != "organization_error",
+		true,
+		"text-only photo evidence does not create an organizer error",
 	)
-	_expect_equal(snapshot.get("evidence_item_count"), 1, "failed organizer request keeps evidence")
+	_expect_equal(snapshot.get("evidence_item_count"), 1, "photo evidence remains available after request preparation")
 
 func _new_memory_system(suffix: String) -> RefCounted:
 	return (load(MEMORY_SYSTEM_PATH) as Script).new(

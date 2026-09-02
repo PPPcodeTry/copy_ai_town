@@ -88,9 +88,12 @@ func get_results() -> Array[Dictionary]:
 
 
 func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
-	var recorded_model_request := model_request.duplicate(true)
+	var transport_model_request := model_request.duplicate(true)
+	var recorded_model_request := _sanitize_ephemeral_request(
+		transport_model_request,
+	)
 	_retain_record(_model_requests, recorded_model_request)
-	var request_errors := _validate_model_request(recorded_model_request)
+	var request_errors := _validate_model_request(transport_model_request)
 	if not request_errors.is_empty():
 		_complete_failure(
 			on_complete,
@@ -107,9 +110,15 @@ func request_decision(model_request: Dictionary, on_complete: Callable) -> void:
 		)
 		return
 	var api_key := _resolve_api_key()
-	var body := _build_request_body(recorded_model_request)
+	var body := _build_request_body(transport_model_request)
 	var endpoint := String(_config.get("endpoint", _default_endpoint()))
-	var recorded_request := {"url": endpoint, "body": body}
+	var recorded_request := {
+		"url": endpoint,
+		"body": _sanitize_ephemeral_request_body(
+			body,
+			String(transport_model_request.get("request_kind", "")),
+		),
+	}
 	_retain_record(_requests, recorded_request)
 	var headers := PackedStringArray([
 		"Content-Type: application/json",
@@ -818,6 +827,47 @@ func _retain_record(records: Array, record: Dictionary) -> void:
 	var record_limit := maxi(int(_config.get("record_limit", DEFAULT_RECORD_LIMIT)), 1)
 	while records.size() > record_limit:
 		records.pop_front()
+
+
+func _sanitize_ephemeral_request(request: Dictionary) -> Dictionary:
+	var sanitized := request.duplicate(true)
+	if String(request.get("request_kind", "")) != "photo_description":
+		return sanitized
+	sanitized["messages"] = _sanitize_ephemeral_messages(
+		sanitized.get("messages", []) as Array,
+	)
+	return sanitized
+
+
+func _sanitize_ephemeral_messages(messages: Array) -> Array:
+	var sanitized_messages := messages.duplicate(true)
+	for message_value: Variant in sanitized_messages:
+		if not message_value is Dictionary:
+			continue
+		var message := message_value as Dictionary
+		var content: Variant = message.get("content")
+		if not content is Array:
+			continue
+		for part_value: Variant in content as Array:
+			if not part_value is Dictionary:
+				continue
+			var part := part_value as Dictionary
+			if String(part.get("type", "")) == "image_url":
+				part["image_url"] = {"url": "[one-time image omitted]"}
+	return sanitized_messages
+
+
+func _sanitize_ephemeral_request_body(
+	body: Dictionary,
+	request_kind: String,
+) -> Dictionary:
+	if request_kind != "photo_description":
+		return body.duplicate(true)
+	var sanitized := body.duplicate(true)
+	sanitized["messages"] = _sanitize_ephemeral_messages(
+		sanitized.get("messages", []) as Array,
+	)
+	return sanitized
 
 
 func _provider_id() -> String:

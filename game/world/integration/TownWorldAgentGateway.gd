@@ -16,6 +16,9 @@ const UNAVAILABLE_MODEL_PROVIDER := preload(
 const PHOTO_STORE := preload(
 	"res://world/integration/TownConversationPhotoStore.gd"
 )
+const CONVERSATION_RUNTIME := preload(
+	"res://world/runtime/conversation/TownConversationRuntime.gd"
+)
 const REQUIRED_WORLD_METHODS: Array[String] = [
 	"is_running",
 	"get_resident_identity_snapshot",
@@ -121,6 +124,8 @@ var _avatar_person_id := DEFAULT_AVATAR_PERSON_ID
 var _request_metrics: Dictionary = {
 	"providerDispatch": 0,
 	"providerComplete": 0,
+	"photoDescriptionDispatch": 0,
+	"photoDescriptionComplete": 0,
 }
 var _background_departure_probe_id := 0
 var _background_departure_operation_id := ""
@@ -314,6 +319,8 @@ func _reset_request_metrics() -> void:
 	_request_metrics = {
 		"providerDispatch": 0,
 		"providerComplete": 0,
+		"photoDescriptionDispatch": 0,
+		"photoDescriptionComplete": 0,
 	}
 
 
@@ -2287,7 +2294,6 @@ func _dispatch_prepared_agent_decision(request: Dictionary) -> void:
 	var fallback_applied := false
 	var attempt := int(_decision_attempts.get(decision_id, 0)) + 1
 	_decision_attempts[decision_id] = attempt
-	_count_request_metric("providerDispatch")
 	_inflight[decision_id] = {
 		"residentId": resident_id,
 		"generation": generation,
@@ -2296,6 +2302,65 @@ func _dispatch_prepared_agent_decision(request: Dictionary) -> void:
 		"wakePacket": wake,
 		"startedAtMsec": Time.get_ticks_msec(),
 	}
+	var photo_inputs: Array[Dictionary] = []
+	if _agent_system.has_method("photo_inputs_for_resident"):
+		photo_inputs = _agent_system.photo_inputs_for_resident(
+			resident_id,
+			wake,
+		) as Array[Dictionary]
+	if not photo_inputs.is_empty():
+		_inflight[decision_id]["phase"] = "photo_description"
+		_count_request_metric("photoDescriptionDispatch")
+		var photo_request_id := "%s-photo-description" % decision_id
+		var photo_accepted := _agent_system.request_photo_description_for_resident(
+			resident_id,
+			photo_inputs,
+			photo_request_id,
+			_on_photo_description_result.bind(
+				resident_id,
+				resident_name,
+				decision_id,
+				generation,
+				photo_inputs,
+			),
+		) as Dictionary
+		if bool(photo_accepted.get("ok", false)):
+			return
+		_on_photo_description_result(
+			{
+				"ok": false,
+				"errors": photo_accepted.get(
+					"errors",
+					["图片转文字请求未能启动"],
+				),
+			},
+			resident_id,
+			resident_name,
+			decision_id,
+			generation,
+			photo_inputs,
+		)
+		return
+	_dispatch_normal_agent_decision(
+		resident_id,
+		resident_name,
+		decision_id,
+		generation,
+		wake,
+		attempt,
+	)
+
+
+func _dispatch_normal_agent_decision(
+	resident_id: String,
+	resident_name: String,
+	decision_id: String,
+	generation: int,
+	wake: Dictionary,
+	attempt: int,
+) -> void:
+	var fallback_applied := false
+	_count_request_metric("providerDispatch")
 	if not debug_decision_dispatched.get_connections().is_empty():
 		debug_decision_dispatched.emit({
 			"residentId": resident_id,
@@ -2366,6 +2431,122 @@ func _dispatch_prepared_agent_decision(request: Dictionary) -> void:
 			"wakePacket": wake.duplicate(true),
 			"agentResult": accepted.duplicate(true),
 		})
+
+
+func _on_photo_description_result(
+	result: Variant,
+	resident_id: String,
+	resident_name: String,
+	decision_id: String,
+	generation: int,
+	photo_inputs: Array[Dictionary],
+) -> void:
+	_count_request_metric("photoDescriptionComplete")
+	var inflight := _inflight.get(decision_id, {}) as Dictionary
+	if generation != _generation:
+		_release_photo_inputs(photo_inputs)
+		return
+	if (
+		inflight.is_empty()
+		or int(inflight.get("generation", -1)) != generation
+		or String(inflight.get("residentId", "")) != resident_id
+		or String(inflight.get("phase", "")) != "photo_description"
+	):
+		_release_photo_inputs(photo_inputs)
+		return
+	var descriptions := _normalize_photo_descriptions(result, photo_inputs)
+	var wake := inflight.get("wakePacket", {}) as Dictionary
+	var conversation_id := _conversation_id_for_photo_wake(wake)
+	if _world != null and not conversation_id.is_empty():
+		CONVERSATION_RUNTIME.materialize_conversation_photo_text(
+			_world,
+			conversation_id,
+			descriptions,
+		)
+	_release_photo_inputs(photo_inputs)
+	if bool(inflight.get("superseded", false)):
+		_inflight.erase(decision_id)
+		_decision_attempts.erase(decision_id)
+		return
+	if _world == null or not _world.has_method(
+		"refresh_pending_decision_request_by_id"
+	):
+		_inflight.erase(decision_id)
+		_redispatch(resident_id, decision_id)
+		return
+	var refreshed := _world.refresh_pending_decision_request_by_id(
+		resident_id,
+		decision_id,
+	) as Dictionary
+	if not bool(refreshed.get("ok", false)):
+		_inflight.erase(decision_id)
+		_redispatch(resident_id, decision_id)
+		return
+	wake = (refreshed.get("wakePacket", {}) as Dictionary).duplicate(true)
+	_inflight[decision_id]["phase"] = "decision"
+	_inflight[decision_id]["wakePacket"] = wake
+	_dispatch_normal_agent_decision(
+		resident_id,
+		resident_name,
+		decision_id,
+		generation,
+		wake,
+		int(inflight.get("attempt", 1)),
+	)
+
+
+func _normalize_photo_descriptions(
+	result: Variant,
+	photo_inputs: Array[Dictionary],
+) -> Dictionary:
+	var descriptions := {}
+	var payload: Dictionary = {}
+	if result is Dictionary and (result as Dictionary).get("json") is Dictionary:
+		payload = (result as Dictionary).get("json", {}) as Dictionary
+	var values: Array = []
+	if payload.get("descriptions") is Array:
+		values = payload.get("descriptions", []) as Array
+	else:
+		values = [payload.get("description", "")]
+	for index in photo_inputs.size():
+		var photo := photo_inputs[index] as Dictionary
+		var description := ""
+		if index < values.size():
+			description = String(values[index]).strip_edges()
+		if description.is_empty():
+			description = "照片内容暂时无法识别"
+		for separator in ["\r", "\n", "\t"]:
+			description = description.replace(separator, " ")
+		while description.contains("  "):
+			description = description.replace("  ", " ")
+		descriptions[String(photo.get("ref", ""))] = description.left(240)
+	return descriptions
+
+
+func _conversation_id_for_photo_wake(wake: Dictionary) -> String:
+	var snapshot := wake.get("snapshot", {}) as Dictionary
+	var conversation := snapshot.get("conversation", {}) as Dictionary
+	var conversation_id := String(conversation.get("conversation_id", ""))
+	if not conversation_id.is_empty():
+		return conversation_id
+	for event_value: Variant in wake.get("events", []) as Array:
+		if not event_value is Dictionary:
+			continue
+		var event := event_value as Dictionary
+		conversation_id = String(event.get("conversation_id", ""))
+		if not conversation_id.is_empty():
+			return conversation_id
+	return ""
+
+
+func _release_photo_inputs(photo_inputs: Array[Dictionary]) -> void:
+	for photo_value: Variant in photo_inputs:
+		var photo := photo_value as Dictionary
+		var ref := String(photo.get("ref", ""))
+		var mime_type := String(photo.get("mime_type", ""))
+		if ref.is_empty() or mime_type.is_empty():
+			continue
+		_photo_store.consume_photo(ref, mime_type)
 
 
 func _defer_agent_result(

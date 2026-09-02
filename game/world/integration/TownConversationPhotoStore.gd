@@ -8,15 +8,13 @@ const MAX_IMAGE_PIXELS := 36 * 1024 * 1024
 const PREVIEW_EDGE := 256
 const STORAGE_ROOT := "user://town_conversation_photos"
 const TEST_STORAGE_ROOT := "user://tests/town_conversation_photos"
-const TEMPORARY_ROOT := "_tmp"
-const TEMPORARY_KEY_LENGTH := 24
 const PHOTO_WRITE_BLOCK_SCHEMA := "ai-town-conversation-photo-archive-block"
 const SAVE_STORE := preload(
 	"res://world/presentation/session/TownSessionSaveStore.gd"
 )
 
-# 内存中常驻照片字节的上限；已落盘且无 staged 引用的条目按最久未用淘汰，
-# 需要时由 _load_persisted_entry 从磁盘重新加载。
+# 照片只在图片转文字完成前短暂保存在内存中。正式会话目录和旧版归档
+# 仍由下面的兼容清理逻辑管理，但新流程绝不把照片字节写入磁盘。
 const MAX_MEMORY_ENTRIES := 24
 
 var _entries: Dictionary = {}
@@ -184,11 +182,13 @@ func stage_file(path: String, owner_id: String) -> Dictionary:
 	var ref := "chat-photo-sha256-%s" % _sha256(bytes)
 	var entry := (_entries.get(ref, {}) as Dictionary).duplicate(true)
 	if entry.is_empty():
+		_evict_reloadable_entries()
+		if _entries.size() >= MAX_MEMORY_ENTRIES:
+			return _failure("PHOTO_MEMORY_LIMIT")
 		entry = {
 			"mimeType": mime_type,
 			"bytes": bytes,
 			"committed": false,
-			"preparedPersisted": false,
 			"stagedOwners": {},
 		}
 	elif String(entry.get("mimeType", "")) != mime_type:
@@ -229,22 +229,9 @@ func prepare_photo_commit(
 ) -> bool:
 	if not has_staged_photo(ref, mime_type, owner_id):
 		return false
-	# A standalone/in-memory store is useful for previews and contract harnesses.
-	# Formal sessions must persist the bytes before the World accepts the turn.
-	if _session_storage_root.is_empty():
-		return true
-	if not _load_persisted_entry(ref, mime_type).is_empty():
-		return true
-	var lease := _save_store.begin_slot_transaction(_slot_id,) as Dictionary
-	if lease.get("ok") != true:
-		return false
-	var persisted := _persist_entry(ref, _entries[ref] as Dictionary)
-	var released := _save_store.end_slot_transaction(lease.get("leaseToken"),) as Dictionary
-	if persisted:
-		var prepared_entry := _entries[ref] as Dictionary
-		prepared_entry["preparedPersisted"] = true
-		_entries[ref] = prepared_entry
-	return persisted and released.get("ok") == true
+	# 发送前只检查内存中的暂存内容。照片是一次性输入，不能为了让
+	# World 接受回合而先写入 user://。
+	return true
 
 
 func commit_photo(ref: String, mime_type: String, owner_id: String) -> bool:
@@ -253,9 +240,29 @@ func commit_photo(ref: String, mime_type: String, owner_id: String) -> bool:
 	var entry := _entries[ref] as Dictionary
 	_decrement_owner(entry, owner_id)
 	entry["committed"] = true
-	entry["preparedPersisted"] = false
 	_entries[ref] = entry
 	return true
+
+
+func consume_photo(ref: String, mime_type: String) -> Dictionary:
+	var entry := _entries.get(ref, {}) as Dictionary
+	if entry.is_empty() or String(entry.get("mimeType", "")) != mime_type:
+		return _failure("PHOTO_REF_NOT_FOUND")
+	var bytes_value: Variant = entry.get("bytes")
+	if (
+		typeof(bytes_value) != TYPE_PACKED_BYTE_ARRAY
+		or (bytes_value as PackedByteArray).is_empty()
+	):
+		_entries.erase(ref)
+		return _failure("PHOTO_CONTENT_UNAVAILABLE")
+	var result := {
+		"ok": true,
+		"errorCode": "",
+		"bytes": (bytes_value as PackedByteArray).duplicate(),
+	}
+	# 转文字回调拿到字节后立刻删除内存条目；调用方只能得到这一次副本。
+	_entries.erase(ref)
+	return result
 
 
 func discard_staged_photo(ref: String, owner_id: String) -> bool:
@@ -264,17 +271,6 @@ func discard_staged_photo(ref: String, owner_id: String) -> bool:
 		return false
 	var owners := entry.get("stagedOwners", {}) as Dictionary
 	if int(owners.get(owner_id, 0)) <= 0:
-		return false
-	var removes_uncommitted_entry := (
-		not bool(entry.get("committed", false))
-		and int(owners.get(owner_id, 0)) == 1
-		and owners.size() == 1
-	)
-	if (
-		removes_uncommitted_entry
-		and bool(entry.get("preparedPersisted", false))
-		and not _remove_prepared_persisted_photo(ref)
-	):
 		return false
 	_decrement_owner(entry, owner_id)
 	if (
@@ -287,31 +283,10 @@ func discard_staged_photo(ref: String, owner_id: String) -> bool:
 	return true
 
 
-func _remove_prepared_persisted_photo(ref: String) -> bool:
-	if _session_storage_root.is_empty():
-		return true
-	var path := _photo_path(ref)
-	if not FileAccess.file_exists(path):
-		return true
-	var lease := _save_store.begin_slot_transaction(_slot_id,) as Dictionary
-	if lease.get("ok") != true:
-		return false
-	var removed := (
-		DirAccess.remove_absolute(
-			ProjectSettings.globalize_path(path)
-		) == OK
-	)
-	var released := _save_store.end_slot_transaction(lease.get("leaseToken"),) as Dictionary
-	return removed and released.get("ok") == true
-
-
 func resolve_photo(ref: String, mime_type: String) -> Dictionary:
 	var entry := _entries.get(ref, {}) as Dictionary
 	if entry.is_empty():
-		entry = _load_persisted_entry(ref, mime_type)
-		if entry.is_empty():
-			return _failure("PHOTO_REF_NOT_FOUND")
-		_entries[ref] = entry
+		return _failure("PHOTO_REF_NOT_FOUND")
 	if String(entry.get("mimeType", "")) != mime_type:
 		return _failure("PHOTO_MIME_MISMATCH")
 	# 先记录本次访问再淘汰，刚加载的条目才不会以默认序号把自己挤出去。
@@ -356,16 +331,15 @@ func clear() -> void:
 
 
 func _evict_reloadable_entries() -> void:
-	if _entries.size() <= MAX_MEMORY_ENTRIES or _session_storage_root.is_empty():
+	if _entries.size() < MAX_MEMORY_ENTRIES:
 		return
 	var candidates: Array = []
 	for ref_value: Variant in _entries:
 		var ref := String(ref_value)
 		var entry := _entries[ref] as Dictionary
 		if (
-			bool(entry.get("committed", false))
+			not bool(entry.get("committed", false))
 			and (entry.get("stagedOwners", {}) as Dictionary).is_empty()
-			and FileAccess.file_exists(_photo_path(ref))
 		):
 			candidates.append([int(entry.get("lastAccess", 0)), ref])
 	candidates.sort()
@@ -400,92 +374,6 @@ func _decrement_owner(entry: Dictionary, owner_id: String) -> void:
 	else:
 		owners[owner_id] = next_count
 	entry["stagedOwners"] = owners
-
-
-func _persist_entry(ref: String, entry: Dictionary) -> bool:
-	if _session_storage_root.is_empty() or not _valid_ref(ref):
-		return false
-	var bytes_value: Variant = entry.get("bytes")
-	if (
-		typeof(bytes_value) != TYPE_PACKED_BYTE_ARRAY
-		or (bytes_value as PackedByteArray).is_empty()
-	):
-		return false
-	var destination := _photo_path(ref)
-	var temporary := _temporary_photo_path(destination)
-	var temporary_parent_error := DirAccess.make_dir_recursive_absolute(
-		ProjectSettings.globalize_path(temporary.get_base_dir()),
-	)
-	if temporary_parent_error not in [OK, ERR_ALREADY_EXISTS]:
-		return false
-	var file := FileAccess.open(temporary, FileAccess.WRITE)
-	if file == null:
-		return false
-	file.store_buffer(bytes_value as PackedByteArray)
-	file.flush()
-	var write_error := file.get_error()
-	file = null
-	if write_error != OK:
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(temporary))
-		return false
-	var absolute_temporary := ProjectSettings.globalize_path(temporary)
-	var absolute_destination := ProjectSettings.globalize_path(destination)
-	if FileAccess.file_exists(destination):
-		var existing := _load_persisted_entry(
-			ref,
-			String(entry.get("mimeType", "")),
-		)
-		DirAccess.remove_absolute(absolute_temporary)
-		return not existing.is_empty()
-	var rename_error := DirAccess.rename_absolute(
-		absolute_temporary,
-		absolute_destination,
-	)
-	if rename_error != OK:
-		DirAccess.remove_absolute(absolute_temporary)
-		return false
-	return true
-
-
-func _load_persisted_entry(ref: String, mime_type: String) -> Dictionary:
-	if (
-		_session_storage_root.is_empty()
-		or not _valid_ref(ref)
-		or mime_type not in ["image/png", "image/jpeg", "image/webp"]
-	):
-		return {}
-	var path := _photo_path(ref)
-	if not FileAccess.file_exists(path):
-		return {}
-	var file := FileAccess.open(path, FileAccess.READ)
-	if file == null:
-		return {}
-	var length := file.get_length()
-	if length <= 0 or length > MAX_FILE_BYTES:
-		return {}
-	var bytes := file.get_buffer(length)
-	if bytes.size() != length or _detect_mime_type(bytes) != mime_type:
-		return {}
-	if "chat-photo-sha256-%s" % _sha256(bytes) != ref:
-		return {}
-	return {
-		"mimeType": mime_type,
-		"bytes": bytes,
-		"committed": true,
-		"stagedOwners": {},
-	}
-
-
-func _photo_path(ref: String) -> String:
-	return "%s/%s.bin" % [_session_storage_root, ref]
-
-
-func _temporary_photo_path(destination: String) -> String:
-	return "%s/%s/photo-%s.tmp" % [
-		_storage_root,
-		TEMPORARY_ROOT,
-		destination.sha256_text().left(TEMPORARY_KEY_LENGTH),
-	]
 
 
 func _remove_archive_blocker(slot_id: String) -> bool:
@@ -636,22 +524,6 @@ func _lease_failure(result: Dictionary) -> Dictionary:
 		if result.get("errorCode") == "SESSION_SAVE_SLOT_BUSY"
 		else "PHOTO_STORAGE_UNAVAILABLE"
 	)
-
-
-func _valid_ref(ref: String) -> bool:
-	if not ref.begins_with("chat-photo-sha256-"):
-		return false
-	var digest := ref.trim_prefix("chat-photo-sha256-")
-	if digest.length() != 64:
-		return false
-	for index in digest.length():
-		var code := digest.unicode_at(index)
-		if not (
-			code >= "0".unicode_at(0) and code <= "9".unicode_at(0)
-			or code >= "a".unicode_at(0) and code <= "f".unicode_at(0)
-		):
-			return false
-	return true
 
 
 func _safe_segment(value: String) -> String:
